@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   calendarView: "week",
   calendarAnchors: { day: null, week: null, month: null },
   calendarZoom: { day: "standard", week: "standard", month: "standard" },
-  calendarScale: { day: 48, week: 48, month: 82 },
+  calendarScale: { day: 72, week: 72, month: 120 },
   calendarDayMode: "fullDay",
   showActualRecords: false,
   showActualRecordsControl: true,
@@ -185,8 +185,8 @@ function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView): Calen
 }
 
 export function calendarScaleForZoom(view: CalendarView, zoom: CalendarZoom) {
-  if (view === "month") return zoom === "compact" ? 64 : zoom === "detailed" ? 104 : 82;
-  return zoom === "compact" ? 36 : zoom === "detailed" ? 64 : 48;
+  if (view === "month") return zoom === "compact" ? 80 : zoom === "detailed" ? 160 : 120;
+  return zoom === "compact" ? 48 : zoom === "detailed" ? 96 : 72;
 }
 
 function isLocalDate(value: unknown): value is string {

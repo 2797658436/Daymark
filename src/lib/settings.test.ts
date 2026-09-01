@@ -144,10 +144,10 @@ describe("settings persistence", () => {
       calendarView: "week",
       calendarAnchors: { day: null, week: "2026-08-10", month: null },
       calendarZoom: { day: "standard", week: "compact", month: "standard" },
-      calendarScale: { day: 48, week: 36, month: 82 },
+      calendarScale: { day: 72, week: 48, month: 120 },
     });
     expect(repository.normalize({ calendarZoom: { day: "detailed", week: "compact", month: "standard" } }).calendarScale)
-      .toEqual({ day: 64, week: 36, month: 82 });
+      .toEqual({ day: 96, week: 48, month: 120 });
   });
 
   it("keeps the day display mode as a persisted UI preference", () => {

@@ -996,7 +996,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const confirmedNoProgress = session.status === "missed";
   const elapsed = current ? Math.round((now.getTime() - localSessionStart(session)) / Math.max(1, localSessionEnd(session) - localSessionStart(session)) * 100) : 0;
   const availableHeight = sessionDuration(session) / 60 * hourHeight;
-  const density = availableHeight < 26 ? "compact" : availableHeight < 48 ? "standard" : "detailed";
+  const density = availableHeight < hourHeight / 2 ? "compact" : availableHeight < hourHeight ? "standard" : "detailed";
   const showTimeAndProgress = density !== "compact";
   const showDetails = density === "detailed";
   const status = current ? { icon: <Clock3 size={12} />, label: "当前安排" }

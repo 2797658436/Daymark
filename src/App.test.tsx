@@ -430,12 +430,12 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     const calendar = await screen.findByRole("region", { name: "日历时间网格" });
     const page = document.querySelector(".calendar-page")!;
-    expect(page).toHaveAttribute("data-calendar-scale", "48");
+    expect(page).toHaveAttribute("data-calendar-scale", "72");
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: false, clientY: 300 });
-    expect(page).toHaveAttribute("data-calendar-scale", "48");
+    expect(page).toHaveAttribute("data-calendar-scale", "72");
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: true, clientY: 300 });
-    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "52"));
-    await waitFor(() => expect(backend.value).toMatchObject({ calendarScale: { week: 52 } }));
+    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "76"));
+    await waitFor(() => expect(backend.value).toMatchObject({ calendarScale: { week: 76 } }));
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
   });
 
@@ -873,9 +873,9 @@ describe("phase 1 manual alpha", () => {
     const handle = screen.getByRole("button", { name: "调整 通勤 结束时间" });
     const down = createEvent.pointerDown(handle, { button: 0, clientY: 660 }); fireEvent(handle, down);
     const move = createEvent.pointerMove(window, { clientY: 780, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("10:00–13:30");
+    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("10:00–12:45");
     const up = createEvent.pointerUp(window, { clientY: 780, clientX: 100 }); fireEvent(window, up);
-    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-1", startLocal: "10:00", endLocal: "13:30" })));
+    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-1", startLocal: "10:00", endLocal: "12:45" })));
   });
 
   it("moves a time block's top edge to change its start while keeping the end fixed", async () => {
@@ -890,9 +890,9 @@ describe("phase 1 manual alpha", () => {
     const handle = screen.getByRole("button", { name: "调整 会议 开始时间" });
     const down = createEvent.pointerDown(handle, { button: 0, clientY: 600 }); fireEvent(handle, down);
     const move = createEvent.pointerMove(window, { clientY: 480, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("07:30–11:00");
+    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("08:15–11:00");
     const up = createEvent.pointerUp(window, { clientY: 480, clientX: 100 }); fireEvent(window, up);
-    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-2", startLocal: "07:30", endLocal: "11:00" })));
+    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-2", startLocal: "08:15", endLocal: "11:00" })));
   });
 
   it("creates a daily habit and schedules today's independent occurrence", async () => {
@@ -1226,9 +1226,9 @@ describe("phase 1 manual alpha", () => {
     const body = await screen.findByText("午休");
     const down = createEvent.pointerDown(body, { button: 0, clientY: 600 }); fireEvent(body, down);
     const move = createEvent.pointerMove(window, { clientY: 696, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("12:00–13:00");
+    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("11:15–12:15");
     const up = createEvent.pointerUp(window, { clientY: 696, clientX: 100 }); fireEvent(window, up);
-    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-3", startLocal: "12:00", endLocal: "13:00", localDate: "2026-08-05" })));
+    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-3", startLocal: "11:15", endLocal: "12:15", localDate: "2026-08-05" })));
   });
 
   it("drags a time block horizontally into the adjacent day in week view", async () => {
