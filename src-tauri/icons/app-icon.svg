@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Daymark">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4b47f" />
+      <stop offset="1" stop-color="#d97b4c" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#background)" />
+  <path d="M153 126h89c104 0 164 48 164 130s-60 130-164 130h-89V126Zm88 204c63 0 98-25 98-74s-35-74-98-74h-24v148h24Z" fill="#fffaf3" />
+  <circle cx="386" cy="134" r="25" fill="#6f8e73" />
+</svg>
