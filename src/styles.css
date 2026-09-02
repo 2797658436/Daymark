@@ -240,7 +240,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
 .project-form { display: grid; gap: 14px; }.project-form label, .settings-grid label, .modal label { display: grid; gap: 6px; color: var(--muted); font-size: .78rem; }.project-form input, .project-form textarea { width: 100%; }.form-actions { justify-content: flex-end; }
 .import-preview { max-height: 270px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 10px; }.import-preview > div { display: grid; grid-template-columns: 26px 1fr 75px; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); }.import-preview > div:last-child { border: 0; }.import-preview input[type="checkbox"] { width: 17px; height: 17px; }.import-preview span { color: var(--muted); font-size: .75rem; }
 .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; align-items: start; }
-.project-grid > .surface-card { padding: 18px 20px; }
+.project-grid > .surface-card { padding: 18px 26px 18px 20px; }
 .project-card-empty { padding: 32px 22px; text-align: center; color: var(--muted); background: var(--panel-strong); border-style: dashed; }
 .project-card-empty > span { color: var(--accent); }
 .project-card-empty p { margin: 6px auto 12px; max-width: 320px; font-size: .82rem; }
