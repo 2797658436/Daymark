@@ -1281,6 +1281,31 @@ describe("phase 1 manual alpha", () => {
     vi.useRealTimers();
   });
 
+  it("collapses project groups in the task pool and reveals the next unfinished task", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "四级英语单词", deadlineLocal: null }],
+      tasks: [
+        { id: "task-a", projectId: "project-1", title: "使用说明", progress: 100, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" },
+        { id: "task-b", projectId: "project-1", title: "视频配套书籍在哪？", progress: 50, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 1, kind: "task" },
+        { id: "task-c", projectId: "project-1", title: "Unit1 Lesson 1", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 2, kind: "task" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    const header = await screen.findByRole("button", { name: /四级英语单词/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    // 默认折叠：只显示第一个未完成任务
+    expect(screen.getByText("视频配套书籍在哪？")).toBeVisible();
+    expect(screen.queryByText("Unit1 Lesson 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("使用说明")).not.toBeInTheDocument();
+    // 点击展开：全部任务可见
+    await user.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Unit1 Lesson 1")).toBeVisible();
+    expect(screen.getByText("使用说明")).toBeVisible();
+  });
+
   it("marks a project task complete in one click from the project card", async () => {
     const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),

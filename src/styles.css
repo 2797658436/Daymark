@@ -109,6 +109,18 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
 .task-pool-scrim { display: none; }
 .quick-create { display: grid; grid-template-columns: 1fr 42px; gap: 6px; }.quick-create input { min-width: 0; }
 .task-list { overflow: auto; display: grid; align-content: start; gap: 8px; padding: 1px 2px 16px; }
+.project-groups { gap: 10px; }
+.project-group { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); overflow: hidden; }
+.project-group-header { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; transition: background .12s ease; }
+.project-group-header:hover { background: var(--panel); }
+.project-group-header strong { font-size: .85rem; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-group-header span { color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.project-group-header svg { color: var(--muted); flex: 0 0 auto; }
+.project-group-body { display: grid; gap: 6px; padding: 0 8px 8px; }
+.project-group-body.expanded { max-height: 300px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.project-group-body.expanded::-webkit-scrollbar { width: 8px; }
+.project-group-body.expanded::-webkit-scrollbar-track { background: transparent; }
+.project-group-body.expanded::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
 .attention-pool { display: grid; gap: 6px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--danger) 5%, var(--panel-strong)); padding: 6px 8px; }.attention-pool > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); font-size: .8rem; list-style: none; padding: 3px 2px; min-height: 44px; }.attention-pool > summary::-webkit-details-marker { display: none; }.attention-pool > summary svg { color: var(--danger); }.attention-pool > summary span { margin-left: auto; color: var(--danger); font-size: .72rem; font-weight: 600; }.attention-pool .task-list { padding: 0 0 4px; max-height: 240px; }.attention-pool .task-card { padding: 10px; }
 .task-card { border: 1px solid var(--line-soft); border-radius: 14px; padding: 12px 14px; background: var(--panel-raised); box-shadow: 0 1px 2px rgb(35 31 27 / 4%); display: grid; gap: 8px; transition: border-color .12s ease, transform .12s ease, box-shadow .12s ease; }
 .task-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgb(35 31 27 / 8%); }

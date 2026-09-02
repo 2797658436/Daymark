@@ -1,5 +1,5 @@
 import {
-  ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronLeft, ChevronRight, ChevronsUpDown, CircleAlert,
+  ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsUpDown, CircleAlert,
   Clock3, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Moon, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Sun, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag,
 } from "lucide-react";
@@ -414,6 +414,22 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   const today = toLocalDate(new Date());
   const attention = tasks.filter((task) => task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
   const visible = tasks.filter((task) => !attention.includes(task) && (filter === "all" || (sessions.some((item) => item.taskId === task.id && item.status === "scheduled") ? filter === "scheduled" : filter === "unscheduled")));
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
+  const toggleProject = (key: string) => setExpandedProjects((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const groups: { key: string; project: Project | null; tasks: Task[] }[] = [];
+  {
+    const byProject = new Map<string, Task[]>();
+    for (const task of visible) {
+      const key = task.projectId ?? "__independent__";
+      if (!byProject.has(key)) byProject.set(key, []);
+      byProject.get(key)!.push(task);
+    }
+    for (const [key, groupTasks] of byProject) groups.push({ key, project: projects.find((item) => item.id === key) ?? null, tasks: groupTasks });
+  }
   const assistCount = tasks.filter((task) => !sessions.some((session) => session.taskId === task.id && session.status === "scheduled")).length
     + habits.filter((habit) => habitOccursOn(habit, today) && !occurrences.some((occurrence) => occurrence.habitId === habit.id && occurrence.localDate === today)).length;
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
@@ -427,20 +443,39 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
     <div className="quick-create"><input aria-label="任务标题" placeholder="只写标题，按 Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void submit()} /><Button variant="primary" aria-label="创建任务" disabled={!title.trim() || busy} onClick={() => void submit()}><Plus size={17} /></Button></div>
     {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <article key={task.id} className="task-card" tabIndex={0}><div className="task-card-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}><strong>{task.title}</strong>{task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(today, task.deadlineLocal)}</span>}</div><div className="task-meta">{projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"}{task.estimatedMinutes ? ` · 约 ${task.estimatedMinutes} 分钟` : ""}</div><ProgressControl task={task} onCommit={onProgress} /></article>)}</div></details>}
     <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
-    <div className="task-list">{visible.map((task) => {
-      const upcoming = sessions.filter((item) => item.taskId === task.id && item.status === "scheduled").sort(compareSessions);
-      const project = projects.find((item) => item.id === task.projectId);
-      return <article key={task.id} className="task-card" tabIndex={0}>
-        <div className="task-card-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}><strong>{task.title}</strong>{task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}</div>
-        <div className="task-meta">{project?.title ?? "独立任务"}{task.estimatedMinutes ? ` · 约 ${task.estimatedMinutes} 分钟` : ""}</div>
-        <ProgressControl task={task} onCommit={onProgress} />
-        {upcoming.length > 0 && <small>下次：{upcoming[0].localDate} {upcoming[0].startLocal} · 共 {upcoming.length} 次</small>}
-        <TaskEditor task={task} projects={projects} onUpdate={onUpdate} />
-      </article>;
+    <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
+      const isExpanded = expandedProjects.has(key);
+      const current = groupTasks.find((task) => task.progress < 100);
+      const shown = isExpanded ? groupTasks : current ? [current] : [];
+      const done = groupTasks.filter((task) => task.progress === 100).length;
+      const avg = groupTasks.length ? Math.round(groupTasks.reduce((sum, task) => sum + task.progress, 0) / groupTasks.length) : 0;
+      return <section key={key} className="project-group">
+        <button className="project-group-header" aria-expanded={isExpanded} onClick={() => toggleProject(key)}>
+          <strong>{project?.title ?? "独立任务"}</strong>
+          <span>{groupTasks.length} 项 · 完成 {done} · 平均 {avg}%</span>
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        <div className={isExpanded ? "project-group-body expanded" : "project-group-body"}>
+          {shown.map((task) => <TaskPoolCard key={task.id} task={task} projects={projects} sessions={sessions} onUpdate={onUpdate} onProgress={onProgress} />)}
+          {!isExpanded && !current && <p className="empty-inline">该项目下所有任务都已完成。</p>}
+        </div>
+      </section>;
     })}{visible.length === 0 && <p className="empty-inline">当前筛选没有任务。</p>}</div>
     {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
     <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
   </aside>;
+}
+
+function TaskPoolCard({ task, projects, sessions, onUpdate, onProgress }: { task: Task; projects: Project[]; sessions: ExecutionSession[]; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void> }) {
+  const upcoming = sessions.filter((item) => item.taskId === task.id && item.status === "scheduled").sort(compareSessions);
+  const project = projects.find((item) => item.id === task.projectId);
+  return <article className="task-card" tabIndex={0}>
+    <div className="task-card-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}><strong>{task.title}</strong>{task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}</div>
+    <div className="task-meta">{project?.title ?? "独立任务"}{task.estimatedMinutes ? ` · 约 ${task.estimatedMinutes} 分钟` : ""}</div>
+    <ProgressControl task={task} onCommit={onProgress} />
+    {upcoming.length > 0 && <small>下次：{upcoming[0].localDate} {upcoming[0].startLocal} · 共 {upcoming.length} 次</small>}
+    <TaskEditor task={task} projects={projects} onUpdate={onUpdate} />
+  </article>;
 }
 
 function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
