@@ -1280,4 +1280,20 @@ describe("phase 1 manual alpha", () => {
     expect(stretchTitles.every((title) => !title.includes("8/2"))).toBe(true);
     vi.useRealTimers();
   });
+
+  it("marks a project task complete in one click from the project card", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "四级冲刺", deadlineLocal: "2026-09-15" }],
+      tasks: [{ id: "task-watch", projectId: "project-1", title: "使用说明", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    const projectCard = document.querySelector<HTMLElement>(".project-card")!;
+    const completeButton = within(projectCard).getByRole("button", { name: "标记 使用说明 已完成" });
+    await user.click(completeButton);
+    await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-watch", toProgress: 100 })));
+    expect(within(projectCard).getAllByText("100%").length).toBeGreaterThan(0);
+  });
 });

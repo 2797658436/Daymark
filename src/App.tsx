@@ -1119,7 +1119,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
           {milestones.length === 0 && <p className="milestone-empty">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
         </div>
         {milestoneDraft?.projectId === project.id && <MilestoneForm project={project} tasks={tasks} sortOrder={milestones.length} editing={milestoneDraft.editing} continuing={milestoneDraft.continuing} onCancel={() => setMilestoneDraft(null)} onSave={async (milestone) => { if (milestoneDraft.editing && !milestoneDraft.continuing) await onUpdateMilestone(milestone); else await onCreateMilestone(milestone); setMilestoneDraft(null); }} />}
-        <div className="project-tasks">{tasks.map((task, index) => <div key={task.id}><span>{index + 1}</span><div><strong>{task.title}</strong><ProgressControl task={task} onCommit={onProgress} /></div></div>)}</div></article>;
+        <div className="project-tasks">{tasks.map((task, index) => <div key={task.id}><span>{index + 1}</span><div><strong>{task.title}</strong><ProgressControl task={task} onCommit={onProgress} showComplete /></div></div>)}</div></article>;
     })}
       {workspace.projects.length === 0 && <EmptyState icon={<FolderKanban />} title="还没有项目" text="创建普通项目，或粘贴课程分集文本批量建立有序任务。" />}
     </div>
@@ -1314,10 +1314,11 @@ function useModalBehavior(dialogRef: RefObject<HTMLElement | null>, onClose: () 
   }, [dialogRef, onClose]);
 }
 
-function ProgressControl({ task, onCommit }: { task: Task; onCommit: (task: Task, value: number) => Promise<void> }) {
+function ProgressControl({ task, onCommit, showComplete = false }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; showComplete?: boolean }) {
   const [value, setValue] = useState(task.progress); useEffect(() => setValue(task.progress), [task.progress]);
   const commit = () => { if (value !== task.progress) void onCommit(task, value); };
-  return <div className="progress-control"><input aria-label={`${task.title} 完成度`} type="range" min="0" max="100" step="5" value={value} onChange={(event) => setValue(Number(event.target.value))} onPointerUp={commit} onKeyUp={commit} /><span>{value}%</span></div>;
+  const markComplete = () => { setValue(100); if (task.progress !== 100) void onCommit(task, 100); };
+  return <div className={showComplete ? "progress-control has-complete" : "progress-control"}><input aria-label={`${task.title} 完成度`} type="range" min="0" max="100" step="5" value={value} onChange={(event) => setValue(Number(event.target.value))} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
 }
 
 function useCurrentTime() {
