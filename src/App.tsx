@@ -1079,8 +1079,10 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: () => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   overlay?: ReactNode;
 }) {
+  const articleRef = useRef<HTMLElement>(null);
   const [progressOpen, setProgressOpen] = useState(false);
   const [resize, setResize] = useState<{ duration: number; clientX: number; clientY: number } | null>(null);
+  const [reviewPos, setReviewPos] = useState({ top: 0, left: 0 });
   const current = sessionContains(session, now);
   const hasRecord = records.some((record) => record.sessionId === session.id);
   const pendingReview = session.status === "scheduled" && !current && sessionEnded(session, now) && task.status !== "completed" && task.progress < 100 && !hasRecord;
@@ -1089,6 +1091,17 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const availableHeight = sessionDuration(session) / 60 * hourHeight;
   const density = availableHeight < hourHeight / 2 ? "compact" : availableHeight < hourHeight ? "standard" : "detailed";
   const showTimeAndProgress = density !== "compact";
+  useEffect(() => {
+    if (!pendingReview) return;
+    const update = () => {
+      const rect = articleRef.current?.getBoundingClientRect();
+      if (rect) setReviewPos({ top: Math.min(rect.bottom, window.innerHeight - 64), left: Math.max(8, Math.min(window.innerWidth - 340, rect.left - 2)) });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => { window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update); };
+  }, [pendingReview, session.id, session.startLocal, session.endLocal]);
   const showDetails = density === "detailed";
   const status = current ? { icon: <Clock3 size={12} />, label: "当前安排" }
     : pendingReview ? { icon: <CircleAlert size={12} />, label: "待回顾" }
@@ -1117,7 +1130,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   };
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize.duration / 60 * hourHeight}px` };
-  return <article tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); }}>
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); }}>
     {resize !== null && (() => {
       const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
       const flipUp = resize.duration > 150;
@@ -1130,11 +1143,16 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     {showDetails && projectTitle && <span className="session-project">{projectTitle}</span>}
     {current && showTimeAndProgress && <div className="session-elapsed" role="progressbar" aria-label={`${task.title} 本时段已过去`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={elapsed}><span style={{ width: `${elapsed}%` }} /></div>}
     {showTimeAndProgress && <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>}
-    {pendingReview && <>{showDetails && <span className="review-summary">时段已结束 · 当前进度 {task.progress}%</span>}<div className="session-review-actions" aria-label={`${task.title} 待回顾操作`}><button onClick={() => setProgressOpen((value) => !value)}>更新进度</button><button onClick={onContinue}>继续安排</button><button onClick={() => void onSkipReview()}>本次未推进</button>{progressOpen && <ProgressControl task={task} onCommit={onProgress} />}</div></>}
-    <button className="session-edit-button" data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={onEdit}><Pencil size={12} /></button>
+    {pendingReview && showDetails && <span className="review-summary">时段已结束 · 当前进度 {task.progress}%</span>}
     {overlay}
+    <button className="session-edit-button" data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={onEdit}><Pencil size={12} /></button>
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
-  </article>;
+  </article>
+  {pendingReview && createPortal(
+    <div className="session-review-actions" style={{ top: `${reviewPos.top}px`, left: `${reviewPos.left}px` }} aria-label={`${task.title} 待回顾操作`}><button onClick={() => setProgressOpen((value) => !value)}>更新进度</button><button onClick={onContinue}>继续安排</button><button onClick={() => void onSkipReview()}>本次未推进</button>{progressOpen && <ProgressControl task={task} onCommit={onProgress} />}</div>,
+    document.body
+  )}
+  </>;
 }
 
 function ContinueScheduleDialog({ session, task, snapMinutes, onClose, onSave }: {
