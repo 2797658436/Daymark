@@ -343,7 +343,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
 .calendar-zoom-pill svg { width: 11px; height: 11px; }
 .calendar-zoom-hint-show { animation: fadeOut 1.6s ease forwards; }
 @keyframes fadeOut { 0%, 70% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
-.calendar-drag-preview { position: absolute; z-index: 20; inset-inline: 4px; min-height: 26px; display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; }
+.calendar-drag-preview { position: absolute; z-index: 35; inset-inline: 4px; min-height: 26px; display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; }
 .calendar-drag-preview > span { background: color-mix(in srgb, var(--accent-soft) 86%, transparent); border-radius: 6px; padding: 3px 12px; font-size: .78rem; font-weight: 600; color: var(--accent-strong); white-space: nowrap; letter-spacing: .01em; }
 .calendar-drag-preview.overlap { border-style: solid; border-width: 2px; border-color: var(--accent-strong); transform: scale(.97); box-shadow: var(--ring-accent); }
 .calendar-drag-preview.overlap > span { background: color-mix(in srgb, var(--accent) 32%, var(--panel-strong)); color: var(--accent-strong); }
