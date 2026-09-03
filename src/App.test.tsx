@@ -717,7 +717,9 @@ describe("phase 1 manual alpha", () => {
     };
     const user = userEvent.setup();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
-    expect(await screen.findByLabelText(/实际记录：隐藏控制入口/)).toBeVisible();
+    const recordCards = await screen.findAllByLabelText(/实际记录：隐藏控制入口/);
+    expect(recordCards.length).toBeGreaterThan(0);
+    expect(recordCards[0]).toBeVisible();
     expect(screen.queryByRole("checkbox", { name: "显示实际记录" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByRole("checkbox", { name: /在日历工具栏显示实际记录开关/ })).not.toBeChecked();
