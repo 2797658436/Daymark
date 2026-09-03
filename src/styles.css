@@ -235,7 +235,7 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
 .calendar-session time, .calendar-session span { font-size: .75rem; color: var(--muted); }
 .calendar-session strong { font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calendar-session.current-schedule { z-index: 5; border-width: 2px; border-color: var(--accent-strong); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 24%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent); }
-.calendar-session.pending-review { z-index: 6; overflow: visible; border-width: 2px; border-color: color-mix(in srgb, var(--accent-strong) 70%, var(--line)); }
+.calendar-session.pending-review { z-index: 30; overflow: visible; border-width: 2px; border-color: color-mix(in srgb, var(--accent-strong) 70%, var(--line)); }
 .calendar-session.completed { border-color: color-mix(in srgb, var(--success) 58%, var(--line)); background: color-mix(in srgb, var(--success) 8%, var(--panel)); }
 .calendar-session.planned-outline { border-style: dashed; background: color-mix(in srgb, var(--accent-soft) 38%, var(--panel)); opacity: .62; }
 .calendar-session.planned-outline:focus-within, .calendar-session.planned-outline:hover { opacity: 1; }
