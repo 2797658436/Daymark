@@ -837,7 +837,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
   onEditSession: (session: ExecutionSession) => void;
 }) {
-  const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string }>(null);
+  const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string; pointerOffsetPx: number }>(null);
   const overlapTimer = useRef<number | null>(null); const overlapTarget = useRef("");
   const [expandedConcurrency, setExpandedConcurrency] = useState<string | null>(null);
   const [blankHoverMinute, setBlankHoverMinute] = useState<number | null>(null);
@@ -874,7 +874,8 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   const previewFromDrag = (event: DragEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.height) return null;
-    const raw = timeline ? timeline.minuteAtOffset(event.clientY - rect.top) : ((event.clientY - rect.top) / rect.height) * 1440;
+    const pointerOffsetPx = Math.max(0, event.clientY - rect.top);
+    const raw = timeline ? timeline.minuteAtOffset(pointerOffsetPx) : (pointerOffsetPx / rect.height) * 1440;
     const configuredSnap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes;
     const snap = event.altKey ? (preferences.snapMinutes === "off" ? 15 : 1) : configuredSnap;
     const taskId = event.dataTransfer.getData("application/x-daymark-task");
@@ -904,7 +905,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     } else if (overlapTimer.current !== null) {
       window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = "";
     }
-    return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId };
+    return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId, pointerOffsetPx };
   };
   const heading = <><strong>{isToday ? "今天" : weekday(date)}</strong><span className={isToday ? "today-number" : ""}>{Number(date.slice(-2))}</span></>;
   const dayClasses = ["calendar-day", isToday ? "today" : "", hideHeader ? "without-header" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
@@ -939,7 +940,18 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
       </section>}
       {dragPreview && (() => {
         const start = minutesTime(dragPreview.startMinute % 1440); const end = minutesTime((dragPreview.startMinute + dragPreview.duration) % 1440);
-        const style = timeline ? timeline.positionForRange(start, end) : positionStyle(start, end);
+        const pixelsPerMinute = timeline ? timeline.totalHeight / 1440 : null;
+        // place / overlap 模式：drag preview 顶部 = 鼠标精确像素 offset（保证落点对齐手感）
+        // insert-before / insert-after 模式：精确锚到目标 session 边界
+        const placeHeightPx = dragPreview.duration * (pixelsPerMinute ?? 0);
+        const previewTopPx = (dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after")
+          ? (timeline ? timeline.offsetAtMinute(dragPreview.startMinute) : dragPreview.startMinute / 1440 * 100)
+          : dragPreview.pointerOffsetPx;
+        const style = (dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after")
+          ? (timeline ? timeline.positionForRange(start, end) : positionStyle(start, end))
+          : (timeline
+              ? { top: `${previewTopPx}px`, height: `${placeHeightPx}px` }
+              : { top: `${previewTopPx}%`, height: `${dragPreview.duration / 1440 * 100}%` });
         const label = dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after" ? "插入并后移" : dragPreview.mode === "overlap" ? "同时安排" : dragPreview.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置";
         const shifted = dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after" ? insertionChanges(sessions, dragPreview.sessionId, dragPreview.targetSessionId, dragPreview.mode === "insert-before" ? "before" : "after", dragPreview.duration) : [];
         return <>{style && <article className={`calendar-drag-preview ${dragPreview.mode}`} role="status" aria-label="拖拽排程预览" style={style}><span>{label}</span></article>}{(dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after") && <div className="calendar-insert-line" aria-label="插入位置" style={{ top: timeline ? `${timeline.offsetAtMinute(dragPreview.startMinute)}px` : `${dragPreview.startMinute / 1440 * 100}%` }}><span>插入并后移</span></div>}{shifted.map((change) => { const shiftedStart = minutesTime(change.startMinute % 1440); const shiftedEnd = minutesTime((change.startMinute + sessionDuration(change.session)) % 1440); const shiftedStyle = timeline ? timeline.positionForRange(shiftedStart, shiftedEnd) : positionStyle(shiftedStart, shiftedEnd); return shiftedStyle ? <article key={`shift-${change.session.id}`} className="calendar-shift-preview" style={shiftedStyle}><strong>{taskTitle(workspace, change.session.taskId)}</strong><time>{shiftedStart}–{shiftedEnd}</time></article> : null; })}</>;
