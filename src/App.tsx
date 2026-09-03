@@ -1083,6 +1083,11 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const [progressOpen, setProgressOpen] = useState(false);
   const [resize, setResize] = useState<{ duration: number; clientX: number; clientY: number } | null>(null);
   const [reviewPos, setReviewPos] = useState({ top: 0, left: 0 });
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewLeaveTimer = useRef<number | null>(null);
+  const openReview = () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; setReviewOpen(true); };
+  const scheduleCloseReview = () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = window.setTimeout(() => setReviewOpen(false), 200); };
+  useEffect(() => () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); }, []);
   const current = sessionContains(session, now);
   const hasRecord = records.some((record) => record.sessionId === session.id);
   const pendingReview = session.status === "scheduled" && !current && sessionEnded(session, now) && task.status !== "completed" && task.progress < 100 && !hasRecord;
@@ -1130,7 +1135,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   };
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize.duration / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); }}>
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); }}>
     {resize !== null && (() => {
       const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
       const flipUp = resize.duration > 150;
@@ -1149,7 +1154,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
   </article>
   {pendingReview && createPortal(
-    <div className="session-review-actions" style={{ top: `${reviewPos.top}px`, left: `${reviewPos.left}px` }} aria-label={`${task.title} 待回顾操作`}><button onClick={() => setProgressOpen((value) => !value)}>更新进度</button><button onClick={onContinue}>继续安排</button><button onClick={() => void onSkipReview()}>本次未推进</button>{progressOpen && <ProgressControl task={task} onCommit={onProgress} />}</div>,
+    <div className={`session-review-actions${reviewOpen ? " open" : ""}`} style={{ top: `${reviewPos.top}px`, left: `${reviewPos.left}px` }} aria-label={`${task.title} 待回顾操作`} onPointerEnter={openReview} onPointerLeave={scheduleCloseReview}><button onClick={() => setProgressOpen((value) => !value)}>更新进度</button><button onClick={onContinue}>继续安排</button><button onClick={() => void onSkipReview()}>本次未推进</button>{progressOpen && <ProgressControl task={task} onCommit={onProgress} />}</div>,
     document.body
   )}
   </>;
