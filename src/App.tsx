@@ -430,17 +430,35 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   };
   const [editing, setEditing] = useState<{ taskId: string; pos: { top: number; left: number } | null } | null>(null);
   const editingTask = editing ? tasks.find((task) => task.id === editing.taskId) ?? null : null;
+  const eatNextClickRef = useRef(false);
   useEffect(() => {
     if (!editing) return;
-    const close = (event: PointerEvent) => { const target = event.target as HTMLElement; if (!target.closest(".task-editor-popover") && !target.closest(".task-editor-button")) setEditing(null); };
+    // 外点关闭：在 capture 阶段拦下这次 click，避免它继续触发底层按钮/折叠。
+    // React 的事件委托在 #root 冒泡阶段处理，window capture 先于它执行。
+    const isOutside = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      return !el?.closest(".task-editor-popover") && !el?.closest(".task-editor-button");
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!isOutside(event.target)) return;
+      // 记录这次外点发生在 pointerdown；真正拦截在 click capture（pointerdown 拦不住独立派发的 click）
+      eatNextClickRef.current = true;
+    };
+    const onClickCapture = (event: MouseEvent) => {
+      if (!eatNextClickRef.current) return;
+      eatNextClickRef.current = false;
+      if (!isOutside(event.target)) return;
+      event.stopPropagation();
+      setEditing(null);
+    };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setEditing(null); };
     const reposition = () => {
       const anchor = document.querySelector<HTMLElement>(`[data-editor-anchor="${editing.taskId}"]`);
       const rect = anchor?.getBoundingClientRect();
       if (rect) setEditing((current) => current && { ...current, pos: { top: Math.min(rect.bottom + 6, window.innerHeight - 320), left: Math.max(8, Math.min(window.innerWidth - 258, rect.right - 250)) } });
     };
-    window.addEventListener("pointerdown", close); window.addEventListener("keydown", escape); window.addEventListener("scroll", reposition, true);
-    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); window.removeEventListener("scroll", reposition, true); };
+    window.addEventListener("pointerdown", onPointerDown, true); window.addEventListener("click", onClickCapture, true); window.addEventListener("keydown", escape); window.addEventListener("scroll", reposition, true);
+    return () => { window.removeEventListener("pointerdown", onPointerDown, true); window.removeEventListener("click", onClickCapture, true); window.removeEventListener("keydown", escape); window.removeEventListener("scroll", reposition, true); };
   }, [editing]);
   const toggleEditor = (task: Task, anchor: HTMLElement) => {
     if (editing?.taskId === task.id) { setEditing(null); return; }

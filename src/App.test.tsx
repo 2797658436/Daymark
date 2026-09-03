@@ -1313,6 +1313,28 @@ describe("phase 1 manual alpha", () => {
     expect(screen.getByText("使用说明")).toBeVisible();
   });
 
+  it("closes the editor popover on an outside click without firing the underlying control", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "四级英语单词", deadlineLocal: null }],
+      tasks: [
+        { id: "task-a", projectId: "project-1", title: "使用说明", progress: 100, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" },
+        { id: "task-b", projectId: "project-1", title: "视频配套书籍在哪？", progress: 50, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 1, kind: "task" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    const editButton = await screen.findByRole("button", { name: "编辑任务 视频配套书籍在哪？" });
+    await user.click(editButton);
+    expect(document.querySelector(".task-editor-popover")).not.toBeNull();
+    // 气泡开着时点折叠 header：应该只关气泡，不切换 header 折叠状态
+    const header = screen.getByRole("button", { name: /四级英语单词/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    await user.click(header);
+    await waitFor(() => expect(document.querySelector(".task-editor-popover")).toBeNull());
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("marks a project task complete in one click from the project card", async () => {
     const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
