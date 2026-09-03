@@ -837,7 +837,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
   onEditSession: (session: ExecutionSession) => void;
 }) {
-  const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string; pointerOffsetPx: number; sourcePointerDeltaPx: number }>(null);
+  const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string }>(null);
   const overlapTimer = useRef<number | null>(null); const overlapTarget = useRef("");
   const [expandedConcurrency, setExpandedConcurrency] = useState<string | null>(null);
   const [blankHoverMinute, setBlankHoverMinute] = useState<number | null>(null);
@@ -874,7 +874,9 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   const previewFromDrag = (event: DragEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.height) return null;
-    const pointerOffsetPx = Math.max(0, event.clientY - rect.top);
+    // 抓取偏移：鼠标按下时相对源 session 顶部的距离；虚线框顶 = 鼠标 y - 抓取偏移 → 抓哪儿跟哪儿
+    const grabOffsetPx = Number(event.dataTransfer.getData("application/x-daymark-grab")) || 0;
+    const pointerOffsetPx = Math.max(0, Math.max(0, event.clientY - rect.top) - grabOffsetPx);
     const raw = timeline ? timeline.minuteAtOffset(pointerOffsetPx) : (pointerOffsetPx / rect.height) * 1440;
     const configuredSnap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes;
     const snap = event.altKey ? (preferences.snapMinutes === "off" ? 15 : 1) : configuredSnap;
@@ -885,9 +887,6 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     if (!task && !session) return null;
     const sourceTask = task ?? workspace.tasks.find((item) => item.id === session?.taskId);
     const duration = session ? sessionDuration(session) : Math.max(5, task?.sessionMinutes ?? task?.estimatedMinutes ?? 60);
-    const sourceStartMinute = session ? timeMinutes(session.startLocal) : 0;
-    const sourceOffsetPx = timeline ? timeline.offsetAtMinute(sourceStartMinute) : (sourceStartMinute / 1440) * rect.height;
-    const sourcePointerDeltaPx = pointerOffsetPx - sourceOffsetPx;
     let startMinute = Math.max(0, Math.min(1439, Math.round(raw / snap) * snap));
     let mode: CalendarDropMode = "place"; let targetSessionId = "";
     const targetCard = (event.target as HTMLElement | null)?.closest<HTMLElement>(".calendar-session:not(.calendar-drag-preview)");
@@ -908,7 +907,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     } else if (overlapTimer.current !== null) {
       window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = "";
     }
-    return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId, pointerOffsetPx, sourcePointerDeltaPx };
+    return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId };
   };
   const heading = <><strong>{isToday ? "今天" : weekday(date)}</strong><span className={isToday ? "today-number" : ""}>{Number(date.slice(-2))}</span></>;
   const dayClasses = ["calendar-day", isToday ? "today" : "", hideHeader ? "without-header" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
@@ -1140,7 +1139,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   };
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize.duration / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); }}>
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = event.clientY - event.currentTarget.getBoundingClientRect().top; event.dataTransfer.setData("application/x-daymark-grab", String(Math.max(0, Math.round(grabOffsetY)))); }}>
     {resize !== null && (() => {
       const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
       const flipUp = resize.duration > 150;
