@@ -785,11 +785,18 @@ describe("phase 1 manual alpha", () => {
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
-    await user.click(await screen.findByText("编辑任务信息"));
-    await user.selectOptions(screen.getByRole("combobox", { name: "项目" }), "project-1");
-    await user.type(screen.getByLabelText("截止日期"), "2026-08-02");
-    await waitFor(() => expect(native.updateTask).toHaveBeenCalled());
-    expect(native.updateTask).toHaveBeenLastCalledWith(expect.objectContaining({ deadlineLocal: "2026-08-02" }));
+    const editButton = await screen.findByRole("button", { name: "编辑任务 整理反馈" });
+    await user.click(editButton);
+    const popover = await waitFor(() => {
+      const node = document.querySelector(".task-editor-popover");
+      expect(node).not.toBeNull();
+      return node as HTMLElement;
+    });
+    await user.selectOptions(within(popover).getByRole("combobox", { name: "项目" }), "project-1");
+    const dateInput = within(popover).getByLabelText("截止日期") as HTMLInputElement;
+    fireEvent.change(dateInput, { target: { value: "2026-08-02" } });
+    fireEvent.blur(dateInput);
+    await waitFor(() => expect(native.updateTask).toHaveBeenCalledWith(expect.objectContaining({ deadlineLocal: "2026-08-02" })));
   });
 
   it("keeps changed settings visible and reports an unsaved write", async () => {

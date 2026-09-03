@@ -13,3 +13,4 @@ src-tauri/gen/
 artifacts/
 output/playwright/
 rustup-init.exe
+.codegraph/

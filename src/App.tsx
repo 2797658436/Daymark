@@ -415,11 +415,39 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   const attention = tasks.filter((task) => task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
   const visible = tasks.filter((task) => !attention.includes(task) && (filter === "all" || (sessions.some((item) => item.taskId === task.id && item.status === "scheduled") ? filter === "scheduled" : filter === "unscheduled")));
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
-  const toggleProject = (key: string) => setExpandedProjects((current) => {
-    const next = new Set(current);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
+  const [collapsedByUser, setCollapsedByUser] = useState<Set<string>>(() => new Set());
+  const toggleProject = (key: string) => {
+    const isExpanded = expandedProjects.has(key);
+    if (isExpanded) {
+      // 展开 → 收起：完全折叠成一行（用户手动收起）
+      setExpandedProjects((current) => { const next = new Set(current); next.delete(key); return next; });
+      setCollapsedByUser((current) => { const next = new Set(current); next.add(key); return next; });
+    } else {
+      // 折叠 → 展开
+      setExpandedProjects((current) => { const next = new Set(current); next.add(key); return next; });
+      setCollapsedByUser((current) => { const next = new Set(current); next.delete(key); return next; });
+    }
+  };
+  const [editing, setEditing] = useState<{ taskId: string; pos: { top: number; left: number } | null } | null>(null);
+  const editingTask = editing ? tasks.find((task) => task.id === editing.taskId) ?? null : null;
+  useEffect(() => {
+    if (!editing) return;
+    const close = (event: PointerEvent) => { const target = event.target as HTMLElement; if (!target.closest(".task-editor-popover") && !target.closest(".task-editor-button")) setEditing(null); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setEditing(null); };
+    const reposition = () => {
+      const anchor = document.querySelector<HTMLElement>(`[data-editor-anchor="${editing.taskId}"]`);
+      const rect = anchor?.getBoundingClientRect();
+      if (rect) setEditing((current) => current && { ...current, pos: { top: Math.min(rect.bottom + 6, window.innerHeight - 320), left: Math.max(8, Math.min(window.innerWidth - 258, rect.right - 250)) } });
+    };
+    window.addEventListener("pointerdown", close); window.addEventListener("keydown", escape); window.addEventListener("scroll", reposition, true);
+    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); window.removeEventListener("scroll", reposition, true); };
+  }, [editing]);
+  const toggleEditor = (task: Task, anchor: HTMLElement) => {
+    if (editing?.taskId === task.id) { setEditing(null); return; }
+    const rect = anchor.getBoundingClientRect();
+    const width = 250;
+    setEditing({ taskId: task.id, pos: { top: Math.min(rect.bottom + 6, window.innerHeight - 320), left: Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width)) } });
+  };
   const groups: { key: string; project: Project | null; tasks: Task[] }[] = [];
   {
     const byProject = new Map<string, Task[]>();
@@ -445,8 +473,9 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
     <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
     <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
       const isExpanded = expandedProjects.has(key);
+      const fullyCollapsed = !isExpanded && collapsedByUser.has(key);
       const current = groupTasks.find((task) => task.progress < 100);
-      const shown = isExpanded ? groupTasks : current ? [current] : [];
+      const shown = isExpanded ? groupTasks : fullyCollapsed ? [] : current ? [current] : [];
       const done = groupTasks.filter((task) => task.progress === 100).length;
       const avg = groupTasks.length ? Math.round(groupTasks.reduce((sum, task) => sum + task.progress, 0) / groupTasks.length) : 0;
       return <section key={key} className="project-group">
@@ -456,25 +485,34 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
           {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <div className={isExpanded ? "project-group-body expanded" : "project-group-body"}>
-          {shown.map((task) => <TaskPoolCard key={task.id} task={task} projects={projects} sessions={sessions} onUpdate={onUpdate} onProgress={onProgress} />)}
-          {!isExpanded && !current && <p className="empty-inline">该项目下所有任务都已完成。</p>}
+          {shown.map((task) => <TaskPoolCard key={task.id} task={task} projects={projects} sessions={sessions} onUpdate={onUpdate} onProgress={onProgress} onEdit={toggleEditor} />)}
+          {fullyCollapsed && <p className="empty-inline group-collapsed-hint">已收起，点击展开查看全部任务。</p>}
+          {!isExpanded && !fullyCollapsed && !current && <p className="empty-inline">该项目下所有任务都已完成。</p>}
         </div>
       </section>;
     })}{visible.length === 0 && <p className="empty-inline">当前筛选没有任务。</p>}</div>
     {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
+
     <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
+    {editing && editingTask && createPortal(
+      <div className="task-editor-popover" role="dialog" aria-label={`编辑任务 ${editingTask.title}`} style={{ top: `${editing.pos?.top ?? 0}px`, left: `${editing.pos?.left ?? 0}px` }}>
+        <TaskEditorFields task={editingTask} projects={projects} onUpdate={onUpdate} />
+      </div>, document.body)}
   </aside>;
 }
 
-function TaskPoolCard({ task, projects, sessions, onUpdate, onProgress }: { task: Task; projects: Project[]; sessions: ExecutionSession[]; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void> }) {
+function TaskPoolCard({ task, projects, sessions, onUpdate, onProgress, onEdit }: { task: Task; projects: Project[]; sessions: ExecutionSession[]; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const upcoming = sessions.filter((item) => item.taskId === task.id && item.status === "scheduled").sort(compareSessions);
   const project = projects.find((item) => item.id === task.projectId);
-  return <article className="task-card" tabIndex={0}>
-    <div className="task-card-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}><strong>{task.title}</strong>{task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}</div>
-    <div className="task-meta">{project?.title ?? "独立任务"}{task.estimatedMinutes ? ` · 约 ${task.estimatedMinutes} 分钟` : ""}</div>
+  return <article className="task-card task-row" tabIndex={0}>
+    <div className="task-row-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}>
+      <strong>{task.title}</strong>
+      {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
+      <span className="task-project-chip">{project?.title ?? "独立任务"}{task.estimatedMinutes ? ` · ${task.estimatedMinutes}分` : ""}</span>
+      <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
+    </div>
     <ProgressControl task={task} onCommit={onProgress} />
-    {upcoming.length > 0 && <small>下次：{upcoming[0].localDate} {upcoming[0].startLocal} · 共 {upcoming.length} 次</small>}
-    <TaskEditor task={task} projects={projects} onUpdate={onUpdate} />
+    {upcoming.length > 0 && <small className="task-upcoming">下次：{upcoming[0].localDate} {upcoming[0].startLocal} · 共 {upcoming.length} 次</small>}
   </article>;
 }
 
@@ -1362,19 +1400,19 @@ function useCurrentTime() {
   return now;
 }
 
-function TaskEditor({ task, projects, onUpdate }: { task: Task; projects: Project[]; onUpdate: (task: Task) => Promise<void> }) {
+
+function TaskEditorFields({ task, projects, onUpdate }: { task: Task; projects: Project[]; onUpdate: (task: Task) => Promise<void> }) {
   const [draft, setDraft] = useState(task);
   useEffect(() => setDraft(task), [task]);
   const save = (next: Task) => { setDraft(next); if (JSON.stringify(next) !== JSON.stringify(task)) void onUpdate(next); };
-  return <details className="task-editor" onPointerDown={(event) => event.stopPropagation()}>
-    <summary>编辑任务信息</summary>
+  return <>
     <label>标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} onBlur={() => draft.title.trim() && save({ ...draft, title: draft.title.trim() })} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setDraft(task); event.currentTarget.blur(); } }} /></label>
     <label>项目<select value={draft.projectId ?? ""} onChange={(event) => save({ ...draft, projectId: event.target.value || null })}><option value="">独立任务</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
     <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => save({ ...draft, deadlineLocal: event.target.value || null })} /></label>
     <label>预计耗时（分钟）<input type="number" min="1" max="1440" value={draft.estimatedMinutes ?? ""} onChange={(event) => setDraft({ ...draft, estimatedMinutes: event.target.value ? Number(event.target.value) : null })} onBlur={() => save(draft)} /></label>
     <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes ?? ""} onChange={(event) => setDraft({ ...draft, sessionMinutes: event.target.value ? Number(event.target.value) : null })} onBlur={() => save(draft)} /></label>
     <label>优先级<select value={draft.priority ?? "normal"} onChange={(event) => save({ ...draft, priority: event.target.value as Task["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label>
-  </details>;
+  </>;
 }
 
 function EmptyState({ icon, title, text, action }: { icon: ReactNode; title: string; text: string; action?: ReactNode }) { return <div className="empty-state"><span>{icon}</span><strong>{title}</strong><p>{text}</p>{action}</div>; }

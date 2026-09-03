@@ -26,7 +26,7 @@ test("task can be scheduled by one drag and the schedule can be undone", async (
 
   const card = page.locator(".task-card", { hasText: "写阶段总结" });
   const futureDay = page.getByRole("region", { name: "连续日时间轴" }).locator("[data-calendar-date]").nth(1).locator(".day-track");
-  await card.locator(".task-card-top").dragTo(futureDay, { targetPosition: { x: 30, y: 500 } });
+  await card.locator(".task-row-top").dragTo(futureDay, { targetPosition: { x: 30, y: 500 } });
   await expect(futureDay.locator(".calendar-session", { hasText: "写阶段总结" })).toHaveCount(1);
   await expect(card).toContainText("共 1 次");
   await expect(page.getByRole("button", { name: /撤销安排/ })).toBeVisible();
@@ -44,7 +44,7 @@ test("scheduled session can move and return to the pool without copying its task
   const task = page.locator(".task-card", { hasText: "移动排程" });
   const firstDay = page.locator(".calendar-day .day-track").nth(0);
   const secondDay = page.locator(".calendar-day .day-track").nth(1);
-  await task.locator(".task-card-top").dragTo(firstDay, { targetPosition: { x: 30, y: 400 } });
+  await task.locator(".task-row-top").dragTo(firstDay, { targetPosition: { x: 30, y: 400 } });
   const session = firstDay.locator(".calendar-session", { hasText: "移动排程" });
   const before = await session.locator("time").textContent();
   await expect(session).toBeVisible();
@@ -223,7 +223,7 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   });
   await expect(period).not.toHaveText(initialDay ?? "");
   const currentTrack = axis.locator("[data-calendar-date]").nth(1).locator(".day-track");
-  await page.locator(".task-card", { hasText: "跨日安排" }).locator(".task-card-top").dragTo(currentTrack, { targetPosition: { x: 30, y: 500 } });
+  await page.locator(".task-card", { hasText: "跨日安排" }).locator(".task-row-top").dragTo(currentTrack, { targetPosition: { x: 30, y: 500 } });
   await expect(currentTrack.locator(".calendar-session", { hasText: "跨日安排" })).toHaveCount(1);
 });
 
