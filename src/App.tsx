@@ -526,15 +526,19 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   const assistCount = tasks.filter((task) => !sessions.some((session) => session.taskId === task.id && session.status === "scheduled")).length
     + habits.filter((habit) => habitOccursOn(habit, today) && !occurrences.some((occurrence) => occurrence.habitId === habit.id && occurrence.localDate === today)).length;
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
-  return <aside id="task-pool" className="task-pool" aria-labelledby="task-pool-title" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
+  return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
     const id = event.dataTransfer.getData("application/x-daymark-session"); const session = sessions.find((item) => item.id === id); if (session) void onCancelSession(session);
   }}>
-    <div className="panel-heading"><div><span className="eyebrow">始终只有一份任务</span><h2 id="task-pool-title">任务池</h2></div><button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button></div>
-    <div className="pool-actions"><Button variant="primary" onClick={onAutoSchedule}><Sparkles size={16} />自动排程</Button><Button data-habit-button onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setHabitAnchor((current) => current ? null : rect); }}><Repeat2 size={16} />新建重复习惯</Button></div>
+    <div className="pool-topbar">
+      <input aria-label="任务标题" placeholder="只写标题，Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void submit()} />
+      <Button variant="primary" aria-label="创建任务" disabled={!title.trim() || busy} onClick={() => void submit()}><Plus size={16} /></Button>
+      <button className="icon-action" aria-label="自动排程" title="自动排程" onClick={onAutoSchedule}><Sparkles size={17} /></button>
+      <button className="icon-action" data-habit-button aria-label="新建重复习惯" title="新建重复习惯" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setHabitAnchor((current) => current ? null : rect); }}><Repeat2 size={17} /></button>
+      <button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
+    </div>
     {autoScheduleAssist && assistCount > 0 && <button className="schedule-assist" onClick={onAutoSchedule}><Sparkles size={15} /><span><strong>{assistCount} 项还没有下一次安排</strong><small>可以生成未来 7 天草案，确认后才会应用</small></span></button>}
     {habitAnchor && createPortal(<div className="habit-form habit-popover" role="dialog" aria-label="新建重复习惯" style={habitPopoverStyle(habitAnchor)}><label>习惯名称<input value={habitTitle} onChange={(event) => setHabitTitle(event.target.value)} /></label><label>重复规则<select value={habitPattern} onChange={(event) => setHabitPattern(event.target.value as RecurringHabit["pattern"])}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>{habitPattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={habitDays.includes(day)} onChange={(event) => setHabitDays((days) => event.target.checked ? [...days, day] : days.filter((value) => value !== day))} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}<label>单次投入（分钟）<input type="number" min="5" max="240" value={habitMinutes} onChange={(event) => setHabitMinutes(Number(event.target.value))} /></label><label>固定开始（可选）<input type="time" value={habitStart} onChange={(event) => setHabitStart(event.target.value)} /></label><div className="form-actions"><Button onClick={() => setHabitAnchor(null)}>取消</Button><Button variant="primary" disabled={!habitTitle.trim() || habitMinutes < 5 || (habitPattern === "weekly" && habitDays.length === 0)} onClick={async () => { await onCreateHabit({ title: habitTitle.trim(), pattern: habitPattern, weekdays: habitPattern === "weekly" ? habitDays : [], startDate: toLocalDate(new Date()), sessionMinutes: habitMinutes, preferredStartLocal: habitStart || null }); setHabitTitle(""); setHabitAnchor(null); }}>创建习惯</Button></div></div>, document.body)}
-    <div className="quick-create"><input aria-label="任务标题" placeholder="只写标题，按 Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void submit()} /><Button variant="primary" aria-label="创建任务" disabled={!title.trim() || busy} onClick={() => void submit()}><Plus size={17} /></Button></div>
-    {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <article key={task.id} className="task-card" tabIndex={0}><div className="task-card-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}><strong>{task.title}</strong>{task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(today, task.deadlineLocal)}</span>}</div><div className="task-meta">{projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"}{task.estimatedMinutes ? ` · 约 ${task.estimatedMinutes} 分钟` : ""}</div><ProgressControl task={task} onCommit={onProgress} /></article>)}</div></details>}
+    {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <TaskPoolCard key={task.id} task={task} sessions={sessions} onProgress={onProgress} onEdit={toggleEditor} />)}</div></details>}
     <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
     <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
       const isExpanded = expandedProjects.has(key);
@@ -550,7 +554,7 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
           {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <div className={isExpanded ? "project-group-body expanded" : "project-group-body"}>
-          {shown.map((task) => <TaskPoolCard key={task.id} task={task} projects={projects} sessions={sessions} onUpdate={onUpdate} onProgress={onProgress} onEdit={toggleEditor} />)}
+          {shown.map((task) => <TaskPoolCard key={task.id} task={task} sessions={sessions} onProgress={onProgress} onEdit={toggleEditor} />)}
           {fullyCollapsed && <p className="empty-inline group-collapsed-hint">已收起，点击展开查看全部任务。</p>}
           {!isExpanded && !fullyCollapsed && !current && <p className="empty-inline">该项目下所有任务都已完成。</p>}
         </div>
@@ -566,18 +570,17 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   </aside>;
 }
 
-function TaskPoolCard({ task, projects, sessions, onUpdate, onProgress, onEdit }: { task: Task; projects: Project[]; sessions: ExecutionSession[]; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
+function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const upcoming = sessions.filter((item) => item.taskId === task.id && item.status === "scheduled").sort(compareSessions);
-  const project = projects.find((item) => item.id === task.projectId);
-  return <article className="task-card task-row" tabIndex={0}>
-    <div className="task-row-top" draggable title="拖动安排" onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}>
-      <strong>{task.title}</strong>
-      {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
-      <span className="task-project-chip">{project?.title ?? "独立任务"}{task.estimatedMinutes ? ` · ${task.estimatedMinutes}分` : ""}</span>
-      <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
-    </div>
-    <ProgressControl task={task} onCommit={onProgress} />
-    {upcoming.length > 0 && <small className="task-upcoming">下次：{upcoming[0].localDate} {upcoming[0].startLocal} · 共 {upcoming.length} 次</small>}
+  const hint = upcoming.length ? `拖动安排 · 下次：${upcoming[0].localDate} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
+  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}>
+    <strong className="task-row-title">{task.title}</strong>
+    {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
+    <span className="task-row-side">
+      <span className="task-row-progress" aria-hidden="true"><span className="mini-track"><span style={{ width: `${task.progress}%` }} /></span><b>{task.progress}%</b></span>
+      <span className="task-row-slider"><ProgressControl task={task} onCommit={onProgress} /></span>
+    </span>
+    <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
   </article>;
 }
 
