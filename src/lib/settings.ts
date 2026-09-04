@@ -24,6 +24,7 @@ export interface AppSettings {
   calendarDayMode: CalendarDayMode;
   showActualRecords: boolean;
   showActualRecordsControl: boolean;
+  taskPoolWidth: number | null;
   snapMinutes: "off" | 15 | 30 | 60;
   defaultSessionMinutes: number;
   minimumSessionMinutes: 5 | 10 | 15 | 20 | 30;
@@ -50,6 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   calendarDayMode: "fullDay",
   showActualRecords: false,
   showActualRecordsControl: true,
+  taskPoolWidth: null,
   snapMinutes: 15,
   defaultSessionMinutes: 60,
   minimumSessionMinutes: 15,
@@ -146,6 +148,7 @@ function normalizeSettings(value: unknown): AppSettings {
     calendarDayMode: isOneOf(candidate.calendarDayMode, ["defaultSlots", "fullDay"] as const) ? candidate.calendarDayMode : DEFAULT_SETTINGS.calendarDayMode,
     showActualRecords: typeof candidate.showActualRecords === "boolean" ? candidate.showActualRecords : DEFAULT_SETTINGS.showActualRecords,
     showActualRecordsControl: typeof candidate.showActualRecordsControl === "boolean" ? candidate.showActualRecordsControl : DEFAULT_SETTINGS.showActualRecordsControl,
+    taskPoolWidth: typeof candidate.taskPoolWidth === "number" && Number.isFinite(candidate.taskPoolWidth) && candidate.taskPoolWidth >= 260 && candidate.taskPoolWidth <= 560 ? Math.round(candidate.taskPoolWidth) : DEFAULT_SETTINGS.taskPoolWidth,
     snapMinutes: isOneOf(candidate.snapMinutes, ["off", 15, 30, 60] as const) ? candidate.snapMinutes : DEFAULT_SETTINGS.snapMinutes,
     defaultSessionMinutes: typeof candidate.defaultSessionMinutes === "number" && Number.isInteger(candidate.defaultSessionMinutes) && candidate.defaultSessionMinutes >= 5 && candidate.defaultSessionMinutes <= 240 ? candidate.defaultSessionMinutes : DEFAULT_SETTINGS.defaultSessionMinutes,
     minimumSessionMinutes: isOneOf(candidate.minimumSessionMinutes, [5, 10, 15, 20, 30] as const) ? candidate.minimumSessionMinutes : DEFAULT_SETTINGS.minimumSessionMinutes,

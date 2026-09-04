@@ -36,6 +36,16 @@ describe("settings persistence", () => {
     });
   });
 
+  it("clamps the draggable task pool width into a sane range and resets invalid values", async () => {
+    const backend = new MemoryBackend();
+    backend.value = { ...DEFAULT_SETTINGS, taskPoolWidth: 420 };
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ taskPoolWidth: 420 });
+    backend.value = { ...DEFAULT_SETTINGS, taskPoolWidth: 9999 };
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ taskPoolWidth: null });
+    backend.value = { ...DEFAULT_SETTINGS };
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ taskPoolWidth: null });
+  });
+
   it("falls back safely when stored settings are incomplete or invalid", async () => {
     const backend = new MemoryBackend();
     backend.value = { appearance: "purple", motion: "reduce", scale: 900, lastPage: "missing" };
