@@ -292,9 +292,11 @@ export default function App({ settings: injectedSettings, native: injectedNative
   const running = workspace.executionRecords.find((record) => !record.actualEndUtc) ?? null;
   const hasTaskPool = page === "today" || page === "calendar" || page === "projects";
   const showTaskPool = hasTaskPool && taskPoolOpen;
+  // 日视图单列太宽：窄窗口时也让任务池保持侧栏形态，而不是转浮层
+  const dayViewPool = page === "calendar" && preferences.calendarView === "day";
 
   return (
-    <div className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"}`}>
+    <div className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"} ${dayViewPool && showTaskPool ? "day-view-pool" : ""}`}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="sidebar">
         <div className="brand" aria-label="Daymark"><span className="brand-mark">D</span><strong>Daymark</strong></div>

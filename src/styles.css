@@ -427,6 +427,10 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
   .summary-pills { display: none; }
   .task-pool-scrim { display: block; position: fixed; z-index: 24; inset: 0 0 0 64px; border: 0; background: rgb(22 17 12 / 24%); cursor: default; }
   .task-pool { position: fixed; z-index: 25; inset: 0 0 0 auto; width: min(360px, calc(100vw - 64px)); box-shadow: var(--shadow-float); }
+  /* 日视图单列本身很宽：任务池保持真实侧栏（不转浮层），把日历列挤窄 */
+  .app-shell.with-task-pool.day-view-pool { grid-template-columns: 64px minmax(0, 1fr) clamp(280px, 24vw, 340px); }
+  .app-shell.with-task-pool.day-view-pool > .task-pool-scrim { display: none; }
+  .app-shell.with-task-pool.day-view-pool > .task-pool { position: static; inset: auto; width: auto; box-shadow: none; }
 }
 @media (max-width: 1050px) {
   .today-grid { grid-template-columns: 1fr; }
