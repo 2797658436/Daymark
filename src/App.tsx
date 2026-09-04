@@ -359,9 +359,13 @@ export default function App({ settings: injectedSettings, native: injectedNative
 
       {showTaskPool && (
         <>
+        <div className="pool-splitter" aria-hidden="true"
+          onPointerDown={(event) => { const pool = document.getElementById("task-pool"); if (!pool) return; poolResize.current = { startX: event.clientX, startWidth: pool.getBoundingClientRect().width }; event.currentTarget.setPointerCapture(event.pointerId); document.body.dataset.poolResizing = "true"; }}
+          onPointerMove={(event) => { const state = poolResize.current; if (!state) return; const width = Math.min(560, Math.max(260, Math.round(state.startWidth - (event.clientX - state.startX)))); document.querySelector<HTMLElement>(".app-shell")?.style.setProperty("--pool-width", `${width}px`); }}
+          onPointerUp={(event) => { if (!poolResize.current) return; poolResize.current = null; delete document.body.dataset.poolResizing; if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); const width = parseInt(document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--pool-width") ?? "", 10); if (Number.isFinite(width) && width !== preferences.taskPoolWidth) updatePreferences({ taskPoolWidth: width }); }} />
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => setTaskPoolOpen(false)} />
         <TaskPool tasks={activeTasks} sessions={workspace.executionSessions} projects={workspace.projects} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
-          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} poolWidth={preferences.taskPoolWidth} onPoolWidthCommit={(width) => updatePreferences({ taskPoolWidth: width })} />
+          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
         </>
       )}
 
@@ -428,23 +432,12 @@ function TodayPage({ workspace, preferences, running, onStart, onFinish, onProgr
   </section>;
 }
 
-function PoolSplitter({ current, onCommit }: { current: number | null; onCommit: (width: number) => void }) {
-  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
-  const apply = (width: number) => document.querySelector<HTMLElement>(".app-shell")?.style.setProperty("--pool-width", `${Math.min(560, Math.max(260, Math.round(width)))}px`);
-  return <div className="pool-splitter" role="separator" aria-orientation="vertical" aria-label="调整任务池宽度" aria-valuemin={260} aria-valuemax={560} aria-valuenow={current ?? 320} aria-valuetext={current ? `任务池宽度 ${current} 像素` : "默认任务池宽度"} tabIndex={0}
-    onPointerDown={(event) => { const pool = document.getElementById("task-pool"); if (!pool) return; drag.current = { startX: event.clientX, startWidth: pool.getBoundingClientRect().width }; event.currentTarget.setPointerCapture(event.pointerId); document.body.dataset.poolResizing = "true"; }}
-    onPointerMove={(event) => { const state = drag.current; if (!state) return; apply(state.startWidth - (event.clientX - state.startX)); }}
-    onPointerUp={(event) => { if (!drag.current) return; drag.current = null; delete document.body.dataset.poolResizing; if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); const width = parseInt(document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--pool-width") ?? "", 10); if (Number.isFinite(width) && width !== current) onCommit(width); }}
-    onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); onCommit(Math.min(560, Math.max(260, (current ?? 320) + (event.key === "ArrowRight" ? 16 : -16)))); }} />;
-}
-
-function TaskPool({ tasks, sessions, projects, habits, occurrences, autoScheduleAssist, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit, poolWidth, onPoolWidthCommit }: {
+function TaskPool({ tasks, sessions, projects, habits, occurrences, autoScheduleAssist, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
   tasks: Task[]; sessions: ExecutionSession[]; projects: Project[]; habits: RecurringHabit[]; occurrences: HabitOccurrence[]; autoScheduleAssist: boolean;
   onCreate: (title: string) => Promise<Task>; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void>;
   onCancelSession: (session: ExecutionSession) => Promise<void>; onClose: () => void; onAutoSchedule: () => void;
   onCreateHabit: (habit: Omit<RecurringHabit, "id" | "taskId" | "status">) => Promise<void>;
   onScheduleHabit: (habit: RecurringHabit, date: string) => Promise<void>; onSkipHabit: (habit: RecurringHabit, date: string) => Promise<void>;
-  poolWidth: number | null; onPoolWidthCommit: (width: number) => void;
 }) {
   const [title, setTitle] = useState("");
   const [filter, setFilter] = useState<"all" | "unscheduled" | "scheduled">("all");
@@ -536,7 +529,6 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   return <aside id="task-pool" className="task-pool" aria-labelledby="task-pool-title" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
     const id = event.dataTransfer.getData("application/x-daymark-session"); const session = sessions.find((item) => item.id === id); if (session) void onCancelSession(session);
   }}>
-    <PoolSplitter current={poolWidth} onCommit={onPoolWidthCommit} />
     <div className="panel-heading"><div><span className="eyebrow">始终只有一份任务</span><h2 id="task-pool-title">任务池</h2></div><button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button></div>
     <div className="pool-actions"><Button variant="primary" onClick={onAutoSchedule}><Sparkles size={16} />自动排程</Button><Button data-habit-button onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setHabitAnchor((current) => current ? null : rect); }}><Repeat2 size={16} />新建重复习惯</Button></div>
     {autoScheduleAssist && assistCount > 0 && <button className="schedule-assist" onClick={onAutoSchedule}><Sparkles size={15} /><span><strong>{assistCount} 项还没有下一次安排</strong><small>可以生成未来 7 天草案，确认后才会应用</small></span></button>}
