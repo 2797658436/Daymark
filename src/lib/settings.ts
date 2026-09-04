@@ -176,7 +176,7 @@ function normalizeCalendarZoom(value: unknown): CalendarZoomByView {
 function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView): CalendarScaleByView {
   const candidate = value && typeof value === "object" ? value as Partial<CalendarScaleByView> : {};
   const valid = (view: CalendarView, scale: unknown) => {
-    const [minimum, maximum] = view === "month" ? [52, 132] : [28, 96];
+    const [minimum, maximum] = view === "month" ? [52, 132] : [28, 192];
     return typeof scale === "number" && Number.isFinite(scale) && scale >= minimum && scale <= maximum
       ? Math.round(scale)
       : calendarScaleForZoom(view, zoom[view]);
