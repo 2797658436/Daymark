@@ -141,13 +141,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .task-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgb(35 31 27 / 8%); }
 .task-card.task-row { padding: 5px 8px; display: flex; align-items: center; gap: 8px; border-radius: 10px; }
 .task-card.task-row .task-row-title { flex: 1; min-width: 0; font-size: .8rem; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-row-side { position: relative; width: 112px; height: 26px; flex: none; }
+.task-row-side { position: relative; width: 132px; height: 26px; flex: none; }
 .task-row-progress { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.task-row-progress .mini-track { width: 44px; height: 5px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.task-row-progress .mini-track { flex: 1; min-width: 56px; height: 5px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
 .task-row-progress .mini-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
-.task-row-progress b { width: 34px; text-align: right; font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
+.task-row-progress b { flex: none; width: 34px; text-align: right; font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 600; }
 .task-row-slider { position: absolute; inset: 0; display: flex; align-items: center; visibility: hidden; }
-.task-row-slider .progress-control { grid-template-columns: 1fr 38px; width: 100%; }
+.task-row-slider .progress-control { grid-template-columns: minmax(0, 1fr) 38px; width: 100%; }
+.task-row-slider input[type="range"] { min-width: 0; width: 100%; }
 .task-card.task-row:hover .task-row-progress, .task-card.task-row:focus-within .task-row-progress { visibility: hidden; }
 .task-card.task-row:hover .task-row-slider, .task-card.task-row:focus-within .task-row-slider { visibility: visible; }
 .task-card.is-selected { border-color: var(--accent-strong); box-shadow: var(--ring-accent); background: var(--panel); }
