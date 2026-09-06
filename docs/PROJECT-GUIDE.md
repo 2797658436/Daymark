@@ -15,7 +15,7 @@
 
 ## 2. 当前实现阶段
 
-Daymark 当前可交付能力完成到 **阶段 3 M6：周视图全天区、月视图摘要与键盘导航**；阶段 2 的 21 天真实使用验证仍按固定方案并行进行。
+Daymark 当前可交付能力已完成 **阶段 3 M1–M7：完整日历体验与项目约束**；阶段 2 的 21 天真实使用验证仍按固定方案并行进行。
 
 已经实现：
 
@@ -35,7 +35,7 @@ Daymark 当前可交付能力完成到 **阶段 3 M6：周视图全天区、月�
 - 已结束、未完成且尚无已结束执行记录的时段显示“待回顾”，可更新进度、确认后续安排或由用户明确记录“本次未推进”；时间经过本身不再自动写入 `missed`／未执行事实。
 - 日历工具栏可持久化开启“显示实际记录”：计划时段退为淡色虚线，实际记录按真实开始／结束或当前时间叠加为实色层；提前、延后和重叠只读呈现，不反向移动计划。设置页可隐藏这一工具栏入口，而不删除事实或改变已保存的叠加状态。
 - 可选开始签到、结束本次、实际投入修正、短评与进度原子提交；挽救提示事实仍单独持久化，任务完成度始终由用户确认。
-- 自动排程 Lite 在未来 7 天默认时段的空档中生成确定性草案，避开已有安排与时间块；用户选择、预览、确认后才原子写入，并可整批撤销。
+- 自动排程 Lite 在未来 7 天默认时段的空档中生成确定性草案，避开已有安排与时间块；任务自身截止优先，否则读取适用的最早未达成里程碑日期与项目截止日期中的较早者。用户选择、预览、确认后才原子写入，并可整批撤销。
 - 日历可创建／删除轻量时间块；重复习惯支持每天、工作日、每周选日、单次时长与可选固定开始，并以独立发生项进入执行闭环。
 - 今日页在签到与挽救提示开启时提供一次持久化的中性恢复入口；7 天回顾汇总实际投入、进度、待续与跳过事实，不评分。
 - B 站链接导入 Beta 通过原生层读取普通公开视频／分 P 公开元数据，先提供可编辑、可取消选择的预览，再以单事务写入项目和有序任务。
@@ -49,7 +49,7 @@ Daymark 当前可交付能力完成到 **阶段 3 M6：周视图全天区、月�
 - 提醒由运行中的前端每 30 秒检查今日计划并调用桌面通知；应用必须仍在托盘进程中。Windows 通知插件本身没有任务级点击回调；原生 `AppState` 会暂存最近成功提醒的时段及发送时刻，30 分钟内首次托盘恢复直接进入对应日历日期、临时显露并高亮该时段，随后消费该目标。其他原生入口可发送 `daymark-open-session` 事件复用同一路由；目标不存在时回退今日页。
 - 连续日视图当前使用三日缓冲和边界平移，不做无限日期 DOM；日／周时间轴的连续比例限制在每小时 28–96px，月视图继续使用紧凑／标准／详细三档行高。
 - 阶段 3 M1–M6 已完成，M7 四段（M7.1 核心数据 / M7.2 项目编辑 / M7.3 日历标记 / M7.4 历史与风险）亦已全部完成。M7 以项目截止日期、项目里程碑与到期结果快照为第一等核心事实（schema v6→v7）；日历复用 M6 标记接缝呈现项目截止旗帜与里程碑菱形。Windows 通知插件仍不提供任务级点击回调，M4 通过提醒后的托盘恢复、应用内今日页入口和 `daymark-open-session` 事件完成目标路由。独立截止任务页、完整日／周／月回顾、复杂重复规则、AI 规划和高级布局自定义仍属后续阶段。
-- 阶段 3 已完成正式验收，详见 [`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)：规格 0003 的 M1–M6 与规格 0004 的 M7.1–M7.4 全部验收标准满足，Vitest 106 / Rust 33 / Playwright 15 全通过。
+- 阶段 3 已完成正式验收，详见 [`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)：规格 0003 的 M1–M6 与规格 0004 的 M7.1–M7.4 全部验收标准满足，Vitest 123 / Rust 36 / Playwright 16 全通过。
 - 自动排程的"单次投入时长"是优先尝试的目标长度而非不可拆分的硬约束；所有任务都可被部分安排，部分安排只生成一个执行时段、不自动补排剩余时长（2026-08-10 对规格 0002 AC4 的澄清，与 CONTEXT.md 领域语言一致）。
 - 阶段 2 已完成正式验收，详见 [`docs/reports/phase-2-acceptance.md`](reports/phase-2-acceptance.md)：规格 0002 的 24 条验收标准全部满足，Vitest 55 / Rust 24 / Playwright 9 全通过；后续真实使用验证按 [`docs/reports/phase-2-21-day-validation-plan.md`](reports/phase-2-21-day-validation-plan.md) 执行。
 
@@ -95,11 +95,11 @@ flowchart LR
 - `TauriNativeApi` 将工作区读写、通知、数据概览、每日／手动备份、备份检查和恢复映射到 `invoke`。
 - [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) 的 Command 不直接在事件线程执行磁盘工作；`run_data_operation()` 使用 `spawn_blocking`，再以 `data_operation_lock` 串行化数据库和备份操作。
 - Rust 错误转换为可读字符串返回前端；`App` 根据影响范围显示加载横幅、自动备份持续警示、操作错误或恢复模态内错误。
-- `mutate_workspace()` 在每次核心写操作后读取新快照并刷新当天备份；备份失败被记录为持续状态，但不把已成功的核心写入伪装成失败。
+- `get_workspace()`、`get_data_overview()` 与 `mutate_workspace()` 先按设备本地自然日冻结已经到期且未达成的里程碑结果；首次冻结会刷新当天备份。`mutate_workspace()` 在每次核心写操作后读取新快照并刷新当天备份；备份失败被记录为持续状态，但不把已成功的核心写入伪装成失败。
 
 ### 数据概览
 
-`get_data_overview` 打开数据库并调用 `Database::snapshot()`，返回 schema 版本、数据／备份目录、六类对象数量、备份列表和当前启动周期内的自动备份错误。
+`get_data_overview` 打开数据库、同步到期里程碑结果并调用 `Database::snapshot()`，返回 schema 版本、数据／备份目录、核心对象数量、备份列表和当前启动周期内的自动备份错误。
 
 ### 托盘、关闭与提醒
 
@@ -134,7 +134,7 @@ flowchart LR
 | [`src/lib/native.ts`](../src/lib/native.ts) | `NativeApi` 类型边界、Tauri IPC 适配、文件对话框和浏览器 `localStorage` 预览实现。 |
 | [`src/lib/settings.ts`](../src/lib/settings.ts) | 显示、页面、日历、提醒、启动摘要和默认时段设置的默认值、规范化与顺序写入；Tauri Store 与浏览器后端。 |
 | [`src/lib/courseImport.ts`](../src/lib/courseImport.ts) | 把常见分集文本与末尾时长解析为可编辑、可取消选择的有序任务草稿。 |
-| [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、窄窗覆盖任务池、纵向日历、焦点、缩放重排和减少动态规则。 |
+| [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、可调宽任务池、窄窗覆盖规则、纵向日历、焦点、缩放重排和减少动态规则。 |
 | [`src/components/ui/button.tsx`](../src/components/ui/button.tsx) | 当前唯一共享 UI 组件；通过 CVA 提供按钮变体、尺寸和转发 ref。 |
 | [`src/App.test.tsx`](../src/App.test.tsx) | 今日壳、任务池、纵向时间轴、阶段 2 行动闭环，以及阶段 3 三视图／锚点、跨日边界、当前安排双进度、待回顾三操作、计划／实际叠加、折叠计数／临时展开、全天截止溢出、周／月键盘导航、选中态、跨页目标显露和外部 session 事件路由测试。 |
 | [`src/lib/calendarSummary.test.ts`](../src/lib/calendarSummary.test.ts) | 单日摘要优先级、三行截断、进度合计、未推进事实与任务截止紧迫度边界测试。 |
@@ -142,15 +142,15 @@ flowchart LR
 | [`src/lib/courseImport.test.ts`](../src/lib/courseImport.test.ts) | 分集标题、时长、空行与重复标题解析测试。 |
 | [`src/lib/settings.test.ts`](../src/lib/settings.test.ts) | 设置重启恢复、无效值回退、写入排序、恢复值规范化、吸附关闭、零个／多个默认时段，以及阶段 3 日历锚点／日视图模式／三档与连续比例／实际记录开关规范化测试。 |
 | [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) | Tauri 组装、托盘与关闭行为、桌面通知及 30 分钟内的提醒目标恢复事件、`AppState`、Command、后台串行执行、写后备份及 SQLite／Store 协调恢复。 |
-| [`src-tauri/src/database.rs`](../src-tauri/src/database.rs) | SQLite v5 连接、迁移、工作区查询、任务／项目／排程／执行／进度／习惯／时间块／挽救事实事务写入和时间校验。 |
+| [`src-tauri/src/database.rs`](../src-tauri/src/database.rs) | SQLite v7 连接、迁移、工作区查询、任务／项目／里程碑／到期结果／排程／执行／进度／习惯／时间块／挽救事实事务写入和时间校验。 |
 | [`src/lib/scheduling.ts`](../src/lib/scheduling.ts) | 自动排程 Lite 的确定性候选排序、空档扣除、最小时长与固定习惯时间计算。 |
 | [`src/lib/recurrence.ts`](../src/lib/recurrence.ts) | 基础重复规则的本地日期发生项计算。 |
 | [`src/lib/review.ts`](../src/lib/review.ts) | 最近 7 个本地日期的事实汇总，不生成评分或连续天数。 |
 | [`src/lib/bilibili.ts`](../src/lib/bilibili.ts) | 从普通 B 站链接或文本中提取并规范化 BV 号。 |
 | [`src-tauri/src/backup.rs`](../src-tauri/src/backup.rs) | SQLite Online Backup、滚动保留、偏好嵌入、检查、预览、Windows 原子替换、恢复和回滚。 |
-| [`src-tauri/src/models.rs`](../src-tauri/src/models.rs) | 八类 Rust 核心数据结构和 camelCase 序列化边界。 |
-| [`src-tauri/migrations/`](../src-tauri/migrations/) | v1–v5 的 SQLite schema 历史，由 `database::migrate()` 按序内嵌并执行。 |
-| [`e2e/phase1.spec.ts`](../e2e/phase1.spec.ts) | 快速创建持久化、拖拽与撤销、时段移动／取消、课程导入、执行结束、浅／深色 axe、200% 缩放、窄窗布局、日历状态恢复，以及 M2 计划／实际叠加、M3 指针锚点缩放、M4 折叠边界、M5 插入预览／原子提交与空白框选、M6 月摘要／全天溢出／吸顶与键盘导航测试。 |
+| [`src-tauri/src/models.rs`](../src-tauri/src/models.rs) | Rust 核心数据结构和 camelCase 序列化边界。 |
+| [`src-tauri/migrations/`](../src-tauri/migrations/) | v1–v7 的 SQLite schema 历史，由 `database::migrate()` 按序内嵌并执行。 |
+| [`e2e/phase1.spec.ts`](../e2e/phase1.spec.ts) | 快速创建持久化、拖拽与撤销、时段移动／取消、课程导入、执行结束、浅／深色 axe、200% 缩放、窄窗布局与任务池宽度持久化、日历状态恢复，以及 M2 计划／实际叠加、M3 指针锚点缩放、M4 折叠边界、M5 插入预览／原子提交与空白框选、M6 月摘要／全天溢出／吸顶与键盘导航测试。 |
 | [`scripts/run-e2e.mjs`](../scripts/run-e2e.mjs) | 在 Windows 上启动 Vite、等待 1420 端口、运行 Playwright 并回收开发服务器。 |
 | [`package.json`](../package.json) | 前端开发、测试、E2E、构建、原生测试和 Tauri CLI 命令。 |
 | [`src-tauri/Cargo.toml`](../src-tauri/Cargo.toml) | Rust/Tauri、bundled SQLite、Store、文件对话框和 Windows 原子替换依赖。 |
@@ -302,7 +302,7 @@ flowchart TD
 - `data-theme="dark"` 覆盖同一组变量；`appearance=system` 由系统媒体查询实时选择浅／深色。
 - `data-motion="reduce"` 和系统 `prefers-reduced-motion` 将位移、过渡和循环动画降到最小，但保留文字／图标状态反馈。
 - 根字号按 100%–200% 设置，窄宽度媒体查询负责重排；核心操作不能因缩放被裁掉。
-- 页面使用固定 64／70px 左侧导航；有任务池的页面在至少 1200px 时使用三栏布局，在 960–1199px 时改为带遮罩的固定覆盖面板。任务池可收起并通过右下入口重新打开。
+- 页面使用固定 64／70px 左侧导航；任务池宽度可用指针或键盘在 260–560px 间调整并持久化。有任务池的页面在至少 1200px 时使用三栏布局，在 960–1199px 时通常改为带遮罩的固定覆盖面板；日历日视图在该宽度仍保留静态侧栏，避免单日列过宽。任务池可收起并通过右下入口重新打开。
 - 日历把 24 小时标签放在独立纵轴，时间网格在自己的视口中滚动，避免主页面与日历双重滚动。
 - 跳转链接允许键盘直接进入主内容，当前导航使用 `aria-current="page"`。
 - 备份成功和不可取消操作使用 `role="status"`，错误使用 `role="alert"`，交互图标具有文本名称或 `aria-hidden`。侧栏保存状态当前是可见文字，但还没有独立实时区域。
@@ -312,15 +312,15 @@ flowchart TD
 
 ## 11. 测试体系
 
-当前测试库存为 Rust **33** 个、Vitest **106** 个、Playwright **15** 个。2026-09-01 阶段 3 验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上新增 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 到期结果快照冻结幂等、续排差额与 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。最近一次完整安装包验证记录见 [`docs/reports/phase-2-validation-2026-08-28.md`](reports/phase-2-validation-2026-08-28.md)。
+当前测试库存为 Rust **36** 个、Vitest **123** 个、Playwright **16** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。
 
 | 层级 | 当前验证重点 |
 | --- | --- |
-| Rust `database.rs` | 首次建库、旧库升级、事务回滚、计划／实际／进度分离、跨午夜、UTC 校验、新时段偏移、单一活动执行、计划时段移动／取消、结束执行＋进度原子更新，以及 M7 项目截止／里程碑 CRUD 与关系校验、到期结果快照冻结幂等与级联删除。 |
+| Rust `database.rs` | 首次建库、旧库升级、事务回滚、计划／实际／进度分离、跨午夜、UTC 校验、新时段偏移、单一活动执行、计划时段移动／取消、结束执行＋进度原子更新，以及 M7 项目截止／里程碑 CRUD 与关系校验、本地自然日到期冻结幂等、顺序任务与加权进度语义、冻结历史不可修改／删除。 |
 | Rust `backup.rs` | 七份保留、同日刷新、可迁移偏好、干净安装恢复、恢复前备份、无效结构拒绝、协调回滚，以及 v6／v7 版本感知的必需表缺失拒绝。 |
-| Vitest | 设置规范化／排序（含零个／多个默认时段、日视图模式、吸附关闭、日历三视图锚点／连续比例／实际记录开关）、课程解析、自动排程、重复规则、7 天回顾、B 站解析、今日壳、任务池、挽救动作、精确时间编辑，以及日历三视图、连续日边界、当前状态、实际叠加、滚轮缩放、卡片信息分层、折叠布局映射、任务截止紧迫度、月摘要、全天溢出、周／月键盘导航与目标显露；M7 的项目截止编辑、里程碑 CRUD 与达成态、项目截止／里程碑日历标记、到期结果展示与续排差额、排程项目截止兜底。 |
+| Vitest | 设置规范化／排序（含任务池宽度、零个／多个默认时段、日视图模式、吸附关闭、日历三视图锚点／连续比例／实际记录开关）、课程解析、自动排程、重复规则、7 天回顾、B 站解析、今日壳、任务池、挽救动作、精确时间编辑，以及日历三视图、连续日边界、当前状态、实际叠加、滚轮缩放、卡片信息分层、折叠布局映射、任务截止紧迫度、月摘要、全天溢出、周／月键盘导航与目标显露；M7 的项目截止编辑、里程碑 CRUD 与达成态、项目截止／里程碑日历标记、到期结果展示、累计目标续排、冻结历史不可改写与项目／里程碑排程约束。 |
 | axe-core | jsdom 语义检查，以及 Playwright 中浅／深色真实浏览器自动无障碍检查。 |
-| Playwright | 快速创建重载无重复、拖拽安排与 Ctrl+Z、时段移动／取消、课程导入、阶段 2 排程／时间块／习惯持久化、执行结束重载、浅／深色 axe、200% 缩放、窄窗布局，以及阶段 3 视图状态、连续日边界、M2 叠加、M3 缩放事实、M4 折叠边界、M5 插入原子提交与空白框选、M6 月摘要／详情浮层／全天吸顶／键盘导航。 |
+| Playwright | 快速创建重载无重复、拖拽安排与 Ctrl+Z、时段移动／取消、课程导入、阶段 2 排程／时间块／习惯持久化、执行结束重载、浅／深色 axe、200% 缩放、窄窗布局与日视图任务池调宽持久化，以及阶段 3 视图状态、连续日边界、M2 叠加、M3 缩放事实、M4 折叠边界、M5 插入原子提交与空白框选、M6 月摘要／详情浮层／全天吸顶／键盘导航。 |
 | 生产前端构建 | TypeScript `--noEmit` 与 Vite production bundle。 |
 | Tauri release/NSIS | Rust release、WebView 资源装配、Windows 可执行文件和 NSIS 安装包。 |
 

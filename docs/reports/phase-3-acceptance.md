@@ -1,13 +1,13 @@
 # Daymark 阶段 3 验收报告
 
-- 验收日期：2026-09-01
+- 验收日期：2026-09-06
 - 验收对象：`docs/specs/0003-phase-3-calendar-experience.md`（M1–M6）+ `docs/specs/0004-m7-project-deadlines-and-milestones.md`（M7.1–M7.4）
 - 验收方式：生产构建 + 全套测试（Vitest / Rust / Playwright）+ 规格逐条核对
 - 验收基线：阶段 2 验收报告（2026-08-10）之后的全部阶段 3 提交
 
 ## 总结论
 
-**阶段 3 验收通过。** 阶段 3 六个里程碑（M1 时间轴与三视图、M2 状态感知与计划/实际叠加、M3 缩放与卡片自适应、M4 默认时段折叠、M5 完整拖拽排程、M6 全天区/月摘要/键盘导航）与 M7 四个子段（M7.1 核心数据、M7.2 项目编辑、M7.3 日历标记、M7.4 历史与风险）的全部验收标准均已满足，无阻断性功能缺陷。发现 1 项文档同步缺口（PROJECT-GUIDE 未反映 M7 的 schema v7 与最新测试库存），不构成功能问题，已记录为遗留事项。
+**阶段 3 验收通过。** 阶段 3 六个日历里程碑（M1 时间轴与三视图、M2 状态感知与计划/实际叠加、M3 缩放与卡片自适应、M4 默认时段折叠、M5 完整拖拽排程、M6 全天区/月摘要/键盘导航）与 M7 四个子段（M7.1 核心数据、M7.2 项目编辑、M7.3 日历标记、M7.4 历史与风险）的验收标准均已满足，无阻断性功能缺陷。收尾同时修正了紧凑任务卡拖拽 E2E、深色主题过渡期 axe 采样、日视图任务池调宽持久化，以及 M7 的顺序任务、累计续排和本地日期冻结边界。
 
 | 里程碑 | 验收标准 | 结论 |
 |---|---|---|
@@ -26,12 +26,12 @@
 
 | 套件 | 结果 | 时间 |
 |---|---|---|
-| Vitest（11 个测试文件） | **106 通过** | ~22s |
-| Rust（database.rs 23 + backup.rs 9 + lib.rs 1） | **33 通过** | 0.62s |
-| Playwright E2E（e2e/phase1.spec.ts） | **15 通过** | 45.7s |
-| 生产构建（tsc --noEmit + Vite） | 成功 | 2.0s |
+| Vitest（11 个测试文件） | **123 通过** | 本次完整检查 |
+| Rust（全目标） | **36 通过** | 本次完整检查 |
+| Playwright E2E（e2e/phase1.spec.ts） | **16 通过** | 本次完整检查 |
+| 生产构建（tsc --noEmit + Vite） | 成功 | 本次完整检查 |
 
-> 注：本次验收 e2e 15/15 全绿。阶段 3 开发期间沙箱内 e2e 偶发失败（title-only/M3/M4 轮换）已确认是 WorkBuddy 沙箱环境问题（safe-delete 拦截产物清理 + 透明代理），非代码回归；同一套件在本机终端稳定通过。
+> 注：本次验收由 `npm run check` 串行完成生产构建、Vitest、Playwright 与 Rust 全目标测试；随后另行执行 Windows NSIS 安装包构建。
 
 ## 逐项验收
 
@@ -129,31 +129,29 @@
 
 | 验收标准摘要 | 实现证据 | 测试证据 |
 |---|---|---|
-| 到期未达成里程碑保留原日期/原目标/实际结果快照，不自动改写历史 | `database.rs` freeze_expired_outcomes + `migrations/007_milestone_outcomes.sql` | `database.rs` "an_expired_unreached_milestone_is_frozen_into_an_outcome_snapshot_once" |
-| 未达成后提供显式续排入口，差额参与后续计划 | `App.tsx` continueMilestoneDraft + 续排按钮 | `App.test.tsx` "offers a continue draft with the remaining target" |
-| 确定性排程读取项目约束（项目截止兜底） | `App.tsx` AutoScheduleDialog projectDeadlineById | `App.test.tsx` "uses the project deadline as a fallback deadline in auto scheduling" |
-| 备份校验覆盖 v7（缺 milestone_outcomes 必须拒绝） | `backup.rs` validate_database version>=7 | `backup.rs` "restore_rejects_a_v7_backup_that_is_missing_milestone_outcomes" |
+| 以设备本地自然日冻结已经到期且未达成的里程碑；同日不提前冻结、已达成不生成失败快照 | `lib.rs` workspace/data 命令 + `database.rs` freeze_expired_outcomes + `migrations/007_milestone_outcomes.sql` | `database.rs` 到期冻结与已达成用例 |
+| 顺序任务里程碑要求目标任务及其全部前置任务完成 | `App.tsx` orderedMilestoneTasks + `database.rs` ordered_milestone_tasks | 前端/Rust `ordered-task milestone` 用例 |
+| 加权项目进度在前端、浏览器预览与桌面端统一使用 0–100 百分比尺度 | `App.tsx` projectProgress + `native.ts`/`database.rs` 进度计算 | Rust `project_progress_milestone_uses_the_existing_percentage_scale` |
+| 冻结后的里程碑不可编辑或删除；显式续排创建新里程碑并保留累计目标语义 | `App.tsx` continueMilestoneDraft + `database.rs`/`native.ts` 历史保护 | App/native/Rust 冻结历史与续排用例 |
+| 确定性排程读取任务截止、适用未达成里程碑和项目截止约束 | `App.tsx` scheduleDeadlineForTask | `App.test.tsx` 项目截止兜底与最早适用里程碑约束用例 |
+| 首次冻结刷新当日备份；备份校验覆盖 v7（缺 milestone_outcomes 必须拒绝） | `lib.rs` refresh_daily_backup + `backup.rs` validate_database version>=7 | `backup.rs` "restore_rejects_a_v7_backup_that_is_missing_milestone_outcomes" |
 
 ## 数据与安全决策核对
 
 - ✅ 阶段 3 M1–M6 不新增 SQLite 表/字段/迁移，体验基于既有数据（规格 0003 §Data and Safety）
 - ✅ M7 项目截止日期与里程碑作为核心领域事实入 SQLite：v6 加列+表，v7 加结果快照表；未写入 Tauri Store、未由子任务推导（ADR 0004）
-- ✅ 到期结果快照在 snapshot() 惰性冻结、幂等（UNIQUE milestone_id），后续进度变化不改写历史（UI-SPEC 330）
-- ✅ 续排复用既有 createProjectMilestone 通道，未新增领域命令；排程仅读约束，未改算法
+- ✅ 到期结果在工作区／数据读取与领域写入入口按设备本地自然日同步；`snapshot()` 保持只读，冻结操作使用即时事务且由 UNIQUE milestone_id 保证幂等
+- ✅ 冻结里程碑不可修改或删除；续排复用既有 createProjectMilestone 通道，以新 ID 保留原历史，数量／进度继续使用累计目标
+- ✅ 排程优先读取任务截止日期，否则取适用未达成里程碑与项目截止中的更早日期；容量预测、专属排程按钮与提醒明确留在后续范围
 - ✅ 所有核心写操作继续走 Tauri 后台串行队列并在成功后刷新当日备份
 - ✅ 备份恢复版本感知：v6 校验 project_milestones、v7 校验 milestone_outcomes
 
-## 遗留事项
+## 后续范围（不阻断阶段 3）
 
-1. **文档同步缺口（非功能问题）**：`docs/PROJECT-GUIDE.md` 多处仍停留在阶段 3 M6 基线，未反映 M7 四段完成：
-   - 第 3 行 "SQLite schema v5" → 应为 **v7**
-   - 第 23/190 行 "schema_version ... 5" → 应为 **7**
-   - 第 261 行 validate_database 必需表清单 → 应补 `project_milestones`、`milestone_outcomes`
-   - 第 310 行 测试库存 "Rust 26、Vitest 93" → 应为 **Rust 33、Vitest 106、Playwright 15**
-   - 第 51 行 M7 段落应更新为"M7 四段全部完成"
-2. **沙箱 e2e 偶发**：WorkBuddy 沙箱内 Playwright 偶发失败（safe-delete 拦截/代理），本机终端稳定；本次验收 15/15 全绿。
-3. **规格澄清已落地**：阶段 2 遗留的"自动排程单次投入时长可部分安排"澄清已在 0002/PROJECT-GUIDE 同步，阶段 3 无新增澄清。
+1. 项目容量预测、里程碑专属排程按钮、节奏建议、自动级联顺延与项目／里程碑系统通知不属于本阶段。
+2. 开机自启、独立截止任务页、完整日／周／月回顾、复杂重复规则、AI 规划和高级布局自定义继续留在后续阶段。
+3. 阶段 2 的 21 天候选版仍需要真实使用观察；自动化通过不能替代该验证计划。
 
 ## 验收签核
 
-阶段 3 十项能力（M1–M6 + M7.1–M7.4）全部满足规格验收标准，测试基础设施齐备（Vitest 106 / Rust 33 / Playwright 15 全绿），数据与安全决策核对通过，可进入阶段 3 真实使用验证或下一阶段规划。文档同步缺口建议在下一个提交前一并修正。
+阶段 3 十项能力（M1–M6 + M7.1–M7.4）全部满足规格验收标准，测试基础设施齐备（Vitest 123 / Rust 36 / Playwright 16 全绿），数据与安全决策核对通过，可进入阶段 3 真实使用验证或下一阶段规划。

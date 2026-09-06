@@ -223,22 +223,27 @@ class BrowserPreviewApi implements NativeApi {
     if (!raw) return structuredClone(EMPTY_WORKSPACE);
     try {
       const parsed = JSON.parse(raw) as Partial<WorkspaceSnapshot>;
-      return {
+      const normalized = {
         ...structuredClone(EMPTY_WORKSPACE),
         ...parsed,
         projects: (parsed.projects ?? []).map((project) => ({ ...project, deadlineLocal: project.deadlineLocal ?? null })),
         projectMilestones: parsed.projectMilestones ?? [],
+        milestoneOutcomes: parsed.milestoneOutcomes ?? [],
         tasks: (parsed.tasks ?? []).map((task) => ({ priority: "normal", sessionMinutes: null, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task", ...task })),
         recurringHabits: parsed.recurringHabits ?? [],
         habitOccurrences: parsed.habitOccurrences ?? [],
         rescuePromptedSessionIds: parsed.rescuePromptedSessionIds ?? [],
       } as WorkspaceSnapshot;
+      const next = freezeExpiredPreviewOutcomes(normalized, currentLocalDate());
+      if (next !== normalized) localStorage.setItem(PREVIEW_WORKSPACE_KEY, JSON.stringify(next));
+      return next;
     }
     catch { return structuredClone(EMPTY_WORKSPACE); }
   }
   private write(next: WorkspaceSnapshot) {
-    localStorage.setItem(PREVIEW_WORKSPACE_KEY, JSON.stringify(next));
-    return Promise.resolve(structuredClone(next));
+    const synced = freezeExpiredPreviewOutcomes(next, currentLocalDate());
+    localStorage.setItem(PREVIEW_WORKSPACE_KEY, JSON.stringify(synced));
+    return Promise.resolve(structuredClone(synced));
   }
   getWorkspace() { return Promise.resolve(this.read()); }
   createTask(task: Task) {
@@ -277,11 +282,13 @@ class BrowserPreviewApi implements NativeApi {
   }
   updateProjectMilestone(milestone: ProjectMilestone) {
     const state = this.read(); const error = validatePreviewMilestone(state, milestone);
+    if (state.milestoneOutcomes.some((item) => item.milestoneId === milestone.id)) return Promise.reject(new Error("已到期里程碑属于历史记录，不能修改"));
     if (error || !state.projectMilestones.some((item) => item.id === milestone.id)) return Promise.reject(new Error(error ?? "找不到要更新的项目里程碑"));
     return this.write({ ...state, projectMilestones: state.projectMilestones.map((item) => item.id === milestone.id ? milestone : item) });
   }
   deleteProjectMilestone(id: string) {
     const state = this.read();
+    if (state.milestoneOutcomes.some((item) => item.milestoneId === id)) return Promise.reject(new Error("已到期里程碑属于历史记录，不能删除"));
     if (!state.projectMilestones.some((item) => item.id === id)) return Promise.reject(new Error("找不到要删除的项目里程碑"));
     return this.write({ ...state, projectMilestones: state.projectMilestones.filter((item) => item.id !== id) });
   }
@@ -396,7 +403,7 @@ class BrowserPreviewApi implements NativeApi {
   async getDataOverview(): Promise<DataOverview> {
     const state = this.read();
     return {
-      schemaVersion: 6, databasePath: "浏览器预览使用 localStorage", backupDirectory: "仅桌面版写入磁盘", backupError: null,
+      schemaVersion: 7, databasePath: "浏览器预览使用 localStorage", backupDirectory: "仅桌面版写入磁盘", backupError: null,
       counts: { projects: state.projects.length, tasks: state.tasks.length, executionSessions: state.executionSessions.length, executionRecords: state.executionRecords.length, progressEvents: state.progressEvents.length, timeBlocks: state.timeBlocks.length },
       backups: this.backups,
     };
@@ -413,6 +420,53 @@ export function createNativeApi(): NativeApi {
 }
 
 function isLocalDate(value: string) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime()); }
+
+function currentLocalDate() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function freezeExpiredPreviewOutcomes(state: WorkspaceSnapshot, today: string): WorkspaceSnapshot {
+  const frozenIds = new Set(state.milestoneOutcomes.map((outcome) => outcome.milestoneId));
+  const outcomes = state.projectMilestones
+    .filter((milestone) => milestone.targetLocalDate < today && !frozenIds.has(milestone.id) && !previewMilestoneReached(state, milestone))
+    .map((milestone): MilestoneOutcome => ({
+      id: `outcome:${milestone.id}`, milestoneId: milestone.id, projectId: milestone.projectId,
+      title: milestone.title, targetLocalDate: milestone.targetLocalDate, reached: false,
+      resultText: `${previewMilestoneResult(state, milestone)}，未达成`, frozenAtUtc: new Date().toISOString(),
+    }));
+  return outcomes.length === 0 ? state : { ...state, milestoneOutcomes: [...state.milestoneOutcomes, ...outcomes] };
+}
+
+function previewMilestoneReached(state: WorkspaceSnapshot, milestone: ProjectMilestone) {
+  const tasks = state.tasks.filter((task) => task.projectId === milestone.projectId);
+  const completed = (task: Task) => task.status === "completed" || task.progress >= 100;
+  if (milestone.criterionKind === "orderedTask") {
+    const ordered = tasks.sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    const targetIndex = ordered.findIndex((task) => task.id === milestone.targetTaskId);
+    return targetIndex >= 0 && ordered.slice(0, targetIndex + 1).every(completed);
+  }
+  if (milestone.criterionKind === "taskCount") return tasks.filter(completed).length >= milestone.targetCount;
+  const total = tasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 60), 0);
+  const weighted = tasks.reduce((sum, task) => sum + task.progress * (task.estimatedMinutes ?? 60), 0);
+  return total > 0 && Math.round(weighted / total) >= milestone.targetProgress;
+}
+
+function previewMilestoneResult(state: WorkspaceSnapshot, milestone: ProjectMilestone) {
+  const tasks = state.tasks.filter((task) => task.projectId === milestone.projectId);
+  const completed = (task: Task) => task.status === "completed" || task.progress >= 100;
+  if (milestone.criterionKind === "orderedTask") {
+    const ordered = tasks.sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    const targetIndex = ordered.findIndex((task) => task.id === milestone.targetTaskId);
+    const throughTarget = targetIndex < 0 ? [] : ordered.slice(0, targetIndex + 1);
+    const title = ordered[targetIndex]?.title ?? "目标任务";
+    return `完成至「${title}」${throughTarget.filter(completed).length}/${throughTarget.length}`;
+  }
+  if (milestone.criterionKind === "taskCount") return `完成 ${tasks.filter(completed).length}/${milestone.targetCount}`;
+  const total = tasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 60), 0);
+  const weighted = tasks.reduce((sum, task) => sum + task.progress * (task.estimatedMinutes ?? 60), 0);
+  return `进度 ${total ? Math.round(weighted / total) : 0}/${milestone.targetProgress}%`;
+}
 
 function validatePreviewMilestone(state: WorkspaceSnapshot, milestone: ProjectMilestone) {
   if (!milestone.title.trim() || !isLocalDate(milestone.targetLocalDate)) return "项目里程碑标题或日期无效";

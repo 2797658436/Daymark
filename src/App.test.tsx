@@ -1129,9 +1129,25 @@ describe("phase 1 manual alpha", () => {
     await user.click(screen.getByRole("button", { name: "为 Alpha 新增里程碑" }));
     await user.type(screen.getByLabelText("里程碑名称"), "终稿完成");
     await user.type(screen.getByLabelText("目标日期"), "2026-09-10");
-    await user.selectOptions(screen.getByRole("combobox", { name: "目标任务" }), "task-1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "顺序目标任务" }), "task-1");
     await user.click(screen.getByRole("button", { name: "保存里程碑" }));
     await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ title: "终稿完成", criterionKind: "orderedTask", targetTaskId: "task-1" })));
+  });
+
+  it("keeps an ordered-task milestone in progress until every preceding task is complete", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: null }],
+      tasks: [
+        { id: "task-1", projectId: "project-1", title: "前置任务", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-2", projectId: "project-1", title: "目标任务", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      projectMilestones: [{ id: "ms-1", projectId: "project-1", title: "完成到目标任务", targetLocalDate: isoDaysFromNow(2), sortOrder: 0, criterionKind: "orderedTask", targetTaskId: "task-2", targetCount: null, targetProgress: null }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    expect(await screen.findByText("完成到目标任务")).toBeVisible();
+    expect(screen.getByText("进行中")).toBeVisible();
   });
 
   it("edits and deletes a milestone and restores it from the undo toast", async () => {
@@ -1169,11 +1185,13 @@ describe("phase 1 manual alpha", () => {
     await user.click(await screen.findByRole("button", { name: "项目" }));
     expect(await screen.findByText(/完成 1\/2，未达成/)).toBeVisible();
     expect(screen.getByText("未达成")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "编辑里程碑 两个任务完成" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除里程碑 两个任务完成" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "续排里程碑 两个任务完成" }));
     expect(screen.getByRole("heading", { name: "续排里程碑：两个任务完成" })).toBeVisible();
-    expect(screen.getByLabelText("完成任务数（项目内共 2 个）")).toHaveValue(1);
+    expect(screen.getByLabelText("完成任务数（项目内共 2 个）")).toHaveValue(2);
     await user.click(screen.getByRole("button", { name: "保存续排" }));
-    await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ criterionKind: "taskCount", targetCount: 1, projectId: "project-1" })));
+    await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ criterionKind: "taskCount", targetCount: 2, projectId: "project-1" })));
   });
 
   it("keeps a reached milestone without a frozen outcome", async () => {
@@ -1191,8 +1209,9 @@ describe("phase 1 manual alpha", () => {
 
   it("uses the project deadline as a fallback deadline in auto scheduling", async () => {
     const user = userEvent.setup();
+    const projectDeadline = isoDaysFromNow(6);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
-      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: "2026-09-05" }],
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: projectDeadline }],
       tasks: [{ id: "task-1", projectId: "project-1", title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }],
     };
     const native = createNativeApi(initial);
@@ -1207,7 +1226,27 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalled());
     const allocations = (native.applyScheduleDraft as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ localDate: string }>;
     expect(allocations.length).toBeGreaterThan(0);
-    expect(allocations.every((allocation) => allocation.localDate <= "2026-09-05")).toBe(true);
+    expect(allocations.every((allocation) => allocation.localDate <= projectDeadline)).toBe(true);
+  });
+
+  it("uses the earliest applicable milestone as an auto-scheduling constraint", async () => {
+    const user = userEvent.setup();
+    const milestoneDate = isoDaysFromNow(0);
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: isoDaysFromNow(6) }],
+      tasks: [
+        { id: "task-paused", projectId: "project-1", title: "暂停事项", progress: 0, status: "paused", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+        { id: "task-1", projectId: "project-1", title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 1, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+      ],
+      projectMilestones: [{ id: "ms-1", projectId: "project-1", title: "完成一项", targetLocalDate: milestoneDate, sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null }],
+      timeBlocks: [{ id: "block-1", title: "今天不可用", localDate: milestoneDate, endLocalDate: milestoneDate, startLocal: "00:00", endLocal: "23:59", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    const dialog = await screen.findByRole("dialog", { name: "自动排程 Lite" });
+    expect((await within(dialog).findByText("写大纲")).closest("label")).toHaveTextContent("当前 7 天暂时放不下");
+    expect(screen.getByRole("button", { name: "生成排程草案" })).toBeDisabled();
   });
 
   it("undoes an applied schedule draft through the toast and removes every session", async () => {

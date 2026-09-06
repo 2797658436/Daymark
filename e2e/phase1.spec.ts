@@ -26,12 +26,12 @@ test("task can be scheduled by one drag and the schedule can be undone", async (
 
   const card = page.locator(".task-card", { hasText: "写阶段总结" });
   const futureDay = page.getByRole("region", { name: "连续日时间轴" }).locator("[data-calendar-date]").nth(1).locator(".day-track");
-  await card.locator(".task-row-top").dragTo(futureDay, { targetPosition: { x: 30, y: 500 } });
+  await card.dragTo(futureDay, { targetPosition: { x: 30, y: 500 } });
   await expect(futureDay.locator(".calendar-session", { hasText: "写阶段总结" })).toHaveCount(1);
-  await expect(card).toContainText("共 1 次");
+  await expect(card).toHaveAttribute("title", /共 1 次/);
   await expect(page.getByRole("button", { name: /撤销安排/ })).toBeVisible();
 
-  await page.keyboard.press("Control+z");
+  await page.getByRole("button", { name: /撤销安排/ }).press("Control+z");
   await expect(futureDay.locator(".calendar-session")).toHaveCount(0);
   await expect(card).toHaveCount(1);
 });
@@ -44,7 +44,7 @@ test("scheduled session can move and return to the pool without copying its task
   const task = page.locator(".task-card", { hasText: "移动排程" });
   const firstDay = page.locator(".calendar-day .day-track").nth(0);
   const secondDay = page.locator(".calendar-day .day-track").nth(1);
-  await task.locator(".task-row-top").dragTo(firstDay, { targetPosition: { x: 30, y: 400 } });
+  await task.dragTo(firstDay, { targetPosition: { x: 30, y: 400 } });
   const session = firstDay.locator(".calendar-session", { hasText: "移动排程" });
   const before = await session.locator("time").textContent();
   await expect(session).toBeVisible();
@@ -146,6 +146,7 @@ test("light and dark shells have no automated accessibility violations", async (
   await page.getByRole("button", { name: "设置" }).click();
   await page.getByRole("radio", { name: "深色" }).check();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.waitForTimeout(150);
   const dark = await page.evaluate(async () => (await (window as typeof window & { axe: { run(): Promise<{ violations: unknown[] }> } }).axe.run()).violations);
   expect(dark).toEqual([]);
 });
@@ -181,6 +182,21 @@ test("narrow windows keep the task pool over the workspace and calendar hours ve
   expect(oneAm.y).toBeGreaterThan(midnight.y);
   const scrollState = await page.locator(".calendar-viewport").evaluate((element) => ({ clientHeight: element.clientHeight, scrollHeight: element.scrollHeight }));
   expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+});
+
+test("day view task-pool width is keyboard adjustable and persists", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.getByRole("button", { name: "日历", exact: true }).click();
+  await page.getByRole("button", { name: "收起任务池" }).click();
+  await page.getByRole("button", { name: "日", exact: true }).click();
+  await page.getByRole("button", { name: "打开任务池" }).click();
+  const splitter = page.getByRole("separator", { name: "调整任务池宽度" });
+  await expect(splitter).toBeVisible();
+  await splitter.press("ArrowRight");
+  await expect(splitter).toHaveAttribute("aria-valuenow", "336");
+  await page.reload();
+  await expect(page.getByRole("separator", { name: "调整任务池宽度" })).toHaveAttribute("aria-valuenow", "336");
+  await expect(page.locator("#task-pool")).toHaveCSS("position", "static");
 });
 
 test("phase 3 calendar anchors survive reload and the day axis changes date only at midnight", async ({ page }) => {
@@ -223,7 +239,7 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   });
   await expect(period).not.toHaveText(initialDay ?? "");
   const currentTrack = axis.locator("[data-calendar-date]").nth(1).locator(".day-track");
-  await page.locator(".task-card", { hasText: "跨日安排" }).locator(".task-row-top").dragTo(currentTrack, { targetPosition: { x: 30, y: 500 } });
+  await page.locator(".task-card", { hasText: "跨日安排" }).dragTo(currentTrack, { targetPosition: { x: 30, y: 500 } });
   await expect(currentTrack.locator(".calendar-session", { hasText: "跨日安排" })).toHaveCount(1);
 });
 

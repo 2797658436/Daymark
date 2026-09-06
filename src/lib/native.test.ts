@@ -40,6 +40,43 @@ describe("browser preview project constraints", () => {
     })).rejects.toThrow("同一项目");
   });
 
+  it("keeps frozen milestone outcomes immutable in browser preview", async () => {
+    const milestone: ProjectMilestone = {
+      id: "milestone-1", projectId: "project-1", title: "阶段成果", targetLocalDate: "2026-09-01", sortOrder: 0,
+      criterionKind: "taskCount", targetTaskId: null, targetCount: 2, targetProgress: null,
+    };
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [{ id: "project-1", title: "项目一", deadlineLocal: null }],
+      tasks: [], projectMilestones: [milestone],
+      milestoneOutcomes: [{ id: "outcome-1", milestoneId: "milestone-1", projectId: "project-1", title: "阶段成果", targetLocalDate: "2026-09-01", reached: false, resultText: "完成 1/2，未达成", frozenAtUtc: "2026-09-02T00:00:00Z" }],
+    }));
+    const api = createNativeApi();
+
+    await expect(api.updateProjectMilestone({ ...milestone, title: "重写历史" })).rejects.toThrow("历史记录");
+    await expect(api.deleteProjectMilestone(milestone.id)).rejects.toThrow("历史记录");
+    expect((await api.getWorkspace()).projectMilestones[0].title).toBe("阶段成果");
+  });
+
+  it("freezes an expired ordered milestone before a browser-preview mutation", async () => {
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [{ id: "project-1", title: "项目一", deadlineLocal: null }],
+      tasks: [
+        { id: "task-1", projectId: "project-1", title: "前置", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0 },
+        { id: "task-2", projectId: "project-1", title: "目标", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 1 },
+      ],
+      projectMilestones: [{ id: "milestone-1", projectId: "project-1", title: "阶段成果", targetLocalDate: "2000-01-01", sortOrder: 0, criterionKind: "orderedTask", targetTaskId: "task-2", targetCount: null, targetProgress: null }],
+    }));
+    const api = createNativeApi();
+    const beforeMutation = await api.getWorkspace();
+    expect(beforeMutation.milestoneOutcomes).toHaveLength(1);
+    expect(beforeMutation.milestoneOutcomes[0].resultText).toContain("1/2");
+
+    await api.updateTask({ ...beforeMutation.tasks[0], progress: 100, status: "completed" });
+    const afterMutation = await api.getWorkspace();
+    expect(afterMutation.milestoneOutcomes).toHaveLength(1);
+    expect(afterMutation.milestoneOutcomes[0].resultText).toContain("1/2");
+  });
+
   it("updates a time block's title and interval and rejects invalid edits", async () => {
     const api = createNativeApi();
     const block: TimeBlock = {

@@ -130,7 +130,7 @@ struct BilibiliPage {
 async fn get_data_overview(state: tauri::State<'_, AppState>) -> Result<DataOverview, String> {
     run_data_operation(state.inner().clone(), |state| {
         let database = state.database()?;
-        let snapshot = database.snapshot()?;
+        let snapshot = snapshot_with_expired_outcomes(state, &database)?;
         Ok(DataOverview {
             schema_version: database.schema_version()?,
             database_path: state.database_path.display().to_string(),
@@ -156,7 +156,11 @@ async fn get_data_overview(state: tauri::State<'_, AppState>) -> Result<DataOver
 
 #[tauri::command]
 async fn get_workspace(state: tauri::State<'_, AppState>) -> Result<WorkspaceSnapshot, String> {
-    run_data_operation(state.inner().clone(), |state| state.database()?.snapshot()).await
+    run_data_operation(state.inner().clone(), |state| {
+        let database = state.database()?;
+        snapshot_with_expired_outcomes(state, &database)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -632,15 +636,37 @@ where
 {
     run_data_operation(state, move |state| {
         let database = state.database()?;
-        operation(&database)?;
-        let snapshot = database.snapshot()?;
-        let backup_result = state.backups().refresh_daily(Local::now().date_naive());
-        if let Ok(mut backup_error) = state.backup_error.lock() {
-            *backup_error = backup_result.err();
+        let today = Local::now().date_naive();
+        let outcomes_changed = database.freeze_expired_outcomes(today)?;
+        let operation_result = operation(&database);
+        let should_refresh_backup = outcomes_changed || operation_result.is_ok();
+        let result = operation_result.and_then(|_| {
+            database.freeze_expired_outcomes(today)?;
+            database.snapshot()
+        });
+        if should_refresh_backup {
+            refresh_daily_backup(state);
         }
-        Ok(snapshot)
+        result
     })
     .await
+}
+
+fn refresh_daily_backup(state: &AppState) {
+    let backup_result = state.backups().refresh_daily(Local::now().date_naive());
+    if let Ok(mut backup_error) = state.backup_error.lock() {
+        *backup_error = backup_result.err();
+    }
+}
+
+fn snapshot_with_expired_outcomes(
+    state: &AppState,
+    database: &Database,
+) -> Result<WorkspaceSnapshot, String> {
+    if database.freeze_expired_outcomes(Local::now().date_naive())? {
+        refresh_daily_backup(state);
+    }
+    database.snapshot()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

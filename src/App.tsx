@@ -317,7 +317,7 @@ export default function App({ settings: injectedSettings, native: injectedNative
     if (Number.isFinite(width) && width !== preferences.taskPoolWidth) updatePreferences({ taskPoolWidth: width });
   };
   const nudgePoolWidth = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const current = preferences.taskPoolWidth ?? (document.querySelector<HTMLElement>(".app-shell") ? 320 : 320);
+    const current = preferences.taskPoolWidth ?? Math.round(document.getElementById("task-pool")?.getBoundingClientRect().width ?? 320);
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
     const width = Math.min(560, Math.max(260, current + (event.key === "ArrowRight" ? 16 : -16)));
@@ -359,10 +359,11 @@ export default function App({ settings: injectedSettings, native: injectedNative
 
       {showTaskPool && (
         <>
-        <div className="pool-splitter" aria-hidden="true"
-          onPointerDown={(event) => { const pool = document.getElementById("task-pool"); if (!pool) return; poolResize.current = { startX: event.clientX, startWidth: pool.getBoundingClientRect().width }; event.currentTarget.setPointerCapture(event.pointerId); document.body.dataset.poolResizing = "true"; }}
-          onPointerMove={(event) => { const state = poolResize.current; if (!state) return; const width = Math.min(560, Math.max(260, Math.round(state.startWidth - (event.clientX - state.startX)))); document.querySelector<HTMLElement>(".app-shell")?.style.setProperty("--pool-width", `${width}px`); }}
-          onPointerUp={(event) => { if (!poolResize.current) return; poolResize.current = null; delete document.body.dataset.poolResizing; if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); const width = parseInt(document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--pool-width") ?? "", 10); if (Number.isFinite(width) && width !== preferences.taskPoolWidth) updatePreferences({ taskPoolWidth: width }); }} />
+        <section className="pool-splitter-region" aria-label="任务池宽度控制">
+          <div className="pool-splitter" role="separator" aria-label="调整任务池宽度" aria-orientation="vertical"
+            aria-valuemin={260} aria-valuemax={560} aria-valuenow={preferences.taskPoolWidth ?? 320} tabIndex={0}
+            onKeyDown={nudgePoolWidth} onPointerDown={startPoolResize} onPointerMove={movePoolResize} onPointerUp={endPoolResize} />
+        </section>
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => setTaskPoolOpen(false)} />
         <TaskPool tasks={activeTasks} sessions={workspace.executionSessions} projects={workspace.projects} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
           onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
@@ -1326,7 +1327,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
             const outcome = workspace.milestoneOutcomes.find((item) => item.milestoneId === milestone.id);
             const status = outcome ? { className: "milestone-status missed", label: "未达成" } : reached ? { className: "milestone-status reached", label: "已达成" } : { className: "milestone-status", label: "进行中" };
             const detail = outcome ? `${outcome.resultText} · ${formatShortDate(outcome.targetLocalDate)} 到期` : milestoneSummary(milestone, tasks);
-            return <div key={milestone.id} className="milestone-row"><div><strong>{milestone.title}</strong><span>{detail}</span></div><span className={status.className}>{status.label}</span>{outcome && <button className="icon-action" aria-label={`续排里程碑 ${milestone.title}`} title="将剩余目标纳入后续计划" onClick={() => setMilestoneDraft({ projectId: project.id, editing: continueMilestoneDraft(milestone, tasks, weighted, today), continuing: true })}><RotateCcw size={14} /></button>}<button className="icon-action" aria-label={`编辑里程碑 ${milestone.title}`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button className="icon-action" aria-label={`删除里程碑 ${milestone.title}`} onClick={() => void onDeleteMilestone(milestone)}><X size={14} /></button></div>;
+            return <div key={milestone.id} className="milestone-row"><div><strong>{milestone.title}</strong><span>{detail}</span></div><span className={status.className}>{status.label}</span>{outcome ? <button className="icon-action" aria-label={`续排里程碑 ${milestone.title}`} title="将剩余目标纳入后续计划" onClick={() => setMilestoneDraft({ projectId: project.id, editing: continueMilestoneDraft(milestone, today), continuing: true })}><RotateCcw size={14} /></button> : <><button className="icon-action" aria-label={`编辑里程碑 ${milestone.title}`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button className="icon-action" aria-label={`删除里程碑 ${milestone.title}`} onClick={() => void onDeleteMilestone(milestone)}><X size={14} /></button></>}</div>;
           })}
           {milestones.length === 0 && <p className="milestone-empty">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
         </div>
@@ -1394,11 +1395,11 @@ function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false,
   };
   return <form className="milestone-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
     <div className="section-heading"><h3>{continuing ? `续排里程碑：${editing?.title ?? ""}` : editing ? `编辑里程碑：${editing.title}` : "新增里程碑"}</h3><button className="icon-action" aria-label="关闭里程碑表单" onClick={onCancel}><X size={15} /></button></div>
-    {continuing && <small>未达成里程碑的剩余目标已按差额预填，调整日期后保存。</small>}
+    {continuing && <small>保留原累计目标并顺延日期；当前差额会随后续进度继续减少。</small>}
     <label>里程碑名称<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
     <label>目标日期<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-    <label>达成条件<select value={criterion} onChange={(event) => setCriterion(event.target.value as ProjectMilestone["criterionKind"])}><option value="orderedTask">指定任务完成</option><option value="taskCount">完成任务数量</option><option value="projectProgress">项目进度达到</option></select></label>
-    {criterion === "orderedTask" && <label>目标任务<select value={targetTaskId} onChange={(event) => setTargetTaskId(event.target.value)}><option value="">选择项目内任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
+    <label>达成条件<select value={criterion} onChange={(event) => setCriterion(event.target.value as ProjectMilestone["criterionKind"])}><option value="orderedTask">按顺序完成至指定任务</option><option value="taskCount">完成任务数量</option><option value="projectProgress">项目进度达到</option></select></label>
+    {criterion === "orderedTask" && <label>顺序目标任务<select value={targetTaskId} onChange={(event) => setTargetTaskId(event.target.value)}><option value="">选择项目内任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
     {criterion === "taskCount" && <label>完成任务数（项目内共 {tasks.length} 个）<input type="number" min="1" value={targetCount} onChange={(event) => setTargetCount(Math.max(1, Number(event.target.value) || 1))} /></label>}
     {criterion === "projectProgress" && <label>项目加权进度（%）<input type="number" min="1" max="100" value={targetProgress} onChange={(event) => setTargetProgress(Math.min(100, Math.max(1, Number(event.target.value) || 1)))} /></label>}
     <small>保存后：{summaryText}</small>
@@ -1407,19 +1408,16 @@ function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false,
   </form>;
 }
 
-function continueMilestoneDraft(milestone: ProjectMilestone, tasks: Task[], weighted: number, today: string): ProjectMilestone {
+function continueMilestoneDraft(milestone: ProjectMilestone, today: string): ProjectMilestone {
   const base = { id: crypto.randomUUID(), projectId: milestone.projectId, title: milestone.title, targetLocalDate: addDays(today, 7), sortOrder: milestone.sortOrder };
   if (milestone.criterionKind === "orderedTask") return { ...base, criterionKind: "orderedTask", targetTaskId: milestone.targetTaskId, targetCount: null, targetProgress: null };
-  if (milestone.criterionKind === "taskCount") {
-    const done = tasks.filter((task) => task.status === "completed" || task.progress >= 100).length;
-    return { ...base, criterionKind: "taskCount", targetTaskId: null, targetCount: Math.max(1, milestone.targetCount - done), targetProgress: null };
-  }
+  if (milestone.criterionKind === "taskCount") return { ...base, criterionKind: "taskCount", targetTaskId: null, targetCount: milestone.targetCount, targetProgress: null };
   return { ...base, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress: milestone.targetProgress };
 }
 
 function milestoneSummary(milestone: ProjectMilestone, tasks: Task[]) {
   const task = milestone.targetTaskId ? tasks.find((item) => item.id === milestone.targetTaskId) : null;
-  const goal = milestone.criterionKind === "orderedTask" ? `完成任务「${task?.title ?? "任务已不在项目中"}」`
+  const goal = milestone.criterionKind === "orderedTask" ? `按顺序完成至「${task?.title ?? "任务已不在项目中"}」`
     : milestone.criterionKind === "taskCount" ? `完成 ${milestone.targetCount} 个项目任务`
     : `项目加权进度达到 ${milestone.targetProgress}%`;
   return `${goal} · ${formatShortDate(milestone.targetLocalDate)} 前`;
@@ -1427,18 +1425,23 @@ function milestoneSummary(milestone: ProjectMilestone, tasks: Task[]) {
 
 function milestoneReached(milestone: ProjectMilestone, tasks: Task[], weighted: number) {
   const completed = (task: Task) => task.status === "completed" || task.progress >= 100;
-  if (milestone.criterionKind === "orderedTask") { const task = tasks.find((item) => item.id === milestone.targetTaskId); return Boolean(task && completed(task)); }
+  if (milestone.criterionKind === "orderedTask") { const ordered = orderedMilestoneTasks(milestone, tasks); return ordered.length > 0 && ordered.every(completed); }
   if (milestone.criterionKind === "taskCount") return tasks.filter(completed).length >= milestone.targetCount;
   return weighted >= milestone.targetProgress;
+}
+
+function orderedMilestoneTasks(milestone: ProjectMilestone, tasks: Task[]) {
+  if (milestone.criterionKind !== "orderedTask") return [];
+  const ordered = [...tasks].sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+  const targetIndex = ordered.findIndex((task) => task.id === milestone.targetTaskId);
+  return targetIndex < 0 ? [] : ordered.slice(0, targetIndex + 1);
 }
 
 function AutoScheduleDialog({ workspace, preferences, onClose, onApply }: { workspace: WorkspaceSnapshot; preferences: AppSettings; onClose: () => void; onApply: (sessions: ExecutionSession[], occurrences: HabitOccurrence[]) => Promise<void> }) {
   const today = toLocalDate(new Date()); const endDate = addDays(today, 6);
   const items = useMemo<ScheduleItem[]>(() => {
-    const projectDeadlineById = new Map(workspace.projects.map((project) => [project.id, project.deadlineLocal]));
     const tasks = workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit").map((task) => {
-      const projectDeadline = task.projectId ? projectDeadlineById.get(task.projectId) ?? null : null;
-      return { key: `task:${task.id}`, taskId: task.id, title: task.title, targetMinutes: task.sessionMinutes ?? preferences.defaultSessionMinutes, deadlineLocal: task.deadlineLocal ?? projectDeadline, priority: task.priority ?? "normal", sortOrder: task.sortOrder };
+      return { key: `task:${task.id}`, taskId: task.id, title: task.title, targetMinutes: task.sessionMinutes ?? preferences.defaultSessionMinutes, deadlineLocal: scheduleDeadlineForTask(workspace, task, today), priority: task.priority ?? "normal", sortOrder: task.sortOrder };
     });
     const habits = workspace.recurringHabits.flatMap((habit) => {
       const task = workspace.tasks.find((item) => item.id === habit.taskId); if (!task) return [];
@@ -1463,6 +1466,28 @@ function AutoScheduleDialog({ workspace, preferences, onClose, onApply }: { work
     try { await onApply(sessions, occurrences); } catch (reason) { setError(readError(reason)); setBusySaving(false); }
   };
   return createPortal(<div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busySaving && onClose()}><section ref={dialogRef} className="modal schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-title"><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {plan.usedMinutes} / 可用 {recommended.availableMinutes} 分钟</div>{preview ? <div className="schedule-preview">{plan.allocations.map((allocation) => <article key={allocation.key}><time>{formatShortDate(allocation.localDate)} {allocation.startLocal}–{allocation.endLocal}</time><strong>{allocation.title}</strong><span>{allocation.minutes < allocation.targetMinutes ? `先安排 ${allocation.minutes}/${allocation.targetMinutes} 分钟` : `${allocation.minutes} 分钟`}</span></article>)}{plan.allocations.length === 0 && <p>当前选择没有可应用的空档。</p>}</div> : <div className="schedule-candidates">{items.map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions"><Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : "应用全部"}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></section></div>, document.body);
+}
+
+function scheduleDeadlineForTask(workspace: WorkspaceSnapshot, task: Task, today: string) {
+  if (task.deadlineLocal) return task.deadlineLocal;
+  if (!task.projectId) return null;
+  const projectTasks = workspace.tasks.filter((item) => item.projectId === task.projectId);
+  const completed = (item: Task) => item.status === "completed" || item.progress >= 100;
+  const weighted = projectProgress(projectTasks);
+  const frozenIds = new Set(workspace.milestoneOutcomes.map((outcome) => outcome.milestoneId));
+  const milestoneDeadlines = workspace.projectMilestones
+    .filter((milestone) => milestone.projectId === task.projectId && milestone.targetLocalDate >= today && !frozenIds.has(milestone.id) && !milestoneReached(milestone, projectTasks, weighted))
+    .filter((milestone) => {
+      if (milestone.criterionKind === "orderedTask") return orderedMilestoneTasks(milestone, projectTasks).some((item) => item.id === task.id);
+      if (milestone.criterionKind === "taskCount") {
+        const remaining = Math.max(0, milestone.targetCount - projectTasks.filter(completed).length);
+        return projectTasks.filter((item) => item.status === "active" && item.kind !== "habit").sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id)).slice(0, remaining).some((item) => item.id === task.id);
+      }
+      return true;
+    })
+    .map((milestone) => milestone.targetLocalDate);
+  const projectDeadline = workspace.projects.find((project) => project.id === task.projectId)?.deadlineLocal ?? null;
+  return [...milestoneDeadlines, ...(projectDeadline ? [projectDeadline] : [])].sort()[0] ?? null;
 }
 
 function ReviewPage({ workspace, onGoToday }: { workspace: WorkspaceSnapshot; onGoToday: () => void }) {

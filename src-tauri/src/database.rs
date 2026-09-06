@@ -59,7 +59,6 @@ impl Database {
 
     pub fn snapshot(&self) -> Result<WorkspaceSnapshot, String> {
         let connection = open_connection(&self.path)?;
-        self.freeze_expired_outcomes(&connection)?;
         Ok(WorkspaceSnapshot {
             projects: query_projects(&connection)?,
             project_milestones: query_project_milestones(&connection)?,
@@ -75,19 +74,23 @@ impl Database {
         })
     }
 
-    /// Freeze a one-time outcome snapshot for any milestone whose target date has passed
-    /// and which has not yet been reached. Later progress changes must not rewrite history.
-    fn freeze_expired_outcomes(&self, connection: &Connection) -> Result<(), String> {
-        let today = Utc::now().date_naive();
-        let milestones = query_project_milestones(connection)?;
-        let tasks = query_tasks(connection)?;
+    /// Freeze one-time outcome snapshots using the caller's local natural date.
+    /// Returns whether the database changed so callers can refresh the daily backup.
+    pub fn freeze_expired_outcomes(&self, today: NaiveDate) -> Result<bool, String> {
+        let mut connection = open_connection(&self.path)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let milestones = query_project_milestones(&transaction)?;
+        let tasks = query_tasks(&transaction)?;
+        let mut changed = false;
         for milestone in milestones {
             let target = NaiveDate::parse_from_str(&milestone.target_local_date, "%Y-%m-%d")
                 .map_err(|error| format!("里程碑日期无效：{error}"))?;
             if target >= today {
                 continue;
             }
-            let already_frozen: bool = connection.query_row(
+            let already_frozen: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM milestone_outcomes WHERE milestone_id = ?1)",
                 [&milestone.id],
                 |row| row.get(0),
@@ -101,7 +104,7 @@ impl Database {
                 continue;
             }
             let result_text = outcome_text(&milestone, &tasks, reached);
-            connection.execute(
+            transaction.execute(
                 "INSERT INTO milestone_outcomes (id, milestone_id, project_id, title, target_local_date, criterion_kind, target_task_id, target_count, target_progress, reached, result_text, frozen_at_utc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     format!("outcome:{}", milestone.id),
@@ -118,8 +121,10 @@ impl Database {
                     Utc::now().to_rfc3339(),
                 ],
             ).map_err(database_error)?;
+            changed = true;
         }
-        Ok(())
+        transaction.commit().map_err(database_error)?;
+        Ok(changed)
     }
 
     pub fn save_project_with_tasks(&self, project: &Project, tasks: &[Task]) -> Result<(), String> {
@@ -175,6 +180,9 @@ impl Database {
     pub fn update_project_milestone(&self, milestone: &ProjectMilestone) -> Result<(), String> {
         validate_project_milestone(milestone)?;
         let connection = open_connection(&self.path)?;
+        if milestone_has_outcome(&connection, &milestone.id)? {
+            return Err("已到期里程碑属于历史记录，不能修改".into());
+        }
         validate_milestone_relations(&connection, milestone)?;
         let changed = connection.execute(
             "UPDATE project_milestones SET project_id = ?1, title = ?2, target_local_date = ?3, criterion_kind = ?4, target_task_id = ?5, target_count = ?6, target_progress = ?7, sort_order = ?8, updated_at_utc = ?9 WHERE id = ?10",
@@ -185,6 +193,9 @@ impl Database {
 
     pub fn delete_project_milestone(&self, id: &str) -> Result<(), String> {
         let connection = open_connection(&self.path)?;
+        if milestone_has_outcome(&connection, id)? {
+            return Err("已到期里程碑属于历史记录，不能删除".into());
+        }
         let changed = connection.execute("DELETE FROM project_milestones WHERE id = ?1", [id]).map_err(database_error)?;
         if changed == 1 { Ok(()) } else { Err("找不到要删除的项目里程碑".into()) }
     }
@@ -939,13 +950,8 @@ fn query_milestone_outcomes(connection: &Connection) -> Result<Vec<MilestoneOutc
 fn milestone_reached(milestone: &ProjectMilestone, tasks: &[Task]) -> bool {
     let completed = |task: &Task| task.status == "completed" || task.progress >= 100;
     match milestone.criterion_kind.as_str() {
-        "orderedTask" => {
-            if let Some(task_id) = &milestone.target_task_id {
-                tasks.iter().find(|task| &task.id == task_id).is_some_and(completed)
-            } else {
-                false
-            }
-        }
+        "orderedTask" => ordered_milestone_tasks(milestone, tasks)
+            .is_some_and(|ordered| ordered.iter().all(|task| completed(task))),
         "taskCount" => {
             let project_tasks = tasks.iter().filter(|task| task.project_id.as_deref() == Some(milestone.project_id.as_str()));
             project_tasks.filter(|task| completed(task)).count() as u32 >= milestone.target_count.unwrap_or(0)
@@ -961,7 +967,7 @@ fn milestone_reached(milestone: &ProjectMilestone, tasks: &[Task]) -> bool {
                 .map(|task| task.estimated_minutes.unwrap_or(60))
                 .sum();
             if total == 0 { return false; }
-            let progress = (weighted as f64 / total as f64 * 100.0).round() as u32;
+            let progress = (weighted as f64 / total as f64).round() as u32;
             progress >= target
         }
         _ => false,
@@ -976,7 +982,9 @@ fn outcome_text(milestone: &ProjectMilestone, tasks: &[Task], reached: bool) -> 
                 .and_then(|id| tasks.iter().find(|task| &task.id == id))
                 .map(|task| task.title.as_str())
                 .unwrap_or("目标任务");
-            format!("完成任务「{title}」")
+            let ordered = ordered_milestone_tasks(milestone, tasks).unwrap_or_default();
+            let done = ordered.iter().filter(|task| completed(task)).count();
+            format!("完成至「{title}」{done}/{}", ordered.len())
         }
         "taskCount" => {
             let done = tasks.iter()
@@ -994,7 +1002,7 @@ fn outcome_text(milestone: &ProjectMilestone, tasks: &[Task], reached: bool) -> 
                 .filter(|task| task.project_id.as_deref() == Some(milestone.project_id.as_str()))
                 .map(|task| task.estimated_minutes.unwrap_or(60))
                 .sum();
-            let progress = if total == 0 { 0 } else { (weighted as f64 / total as f64 * 100.0).round() as u32 };
+            let progress = if total == 0 { 0 } else { (weighted as f64 / total as f64).round() as u32 };
             format!("进度 {progress}/{target}%")
         }
         _ => String::new(),
@@ -1004,6 +1012,35 @@ fn outcome_text(milestone: &ProjectMilestone, tasks: &[Task], reached: bool) -> 
     } else {
         format!("{actual}，未达成")
     }
+}
+
+fn milestone_has_outcome(connection: &Connection, milestone_id: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM milestone_outcomes WHERE milestone_id = ?1)",
+            [milestone_id],
+            |row| row.get(0),
+        )
+        .map_err(database_error)
+}
+
+fn ordered_milestone_tasks<'a>(
+    milestone: &ProjectMilestone,
+    tasks: &'a [Task],
+) -> Option<Vec<&'a Task>> {
+    let target_id = milestone.target_task_id.as_ref()?;
+    let mut project_tasks = tasks
+        .iter()
+        .filter(|task| task.project_id.as_deref() == Some(milestone.project_id.as_str()))
+        .collect::<Vec<_>>();
+    project_tasks.sort_by(|left, right| {
+        left.sort_order
+            .cmp(&right.sort_order)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let target_index = project_tasks.iter().position(|task| &task.id == target_id)?;
+    project_tasks.truncate(target_index + 1);
+    Some(project_tasks)
 }
 
 fn query_tasks(connection: &Connection) -> Result<Vec<Task>, String> {
@@ -1421,6 +1458,55 @@ mod tests {
     }
 
     #[test]
+    fn ordered_task_milestone_requires_every_task_through_the_target() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut previous = task("task-1", Some("project-1"));
+        previous.sort_order = 0;
+        let mut target = task("task-2", Some("project-1"));
+        target.sort_order = 1;
+        target.progress = 100;
+        target.status = "completed".into();
+        database
+            .save_project_with_tasks(&project("project-1"), &[previous, target])
+            .unwrap();
+        let mut value = milestone("ordered", "project-1", "orderedTask");
+        value.target_task_id = Some("task-2".into());
+        value.target_local_date = "2026-08-01".into();
+        database.create_project_milestone(&value).unwrap();
+
+        assert!(database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
+        let outcome = &database.snapshot().unwrap().milestone_outcomes[0];
+        assert!(!outcome.reached);
+        assert!(outcome.result_text.contains("1/2"));
+    }
+
+    #[test]
+    fn project_progress_milestone_uses_the_existing_percentage_scale() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut in_progress = task("task-1", Some("project-1"));
+        in_progress.progress = 20;
+        in_progress.estimated_minutes = Some(60);
+        database
+            .save_project_with_tasks(&project("project-1"), &[in_progress])
+            .unwrap();
+        let mut value = milestone("progress", "project-1", "projectProgress");
+        value.target_progress = Some(50);
+        value.target_local_date = "2026-08-01".into();
+        database.create_project_milestone(&value).unwrap();
+
+        assert!(database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
+        let outcome = &database.snapshot().unwrap().milestone_outcomes[0];
+        assert!(!outcome.reached);
+        assert!(outcome.result_text.contains("20/50%"));
+    }
+
+    #[test]
     fn an_expired_unreached_milestone_is_frozen_into_an_outcome_snapshot_once() {
         let dir = tempdir().unwrap();
         let database = Database::open(dir.path().join("daymark.db")).unwrap();
@@ -1429,6 +1515,12 @@ mod tests {
         past.target_local_date = "2026-08-01".into();
         database.create_project_milestone(&past).unwrap();
 
+        assert!(!database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap())
+            .unwrap());
+        assert!(database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
         let first = database.snapshot().unwrap();
         assert_eq!(first.milestone_outcomes.len(), 1);
         let outcome = &first.milestone_outcomes[0];
@@ -1438,6 +1530,9 @@ mod tests {
         assert!(outcome.result_text.contains("0/2"));
 
         // 第二次读取不会重复冻结
+        assert!(!database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
         let second = database.snapshot().unwrap();
         assert_eq!(second.milestone_outcomes.len(), 1);
     }
@@ -1454,24 +1549,34 @@ mod tests {
         past.target_local_date = "2026-08-01".into();
         database.create_project_milestone(&past).unwrap();
 
+        assert!(!database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
         let snapshot = database.snapshot().unwrap();
         assert!(snapshot.milestone_outcomes.is_empty());
     }
 
     #[test]
-    fn deleting_a_milestone_removes_its_frozen_outcome() {
+    fn a_frozen_milestone_cannot_be_changed_or_deleted() {
         let dir = tempdir().unwrap();
         let database = Database::open(dir.path().join("daymark.db")).unwrap();
         database.save_project_with_tasks(&project("project-1"), &[task("task-1", Some("project-1"))]).unwrap();
         let mut past = milestone("milestone-past", "project-1", "taskCount");
         past.target_local_date = "2026-08-01".into();
         database.create_project_milestone(&past).unwrap();
+        assert!(database
+            .freeze_expired_outcomes(NaiveDate::from_ymd_opt(2026, 8, 2).unwrap())
+            .unwrap());
         assert_eq!(database.snapshot().unwrap().milestone_outcomes.len(), 1);
 
-        database.delete_project_milestone("milestone-past").unwrap();
+        let mut changed = past.clone();
+        changed.title = "重写历史".into();
+        assert!(database.update_project_milestone(&changed).unwrap_err().contains("历史记录"));
+        assert!(database.delete_project_milestone("milestone-past").unwrap_err().contains("历史记录"));
         let snapshot = database.snapshot().unwrap();
-        assert!(snapshot.milestone_outcomes.is_empty());
-        assert!(snapshot.project_milestones.is_empty());
+        assert_eq!(snapshot.milestone_outcomes.len(), 1);
+        assert_eq!(snapshot.project_milestones.len(), 1);
+        assert_eq!(snapshot.project_milestones[0].title, past.title);
     }
 
     #[test]
