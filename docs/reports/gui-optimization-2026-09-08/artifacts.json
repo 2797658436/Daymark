@@ -1,0 +1,14 @@
+[
+  {
+    "Path": "F:\\PythonProject\\Daymark\\src-tauri\\target\\release\\daymark.exe",
+    "Bytes": 17143808,
+    "Modified": "2026-09-08T19:22:39.6085778+08:00",
+    "SHA256": "A2AD10A54CC02D64E39C4E5E13A85C7AD560CE91750673AEB7DB1827A1C17914"
+  },
+  {
+    "Path": "F:\\PythonProject\\Daymark\\src-tauri\\target\\release\\bundle\\nsis\\Daymark_0.1.0_x64-setup.exe",
+    "Bytes": 4266736,
+    "Modified": "2026-09-08T19:22:38.3660963+08:00",
+    "SHA256": "8C103676F3AB36682BBBAC215013AFBC908E28FA92C3805C24272D25BE468300"
+  }
+]

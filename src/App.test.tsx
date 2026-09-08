@@ -1,11 +1,13 @@
 import axe from "axe-core";
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { EMPTY_WORKSPACE, type BackupInfo, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
 import { DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./lib/settings";
+
+beforeEach(() => { Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 }); });
 
 const tauriEventCallbacks = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
@@ -790,7 +792,7 @@ describe("phase 1 manual alpha", () => {
     const editButton = await screen.findByRole("button", { name: "编辑任务 整理反馈" });
     await user.click(editButton);
     const popover = await waitFor(() => {
-      const node = document.querySelector(".task-editor-popover");
+      const node = document.querySelector(".task-editor-fields");
       expect(node).not.toBeNull();
       return node as HTMLElement;
     });
@@ -798,6 +800,8 @@ describe("phase 1 manual alpha", () => {
     const dateInput = within(popover).getByLabelText("截止日期") as HTMLInputElement;
     fireEvent.change(dateInput, { target: { value: "2026-08-02" } });
     fireEvent.blur(dateInput);
+    expect(native.updateTask).not.toHaveBeenCalled();
+    await user.click(within(popover).getByRole("button", { name: "保存任务" }));
     await waitFor(() => expect(native.updateTask).toHaveBeenCalledWith(expect.objectContaining({ deadlineLocal: "2026-08-02" })));
   });
 
@@ -855,7 +859,7 @@ describe("phase 1 manual alpha", () => {
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     expect(screen.getByRole("dialog", { name: "自动排程 Lite" })).toHaveTextContent("准备候选版");
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
-    await user.click(screen.getByRole("button", { name: "应用全部" }));
+    await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
   });
 
@@ -1006,12 +1010,13 @@ describe("phase 1 manual alpha", () => {
     await user.click(await screen.findByRole("button", { name: "设置" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "动态效果" }), "reduce");
     await user.click(screen.getByRole("button", { name: /添加时段/ }));
-    expect(screen.getAllByRole("group", { name: /时段/ })).toHaveLength(2);
+    expect(screen.getByRole("dialog", { name: "编辑默认时段" })).toBeVisible();
     const weekdayBoxes = screen.getAllByRole("checkbox", { name: "一" });
     await user.click(weekdayBoxes[0]);
+    await user.click(screen.getByRole("button", { name: "保存时段" }));
     await waitFor(() => expect(backend.value).toMatchObject({ motion: "reduce" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots).toHaveLength(2));
-    expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots[0].weekdays).not.toContain(1);
+    expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots[1].weekdays).not.toContain(1);
   });
 
   it("turns off calendar snapping", async () => {
@@ -1221,8 +1226,8 @@ describe("phase 1 manual alpha", () => {
     const item = await within(dialog).findByText("写大纲");
     expect(item.closest("label")).toHaveTextContent(/可安排|放不下/);
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
-    expect(await screen.findByRole("button", { name: "应用全部" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "应用全部" }));
+    expect(await screen.findByRole("button", { name: /应用 \d+ 个时段/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalled());
     const allocations = (native.applyScheduleDraft as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ localDate: string }>;
     expect(allocations.length).toBeGreaterThan(0);
@@ -1255,7 +1260,7 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
-    await user.click(screen.getByRole("button", { name: "应用全部" }));
+    await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
     await user.click(screen.getByRole("button", { name: /撤销本次自动排程/ }));
     await waitFor(() => expect(native.deleteExecutionSessions).toHaveBeenCalledOnce());
@@ -1354,7 +1359,7 @@ describe("phase 1 manual alpha", () => {
     expect(screen.getByText("使用说明")).toBeVisible();
   });
 
-  it("closes the editor popover on an outside click without firing the underlying control", async () => {
+  it("retains the editor draft until explicit cancellation", async () => {
     const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       projects: [{ id: "project-1", title: "四级英语单词", deadlineLocal: null }],
@@ -1367,12 +1372,14 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     const editButton = await screen.findByRole("button", { name: "编辑任务 视频配套书籍在哪？" });
     await user.click(editButton);
-    expect(document.querySelector(".task-editor-popover")).not.toBeNull();
+    expect(document.querySelector(".task-editor-fields")).not.toBeNull();
     // 气泡开着时点折叠 header：应该只关气泡，不切换 header 折叠状态
     const header = screen.getByRole("button", { name: /四级英语单词/ });
     expect(header).toHaveAttribute("aria-expanded", "false");
     await user.click(header);
-    await waitFor(() => expect(document.querySelector(".task-editor-popover")).toBeNull());
+    expect(document.querySelector(".task-editor-fields")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.querySelector(".task-editor-fields")).toBeNull());
     expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -1386,9 +1393,29 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
     const projectCard = document.querySelector<HTMLElement>(".project-card")!;
+    await user.click(within(projectCard).getByText("进度 10% · 调整"));
     const completeButton = within(projectCard).getByRole("button", { name: "标记 使用说明 已完成" });
     await user.click(completeButton);
     await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-watch", toProgress: 100 })));
     expect(within(projectCard).getAllByText("100%").length).toBeGreaterThan(0);
   });
+});
+
+it("keeps a failed habit draft and prevents duplicate submission while saving", async () => {
+  const user = userEvent.setup();
+  let rejectSave!: (reason: Error) => void;
+  const createRecurringHabit = vi.fn(() => new Promise<WorkspaceSnapshot>((_resolve, reject) => { rejectSave = reject; }));
+  render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(structuredClone(EMPTY_WORKSPACE), { createRecurringHabit })} />);
+  await user.click(await screen.findByRole("button", { name: "新建重复习惯" }));
+  const dialog = screen.getByRole("dialog", { name: "新建重复习惯" });
+  await user.type(within(dialog).getByLabelText("习惯名称"), "每天阅读");
+  const save = within(dialog).getByRole("button", { name: "创建习惯" });
+  await user.click(save); await user.click(save);
+  expect(createRecurringHabit).toHaveBeenCalledTimes(1);
+  expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+  await user.keyboard("{Escape}"); expect(dialog).toBeInTheDocument();
+  await act(async () => rejectSave(new Error("写入失败")));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("写入失败");
+  expect(within(dialog).getByLabelText("习惯名称")).toHaveValue("每天阅读");
+  expect(save).toBeEnabled();
 });

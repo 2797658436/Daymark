@@ -116,7 +116,7 @@ export interface DataCounts {
 export type BackupKind = "daily" | "preRestore" | "manual";
 export interface BackupInfo { path: string; kind: BackupKind }
 export interface RestoreOutcome { preRestoreBackup: BackupInfo; restoredPreferences: unknown | null }
-export interface BackupPreview { source: string; modifiedAt: string; sizeBytes: number; projects: number; tasks: number }
+export interface BackupPreview { includesPreferences?: boolean; source: string; modifiedAt: string; sizeBytes: number; projects: number; tasks: number }
 export interface DataOverview {
   schemaVersion: number;
   databasePath: string;
@@ -411,7 +411,7 @@ class BrowserPreviewApi implements NativeApi {
   async createDailyBackup() { const backup: BackupInfo = { path: "浏览器预览不写入磁盘", kind: "daily" }; this.backups = [backup]; return backup; }
   async createManualBackup() { return null; }
   async chooseRestoreSource() { return null; }
-  async inspectBackup(path: string): Promise<BackupPreview> { return { source: path, modifiedAt: new Date().toISOString(), sizeBytes: 0, projects: this.read().projects.length, tasks: this.read().tasks.length }; }
+  async inspectBackup(path: string): Promise<BackupPreview> { return { includesPreferences: false, source: path, modifiedAt: new Date().toISOString(), sizeBytes: 0, projects: this.read().projects.length, tasks: this.read().tasks.length }; }
   async restoreBackup(_path: string): Promise<RestoreOutcome> { throw new Error("请在 Daymark 桌面应用中恢复备份"); }
 }
 

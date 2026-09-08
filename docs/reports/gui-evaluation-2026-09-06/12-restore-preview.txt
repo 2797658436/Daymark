@@ -1,0 +1,39 @@
+Window: "Daymark", App: daymark.exe.
+	0 窗口 Daymark Secondary Actions: Raise
+		1 窗格
+			2 窗格 Daymark
+				3 窗格 (disabled)
+				4 区域 Daymark - Web 内容
+					5 区域
+						6 区域
+						7 区域
+							8 区域
+								9 文档 Daymark ID: RootWebArea
+									10 组
+										11 组 ID: root
+										334 对话框 确认恢复备份 Secondary Actions: Raise
+											335 标题 确认恢复备份 ID: restore-title
+											336 文本 将恢复
+											337 文本 2
+											338 文本 个项目和
+											339 文本 101
+											340 文本 个任务。开始替换前会创建恢复前备份。
+											341 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-06.db
+											342 按钮 取消
+											343 按钮 验证并恢复
+								64 区域
+		65 标题栏
+			66 菜单栏 系统 ID: MenuBar
+				71 菜单项 系统
+			68 按钮 最小化
+			69 按钮 最大化
+			70 按钮 关闭
+
+Document text: ```
+￼
+确认恢复备份
+将恢复 2 个项目和 101 个任务。开始替换前会创建恢复前备份。
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-06.db
+取消
+验证并恢复
+```

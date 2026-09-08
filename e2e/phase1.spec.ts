@@ -88,7 +88,7 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await page.getByRole("button", { name: "自动排程" }).click();
   await expect(page.getByRole("dialog", { name: "自动排程 Lite" })).toContainText("准备 21 天候选版");
   await page.getByRole("button", { name: "生成排程草案" }).click();
-  await page.getByRole("button", { name: "应用全部" }).click();
+  await page.getByRole("button", { name: /应用 \d+ 个时段/ }).click();
   await expect(page.getByRole("button", { name: /撤销本次自动排程/ })).toBeVisible();
 
   await page.getByRole("button", { name: "日历", exact: true }).click();
@@ -168,6 +168,7 @@ test("200 percent scaling keeps data actions visible and persists after reload",
 
 test("narrow windows keep the task pool over the workspace and calendar hours vertical", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 640 });
+  await page.getByRole("button", { name: "打开任务池" }).click();
   await expect(page.locator("#task-pool")).toHaveCSS("position", "fixed");
   await page.getByRole("button", { name: "收起任务池" }).click();
   await expect(page.locator("#task-pool")).toHaveCount(0);
@@ -187,9 +188,7 @@ test("narrow windows keep the task pool over the workspace and calendar hours ve
 test("day view task-pool width is keyboard adjustable and persists", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 700 });
   await page.getByRole("button", { name: "日历", exact: true }).click();
-  await page.getByRole("button", { name: "收起任务池" }).click();
   await page.getByRole("button", { name: "日", exact: true }).click();
-  await page.getByRole("button", { name: "打开任务池" }).click();
   const splitter = page.getByRole("separator", { name: "调整任务池宽度" });
   await expect(splitter).toBeVisible();
   await splitter.press("ArrowRight");
@@ -516,7 +515,7 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
   await page.reload();
 
   const cell = page.getByRole("gridcell", { name: /2026-08-05/ });
-  await expect(cell).toContainText("M6 截止 2"); await expect(cell).toContainText("另外 2 项");
+  await expect(cell).toContainText("M6 截止 2"); await expect(cell).toContainText("另外 3 项");
   await cell.focus(); await page.keyboard.press("ArrowRight");
   await expect(page.locator('[data-month-date="2026-08-06"]')).toBeFocused();
   await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Enter");

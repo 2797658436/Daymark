@@ -23,7 +23,7 @@ describe("calendar day summary", () => {
 
     const summary = calendarDaySummary(workspace, "2026-08-05", "2026-08-05");
 
-    expect(summary.visible.map((item) => item.label)).toEqual(["先交报告", "再交附件", "完成 1 项"]);
+    expect(summary.visible.map((item) => item.label)).toEqual(["先交报告", "再交附件", "曾完成 1 项"]);
     expect(summary.overflowCount).toBe(2);
     expect(summary.progressDelta).toBe(50);
     expect(summary.missedTasks.map((task) => task.title)).toEqual(["未推进事项"]);
@@ -76,4 +76,18 @@ describe("calendar day summary", () => {
     expect(markers[1]).toMatchObject({ projectId: "project-1", label: "毕业设计" });
     expect(markers[2]).toMatchObject({ milestoneId: "ms-1", projectId: "project-1", label: "中期答辩" });
   });
+});
+
+it("keeps net corrections visible even when the same task was previously completed", () => {
+  const workspace: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+    tasks: [{ id: "task", projectId: null, title: "修正进度", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0 }],
+    progressEvents: [
+      { id: "up", taskId: "task", fromProgress: 0, toProgress: 100, occurredAtUtc: "2026-08-05T10:00:00Z" },
+      { id: "down", taskId: "task", fromProgress: 100, toProgress: 20, occurredAtUtc: "2026-08-05T11:00:00Z" },
+    ],
+  };
+  const summary = calendarDaySummary(workspace, "2026-08-05");
+  expect(summary.progressDelta).toBe(20);
+  expect(summary.progressedTasks).toHaveLength(1);
+  expect(summary.visible.some((item) => item.label.includes("+20 百分点"))).toBe(true);
 });

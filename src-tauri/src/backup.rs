@@ -29,6 +29,7 @@ pub struct RestoreOutcome {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupPreview {
+    pub includes_preferences: bool,
     pub source: PathBuf,
     pub modified_at: String,
     pub size_bytes: u64,
@@ -205,6 +206,7 @@ impl BackupService {
             .query_row("SELECT COUNT(*) FROM tasks", [], |row| row.get(0))
             .map_err(database_error)?;
         Ok(BackupPreview {
+            includes_preferences: read_embedded_preferences(source)?.is_some(),
             source: source.to_path_buf(),
             modified_at: chrono::DateTime::<Local>::from(modified).to_rfc3339(),
             size_bytes: metadata.len(),
@@ -512,6 +514,18 @@ mod tests {
                 }],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn preview_reports_whether_settings_are_included() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("daymark.db");
+        Database::open(&db_path).unwrap();
+        let service = BackupService::new(&db_path, dir.path().join("backups"));
+        assert!(!service.inspect(&db_path).unwrap().includes_preferences);
+        let connection = Connection::open(&db_path).unwrap();
+        connection.execute_batch("CREATE TABLE backup_preferences (singleton INTEGER PRIMARY KEY, preferences_json TEXT NOT NULL); INSERT INTO backup_preferences VALUES (1, '{}');").unwrap();
+        assert!(service.inspect(&db_path).unwrap().includes_preferences);
     }
 
     #[test]

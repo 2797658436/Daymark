@@ -1,0 +1,33 @@
+
+> daymark@0.1.0 tauri
+> tauri build
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> daymark@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v8.1.5 building client environment for production...
+[2K
+transforming...✓ 1804 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.35 kB
+dist/assets/index-MyCx4yUP.css   72.84 kB │ gzip:  13.90 kB
+dist/assets/index-BAaSG_Qo.js   400.54 kB │ gzip: 119.53 kB
+
+✓ built in 819ms
+   Compiling daymark v0.1.0 (F:\PythonProject\Daymark\src-tauri)
+warning: linker stdout: 正在创建库 F:\PythonProject\Daymark\src-tauri\target\release\deps\daymark_lib.dll.lib 和对象 F:\PythonProject\Daymark\src-tauri\target\release\deps\daymark_lib.dll.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `daymark` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 1m 12s
+       Built application at: F:\PythonProject\Daymark\src-tauri\target\release\daymark.exe
+        Info Patching F:\PythonProject\Daymark\src-tauri\target\release\daymark.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce F:\PythonProject\Daymark\src-tauri\target\release\bundle\nsis\Daymark_0.1.0_x64-setup.exe
+    Finished 1 bundle at:
+        F:\PythonProject\Daymark\src-tauri\target\release\bundle\nsis\Daymark_0.1.0_x64-setup.exe

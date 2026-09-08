@@ -1,0 +1,70 @@
+Window: "Daymark", App: daymark.exe.
+	0 窗口 Daymark Secondary Actions: Raise
+		1 窗格
+			8 窗格 Daymark
+				9 窗格 (disabled)
+				10 区域 Daymark - Web 内容
+					11 区域
+						12 区域
+						13 区域
+							14 区域
+								16 文档 Daymark ID: RootWebArea
+									20 组
+										17 组 ID: root
+											21 链接 跳到主要内容
+											22 补充
+												23 组 Daymark
+													24 文本 D
+												25 导航 主导航
+													26 按钮 今日
+													27 按钮 日历
+													28 按钮 项目
+													29 按钮 7 天回顾
+													30 按钮 数据
+													31 按钮 设置
+												32 文本 已保存到本机
+											33 主要 ID: main-content
+												355 组
+													356 章节标题
+														357 文本 把长期结果拆成可行动的任务
+														358 标题 项目
+														359 按钮 新建项目
+														360 按钮 导入文本课程
+														361 按钮 B 站链接 Beta
+													373 标题 创建普通项目
+													374 按钮 关闭
+													375 文本 项目标题
+													376 编辑 项目标题
+													377 文本 项目截止日期（可选）
+													378 日期选择器 项目截止日期（可选）
+														379 调节按钮 年 项目截止日期（可选） Description: yyyy
+														380 文本 /
+														381 调节按钮 月 项目截止日期（可选） Description: mm
+														382 文本 /
+														383 调节按钮 日 项目截止日期（可选） Description: 日
+														384 按钮 显示日期选择器 Description: 显示日期选择器 ID: picker
+													385 按钮 取消
+													386 按钮 (disabled) 创建
+													362 文章 (truncated: child_limit, omitted 573 children)
+													363 文章
+														364 文本 0
+														365 文本 个任务
+														366 标题 Python
+														367 文本 0
+														368 文本 %
+														369 按钮 编辑项目 Python
+														370 标题 里程碑
+														371 按钮 为 Python 新增里程碑
+														372 文本 还没有里程碑，可按任务、数量或进度设定检查点。
+												354 按钮 打开任务池
+								15 区域
+		2 标题栏
+			3 菜单栏 系统 ID: MenuBar
+				4 菜单项 系统
+			5 按钮 最小化
+			6 按钮 最大化
+			7 按钮 关闭
+
+Document text: ```
+￼
+```

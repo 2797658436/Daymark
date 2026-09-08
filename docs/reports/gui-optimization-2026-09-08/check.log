@@ -1,0 +1,142 @@
+
+> daymark@0.1.0 check
+> npm run build && npm run test && npm run test:e2e && npm run test:native
+
+
+> daymark@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v8.1.5 building client environment for production...
+[2K
+transforming...✓ 1804 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.35 kB
+dist/assets/index-MyCx4yUP.css   72.84 kB │ gzip:  13.90 kB
+dist/assets/index-BAaSG_Qo.js   400.54 kB │ gzip: 119.53 kB
+
+✓ built in 930ms
+> daymark@0.1.0 test
+> vitest run
+
+
+ RUN  v4.1.10 F:/PythonProject/Daymark
+
+
+ Test Files  11 passed (11)
+      Tests  125 passed (125)
+   Start at  19:19:20
+   Duration  21.95s (transform 3.20s, setup 4.50s, import 3.37s, tests 18.73s, environment 19.63s)
+
+
+> daymark@0.1.0 test:e2e
+> node scripts/run-e2e.mjs
+
+
+Running 24 tests using 2 workers
+
+(node:30856) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:20932) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ok  2 e2e\phase1.spec.ts:10:1 › title-only task survives reload without duplication (21.2s)
+  ok  1 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 960px / 100% (21.6s)
+  ok  3 e2e\phase1.spec.ts:20:1 › task can be scheduled by one drag and the schedule can be undone (1.5s)
+  ok  4 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 960px / 150% (1.5s)
+  ok  5 e2e\phase1.spec.ts:39:1 › scheduled session can move and return to the pool without copying its task (1.5s)
+  ok  6 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 960px / 200% (1.4s)
+  ok  7 e2e\phase1.spec.ts:70:1 › course text is previewed and imported as one project transaction (1.3s)
+  ok  8 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 1200px / 100% (1.5s)
+  ok 10 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 1200px / 150% (1.4s)
+  ok  9 e2e\phase1.spec.ts:85:1 › phase 2 scheduling, time blocks and recurring habits persist as one action flow (2.1s)
+  ok 11 e2e\gui-optimization.spec.ts:4:3 › GUI settings and creation remain usable at 1200px / 200% (1.5s)
+  ok 12 e2e\phase1.spec.ts:113:1 › running execution ends with a manual progress summary and remains after reload (1.4s)
+  ok 13 e2e\gui-optimization.spec.ts:39:1 › draft cancellation never saves and a floating editor blocks a second calendar editor (1.5s)
+  ok 14 e2e\phase1.spec.ts:142:1 › light and dark shells have no automated accessibility violations (1.4s)
+  ok 16 e2e\phase1.spec.ts:154:1 › 200 percent scaling keeps data actions visible and persists after reload (1.2s)
+  ok 15 e2e\gui-optimization.spec.ts:63:1 › project task creation and import drafts remain separate (1.5s)
+  ok 17 e2e\phase1.spec.ts:169:1 › narrow windows keep the task pool over the workspace and calendar hours vertical (1.0s)
+  ok 18 e2e\phase1.spec.ts:188:1 › day view task-pool width is keyboard adjustable and persists (1.2s)
+  ok 19 e2e\phase1.spec.ts:201:1 › phase 3 calendar anchors survive reload and the day axis changes date only at midnight (2.2s)
+  ok 20 e2e\phase1.spec.ts:245:1 › phase 3 M2 keeps planned and actual time separate and returns to the live time (1.7s)
+  ok 21 e2e\phase1.spec.ts:301:1 › phase 3 M3 zooms around the pointed time and keeps schedule facts unchanged (1.7s)
+  ok 22 e2e\phase1.spec.ts:378:1 › phase 3 M4 folds non-default hours and retains only a successful drag expansion (2.6s)
+  ok 23 e2e\phase1.spec.ts:451:1 › phase 3 M5 previews and atomically commits insertion, then opens blank-time actions (1.1s)
+  ok 24 e2e\phase1.spec.ts:502:1 › phase 3 M6 exposes month summaries, week all-day overflow and keyboard navigation (1.4s)
+
+  24 passed (46.1s)
+
+> daymark@0.1.0 test:native
+> cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\build_script_build-00mfkiqprud0d\s-hly6473tb6-1tfow5m-30m8vh250c0q4hc65rcqkblu2`: 拒绝访问。 (os error 5)
+
+warning: `daymark` (build script) generated 1 warning
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark_lib-0lp01ts65my0i\s-hlvx1vak6e-0uhlr06-d7lqhrkukzniwopg0adinw8v7`: 拒绝访问。 (os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark_lib-0lp01ts65my0i\s-hlvx3na330-1a5j8z8-2rqsh2w53o800sqb06kuhmq7d`: 拒绝访问。 (os error 5)
+
+warning: linker stdout: 正在创建库 F:\PythonProject\Daymark\src-tauri\target\debug\deps\daymark_lib.dll.lib 和对象 F:\PythonProject\Daymark\src-tauri\target\debug\deps\daymark_lib.dll.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark_lib-35agnaepe9l81\s-hlw4q0vbfp-07qtd2y-7teojd9ow25tzkrna5mmskly4`: 拒绝访问。 (os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark_lib-35agnaepe9l81\s-hly660sdep-1ll29kv-7teojd9ow25tzkrna5mmskly4`: 拒绝访问。 (os error 5)
+
+warning: `daymark` (lib) generated 3 warnings
+warning: `daymark` (lib test) generated 2 warnings
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark-0rs8qu6y2i9v8\s-hlvx387pu0-1ij6qpe-7x4uc8aqdvihp8g34tlbbncv4`: 拒绝访问。 (os error 5)
+
+warning: failed to garbage collect finalized incremental compilation session directory `\\?\F:\PythonProject\Daymark\src-tauri\target\debug\incremental\daymark-0rs8qu6y2i9v8\s-hlvx4nuxqa-0neaipc-0ylhh286n6xz8mfsx8r2y4vcg`: 拒绝访问。 (os error 5)
+
+warning: `daymark` (bin "daymark" test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+     Running unittests src\lib.rs (src-tauri\target\debug\deps\daymark_lib-4078f448c79467ab.exe)
+
+running 37 tests
+test database::tests::a_new_planned_session_cannot_omit_its_utc_offset ... ok
+test database::tests::execution_records_reject_invalid_or_reversed_utc_intervals ... ok
+test database::tests::first_open_creates_the_current_schema ... ok
+test database::tests::a_planned_session_can_cross_midnight_without_rewriting_local_facts ... ok
+test database::tests::a_session_can_be_moved_and_cancelled_without_copying_its_task ... ok
+test database::tests::calendar_session_changes_roll_back_as_one_transaction ... ok
+test backup::tests::restore_rejects_a_v7_backup_that_is_missing_milestone_outcomes ... ok
+test database::tests::ending_an_execution_and_updating_progress_is_atomic ... ok
+test database::tests::an_old_schema_is_upgraded_without_losing_existing_tasks ... ok
+test database::tests::an_expired_unreached_milestone_is_frozen_into_an_outcome_snapshot_once ... ok
+test database::tests::a_frozen_milestone_cannot_be_changed_or_deleted ... ok
+test backup::tests::restore_rejects_a_sqlite_file_that_is_missing_required_domain_tables ... ok
+test database::tests::only_one_execution_can_be_active_at_a_time ... ok
+test backup::tests::restore_rejects_a_v6_backup_that_is_missing_project_milestones ... ok
+test backup::tests::preview_reports_whether_settings_are_included ... ok
+test database::tests::ordered_task_milestone_requires_every_task_through_the_target ... ok
+test database::tests::project_and_tasks_are_saved_as_one_transaction ... ok
+test phase2_tests::bilibili_public_metadata_is_mapped_without_treating_media_as_progress ... ok
+test database::tests::phase_2_batch_scheduling_is_atomic_and_time_blocks_can_be_removed ... ok
+test backup::tests::refreshing_a_daily_backup_captures_changes_made_later_that_day ... ok
+test database::tests::schedule_draft_rejects_mismatched_occurrences_and_rolls_back_everything ... ok
+test database::tests::rescue_prompt_is_recorded_once_per_session ... ok
+test database::tests::recurring_habit_and_occurrence_state_are_persisted_without_a_normal_pool_task ... ok
+test database::tests::planned_actual_and_progress_facts_remain_separate ... ok
+test database::tests::project_progress_milestone_uses_the_existing_percentage_scale ... ok
+test database::tests::reached_milestones_do_not_freeze_outcomes ... ok
+test database::tests::task_and_initial_calendar_session_are_created_atomically ... ok
+test backup::tests::a_backup_restores_into_a_clean_install ... ok
+test database::tests::skipping_a_scheduled_habit_session_updates_its_occurrence_atomically ... ok
+test database::tests::v3_upgrade_preserves_preexisting_unfinished_records_without_allowing_more ... ok
+test database::tests::time_blocks_can_be_updated_and_invalid_updates_are_rejected ... ok
+test database::tests::v5_upgrade_adds_empty_project_constraints_without_losing_projects ... ok
+test backup::tests::a_migratable_backup_carries_tauri_store_preferences ... ok
+test database::tests::project_deadline_and_typed_milestones_round_trip_with_relation_validation ... ok
+test backup::tests::daily_backups_are_deduplicated_and_keep_the_latest_seven ... ok
+test backup::tests::restore_creates_a_pre_restore_backup_and_rejects_invalid_input ... ok
+test backup::tests::preference_failure_rolls_back_the_database_restore ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+     Running unittests src\main.rs (src-tauri\target\debug\deps\daymark-c35abc746e413f12.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

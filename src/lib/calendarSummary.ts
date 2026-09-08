@@ -67,10 +67,9 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
   const milestones = workspace.projectMilestones
     .filter((milestone) => milestone.targetLocalDate === date)
     .sort((left, right) => left.sortOrder - right.sortOrder || left.title.localeCompare(right.title));
-  const events = workspace.progressEvents.filter((event) => localDateFromUtc(event.occurredAtUtc) === date && event.toProgress > event.fromProgress);
+  const events = workspace.progressEvents.filter((event) => localDateFromUtc(event.occurredAtUtc) === date);
   const completedTasks = uniqueTasks(events.filter((event) => event.toProgress === 100).map((event) => tasksById.get(event.taskId)));
-  const completedIds = new Set(completedTasks.map((task) => task.id));
-  const progressedTasks = uniqueTasks(events.filter((event) => !completedIds.has(event.taskId)).map((event) => tasksById.get(event.taskId)));
+  const progressedTasks = uniqueTasks(events.map((event) => tasksById.get(event.taskId)));
   const missedTasks = uniqueTasks(workspace.executionSessions
     .filter((session) => session.localDate === date && session.status === "missed")
     .map((session) => tasksById.get(session.taskId)));
@@ -79,8 +78,8 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
     ...deadlines.map((task) => ({ id: `deadline:${task.id}`, kind: "deadline" as const, label: task.title, taskId: task.id, projectId: null, milestoneId: null, urgency: deadlineUrgency(date, today) })),
     ...projectDeadlines.map((project) => ({ id: `projectDeadline:${project.id}`, kind: "projectDeadline" as const, label: project.title, taskId: null, projectId: project.id, milestoneId: null, urgency: deadlineUrgency(project.deadlineLocal!, today) })),
     ...milestones.map((milestone) => ({ id: `milestone:${milestone.id}`, kind: "milestone" as const, label: milestone.title, taskId: null, projectId: milestone.projectId, milestoneId: milestone.id, urgency: deadlineUrgency(milestone.targetLocalDate, today) })),
-    ...(completedTasks.length ? [{ id: "completed", kind: "completed" as const, label: `完成 ${completedTasks.length} 项`, taskId: null, projectId: null, milestoneId: null }] : []),
-    ...(progressedTasks.length ? [{ id: "progressed", kind: "progressed" as const, label: `推进 ${progressedTasks.length} 项 · +${progressDelta}%`, taskId: null, projectId: null, milestoneId: null }] : []),
+    ...(completedTasks.length ? [{ id: "completed", kind: "completed" as const, label: `曾完成 ${completedTasks.length} 项`, taskId: null, projectId: null, milestoneId: null }] : []),
+    ...(progressedTasks.length ? [{ id: "progressed", kind: "progressed" as const, label: `进度变化 ${progressedTasks.length} 项 · ${progressDelta >= 0 ? "+" : ""}${progressDelta} 百分点`, taskId: null, projectId: null, milestoneId: null }] : []),
     ...(missedTasks.length ? [{ id: "missed", kind: "missed" as const, label: `未推进 ${missedTasks.length} 项`, taskId: null, projectId: null, milestoneId: null }] : []),
   ];
 

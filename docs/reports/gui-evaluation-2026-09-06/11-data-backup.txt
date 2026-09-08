@@ -1,0 +1,91 @@
+Window: "Daymark", App: daymark.exe.
+	0 窗口 Daymark Secondary Actions: Raise
+		1 窗格
+			2 窗格 Daymark
+				3 窗格 (disabled)
+				4 区域 Daymark - Web 内容
+					5 区域
+						6 区域
+						7 区域
+							8 区域
+								9 文档 Daymark ID: RootWebArea
+									10 组
+										11 组 ID: root
+											12 链接 跳到主要内容
+											13 补充
+												14 组 Daymark
+													15 文本 D
+												16 导航 主导航
+													17 按钮 今日
+													18 按钮 日历
+													19 按钮 项目
+													20 按钮 7 天回顾
+													21 按钮 数据
+													22 按钮 设置
+												23 文本 已保存到本机
+											24 主要 ID: main-content
+												163 章节标题
+													164 文本 SQLITE · 每日 7 份
+													165 标题 数据与安全
+												166 标题 本地备份
+												167 文本 每次核心写入后刷新当天备份；恢复前会先保存当前状态并验证目标文件。
+												168 按钮 立即备份
+												169 按钮 导出
+												170 按钮 恢复
+												185 状态
+													186 文本 已刷新今天的备份
+												171 文本 每日备份
+												172 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-06.db
+												173 文本 每日备份
+												174 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-05.db
+												175 文本 每日备份
+												176 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-04.db
+												177 文本 每日备份
+												178 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-01.db
+												179 文本 每日备份
+												180 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-31.db
+												181 文本 每日备份
+												182 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-28.db
+												183 文本 每日备份
+												184 文本 C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-10.db
+								64 区域
+		65 标题栏
+			66 菜单栏 系统 ID: MenuBar
+				71 菜单项 系统
+			68 按钮 最小化
+			69 按钮 最大化
+			70 按钮 关闭
+
+Document text: ```
+跳到主要内容
+D
+今日
+日历
+项目
+7 天回顾
+数据
+设置
+已保存到本机
+SQLITE · 每日 7 份
+数据与安全
+本地备份
+每次核心写入后刷新当天备份；恢复前会先保存当前状态并验证目标文件。
+立即备份
+导出
+恢复
+已刷新今天的备份
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-06.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-05.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-04.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-09-01.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-31.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-28.db
+每日备份
+C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\backups\daymark-2026-08-10.db
+```
