@@ -11,6 +11,6 @@ test-results/
 src-tauri/target/
 src-tauri/gen/
 artifacts/
-output/playwright/
+output/
 rustup-init.exe
 .codegraph/
