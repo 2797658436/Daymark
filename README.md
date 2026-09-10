@@ -8,6 +8,7 @@ Daymark 是一个本地优先的 Windows 计划管理工具。当前仓库已交
 - [领域上下文](CONTEXT.md)：产品原则与统一领域语言。
 - [架构决策](docs/adr/)：长期技术决策及原因。
 - [阶段规格](docs/specs/) 与 [UI 规范](docs/design/UI-SPEC.md)：产品范围、验收标准和目标体验。
+- [下一阶段技术方案：日常使用闭环与交互稳定性](docs/specs/0005-phase-4-daily-workflow-and-reliability.md)：阶段 4 规划草案，包含气泡、日历浏览状态、截止事项、周期回顾与发布验收，尚未实施。
 
 ## 当前已实现
 
