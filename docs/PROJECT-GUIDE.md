@@ -42,12 +42,13 @@ Daymark 当前可交付能力已完成 **阶段 3 M1–M7：完整日历体验�
 - 执行提醒、启动摘要、关闭窗口驻留托盘、托盘左键／菜单恢复和显式退出；提醒成功后 30 分钟内首次托盘恢复会定位对应日历时段，其他情况进入今日页。
 - 暖杏浅色／深色／跟随系统主题、减少动态偏好（设置页可选跟随系统／减少／完整）、100%–200% 缩放和基础键盘／辅助技术支持。
 - 设置页可编辑零个或多个默认时段（名称、起止时间、适用星期）并新增或删除时段，也可设置日视图默认显示模式；数据页持续显示自动备份失败并可在成功后清除。
+- 阶段 4 P4-01／P4-02：统一下沉浮层宿主（inert 引用计数、Tab 循环与 Esc 的顶层唯一性、焦点归还）与编辑会话（草稿、提交互斥、过期请求丢弃）；任务与里程碑编辑面已接入，项目、时间块、习惯、默认时段、导入 5 个编辑面待 P4-03 接入。本阶段起点见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md)。
 
 当前已知边界：
 
 - 阶段规格中的开机自启尚未实现；仓库没有 autostart 插件或设置项。
 - 提醒由运行中的前端每 30 秒检查今日计划并调用桌面通知；应用必须仍在托盘进程中。Windows 通知插件本身没有任务级点击回调；原生 `AppState` 会暂存最近成功提醒的时段及发送时刻，30 分钟内首次托盘恢复直接进入对应日历日期、临时显露并高亮该时段，随后消费该目标。其他原生入口可发送 `daymark-open-session` 事件复用同一路由；目标不存在时回退今日页。
-- 连续日视图当前使用三日缓冲和边界平移，不做无限日期 DOM；日／周时间轴的连续比例限制在每小时 28–96px，月视图继续使用紧凑／标准／详细三档行高。
+- 连续日视图当前使用三日缓冲和边界平移，不做无限日期 DOM；日／周时间轴的连续比例限制在每小时 28–192px，月视图使用紧凑／标准／详细三档行高（52–160px）。缩放合法区间与档位预设同源于 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET`（`settings.ts`），滚轮钳制也读同一处，不再各自写字面量。
 - 阶段 3 M1–M6 已完成，M7 四段（M7.1 核心数据 / M7.2 项目编辑 / M7.3 日历标记 / M7.4 历史与风险）亦已全部完成。M7 以项目截止日期、项目里程碑与到期结果快照为第一等核心事实（schema v6→v7）；日历复用 M6 标记接缝呈现项目截止旗帜与里程碑菱形。Windows 通知插件仍不提供任务级点击回调，M4 通过提醒后的托盘恢复、应用内今日页入口和 `daymark-open-session` 事件完成目标路由。独立截止任务页、完整日／周／月回顾、复杂重复规则、AI 规划和高级布局自定义仍属后续阶段。
 - 阶段 3 已完成正式验收，详见 [`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)：规格 0003 的 M1–M6 与规格 0004 的 M7.1–M7.4 全部验收标准满足，Vitest 123 / Rust 36 / Playwright 16 全通过。
 - 自动排程的"单次投入时长"是优先尝试的目标长度而非不可拆分的硬约束；所有任务都可被部分安排，部分安排只生成一个执行时段、不自动补排剩余时长（2026-08-10 对规格 0002 AC4 的澄清，与 CONTEXT.md 领域语言一致）。
@@ -146,12 +147,17 @@ flowchart LR
 | [`src/lib/settings.ts`](../src/lib/settings.ts) | 显示、页面、日历、提醒、启动摘要和默认时段设置的默认值、规范化与顺序写入；Tauri Store 与浏览器后端。 |
 | [`src/lib/courseImport.ts`](../src/lib/courseImport.ts) | 把常见分集文本与末尾时长解析为可编辑、可取消选择的有序任务草稿。 |
 | [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、可调宽任务池、窄窗覆盖规则、纵向日历、焦点、缩放重排和减少动态规则。 |
-| [`src/components/ui/button.tsx`](../src/components/ui/button.tsx) | 当前唯一共享 UI 组件；通过 CVA 提供按钮变体、尺寸和转发 ref。 |
+| [`src/components/ui/button.tsx`](../src/components/ui/button.tsx) | 共享按钮组件；通过 CVA 提供按钮变体、尺寸和转发 ref。 |
+| [`src/components/ui/floating-panel.tsx`](../src/components/ui/floating-panel.tsx) | 锚点气泡：位置、12px 边界避让、内容测量与外部指针守卫。模态语义（`aria-modal`、inert、Tab／Esc）由浮层宿主按 `kind` 注入，自身不决定。 |
+| [`src/components/ui/overlay-host.tsx`](../src/components/ui/overlay-host.tsx) | 浮层宿主：层级顺序、`.app-shell` 的 inert **引用计数**、Tab 循环与 Esc 的顶层唯一性、关闭后的焦点归还。不承担业务保存与气泡几何。 |
+| [`src/hooks/useEditorSession.ts`](../src/hooks/useEditorSession.ts) | 编辑会话：草稿、同步提交互斥、失败保留草稿、过期请求丢弃，以及供恢复备份等破坏性动作查询的活动会话注册表。 |
 | [`src/App.test.tsx`](../src/App.test.tsx) | 今日壳、任务池、纵向时间轴、阶段 2 行动闭环，以及阶段 3 三视图／锚点、跨日边界、当前安排双进度、待回顾三操作、计划／实际叠加、折叠计数／临时展开、全天截止溢出、周／月键盘导航、选中态、跨页目标显露和外部 session 事件路由测试。 |
 | [`src/lib/calendarSummary.test.ts`](../src/lib/calendarSummary.test.ts) | 单日摘要优先级、三行截断、进度合计、未推进事实与任务截止紧迫度边界测试。 |
 | [`src/lib/calendarTimeline.test.ts`](../src/lib/calendarTimeline.test.ts) | 重叠与跨午夜默认时段合并、跨午夜时段的星期归属、无默认时段的当前两小时窗口，以及折叠时间轴分钟／像素可逆映射测试。 |
 | [`src/lib/courseImport.test.ts`](../src/lib/courseImport.test.ts) | 分集标题、时长、空行与重复标题解析测试。 |
-| [`src/lib/settings.test.ts`](../src/lib/settings.test.ts) | 设置重启恢复、无效值回退、写入排序、恢复值规范化、吸附关闭、零个／多个默认时段，以及阶段 3 日历锚点／日视图模式／三档与连续比例／实际记录开关规范化测试。 |
+| [`src/lib/settings.test.ts`](../src/lib/settings.test.ts) | 设置重启恢复、无效值回退、写入排序、恢复值规范化、吸附关闭、零个／多个默认时段，阶段 3 日历锚点／日视图模式／三档与连续比例／实际记录开关规范化，以及缩放预设必须落在合法区间内的回归测试。 |
+| [`src/components/ui/overlay-semantics.test.tsx`](../src/components/ui/overlay-semantics.test.tsx) | 三类浮层语义（动作气泡不锁背景）、inert 引用计数、Esc／Tab 顶层唯一性与焦点归还测试。 |
+| [`src/hooks/useEditorSession.test.tsx`](../src/hooks/useEditorSession.test.tsx) | 提交互斥、旧请求不串对象、失败保留草稿与活动会话注册表测试。 |
 | [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) | Tauri 组装、托盘与关闭行为、桌面通知及 30 分钟内的提醒目标恢复事件、`AppState`、Command、后台串行执行、写后备份及 SQLite／Store 协调恢复。 |
 | [`src-tauri/src/database.rs`](../src-tauri/src/database.rs) | SQLite v7 连接、迁移、工作区查询、任务／项目／里程碑／到期结果／排程／执行／进度／习惯／时间块／挽救事实事务写入和时间校验。 |
 | [`src/lib/scheduling.ts`](../src/lib/scheduling.ts) | 自动排程 Lite 的确定性候选排序、空档扣除、最小时长与固定习惯时间计算。 |
@@ -241,7 +247,7 @@ flowchart LR
 - `calendarDayMode`: `defaultSlots | fullDay`；日视图显示模式，默认 `fullDay` 兼容旧设置，用户切换后持久化
 - `calendarAnchors`: 日／周／月各自最近一次的本地日期锚点；缺失或非法日期回退为 `null`
 - `calendarZoom`: 日／周／月各自最近的 `compact | standard | detailed` 可见档位；点击入口会把连续比例恢复到该档预设
-- `calendarScale`: 日／周／月各自的实际纵向比例；日／周为每小时 28–96px 的连续值，月视图保存当前行高；旧设置缺失时从 `calendarZoom` 推导
+- `calendarScale`: 日／周／月各自的实际纵向比例；日／周为每小时 28–192px 的连续值（滚轮钳制读同一区间），月视图为 52–160px 的档位行高；缺失或越界时回退到 `calendarZoom` 对应预设。合法区间与预设同源于 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET`，规范化不会产出自己判为非法的值
 - `showActualRecords`: 是否在日／周日历叠加实际执行记录，默认关闭；只改变呈现，不写入或移动计划时段
 - `showActualRecordsControl`: 是否在日历工具栏显示实际记录开关，默认开启；隐藏入口不会改变 `showActualRecords` 的已保存值
 - `snapMinutes`: `off | 15 | 30 | 60`；`off` 表示拖拽与缩放不吸附
@@ -323,7 +329,9 @@ flowchart TD
 
 ## 11. 测试体系
 
-当前测试库存为 Rust **37** 个、Vitest **125** 个、Playwright **24** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。
+当前测试库存为 Rust **37** 个、Vitest **144** 个（13 个文件）、Playwright **24** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期（见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md) §8）。
+
+已知测试侧不稳定性（非产品缺陷）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例存在 `108px` 滚动时序竞态，属 P4-04 的最小滚动仲裁范围；Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
 
 | 层级 | 当前验证重点 |
 | --- | --- |

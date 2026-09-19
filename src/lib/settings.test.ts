@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./settings";
+import { CALENDAR_SCALE_RANGE, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./settings";
 
 class MemoryBackend implements SettingsBackend {
   value: unknown;
@@ -158,6 +158,26 @@ describe("settings persistence", () => {
     });
     expect(repository.normalize({ calendarZoom: { day: "detailed", week: "compact", month: "standard" } }).calendarScale)
       .toEqual({ day: 96, week: 48, month: 120 });
+  });
+
+  it("keeps every calendar zoom preset inside the range normalization accepts", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    for (const view of ["day", "week", "month"] as const) {
+      for (const zoom of ["compact", "standard", "detailed"] as const) {
+        const preset = calendarScaleForZoom(view, zoom);
+        const [minimum, maximum] = CALENDAR_SCALE_RANGE[view];
+        expect(preset, `${view}/${zoom} 预设必须落在合法区间内`).toBeGreaterThanOrEqual(minimum);
+        expect(preset, `${view}/${zoom} 预设必须落在合法区间内`).toBeLessThanOrEqual(maximum);
+      }
+    }
+
+    // 曾经越界的正是月视图 detailed：预设 160 高于上界 132，而校验失败的回退
+    // 又调用同一个预设，于是规范化产出自己判为非法的值。
+    expect(calendarScaleForZoom("month", "detailed")).toBe(160);
+    expect(repository.normalize({ calendarZoom: { month: "detailed" } }).calendarScale.month).toBe(160);
+    expect(repository.normalize({ calendarScale: { month: 160 } }).calendarScale.month).toBe(160);
+    // 越界值仍必须回退到当前档位预设（默认 standard = 120）。
+    expect(repository.normalize({ calendarScale: { month: 200 } }).calendarScale.month).toBe(120);
   });
 
   it("keeps the day display mode as a persisted UI preference", () => {

@@ -2,6 +2,22 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createNativeApi, type ProjectMilestone, type TimeBlock } from "./native";
 
+/**
+ * 相对今天生成本地日期。
+ *
+ * 里程碑一旦 targetLocalDate 早于今天，就会在 read()/write() 里被
+ * freezeExpiredPreviewOutcomes 冻结成不可改写的历史结果（native.ts:429）。
+ * 所以夹具写死日期等于埋定时炸弹：那一天一过，用例就会以
+ * 「已到期里程碑属于历史记录」失败 —— 2026-09-15 那次就是这样炸的。
+ * 凡是有到期语义的夹具，都必须相对今天取。
+ */
+function isoDaysFromNow(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
 describe("browser preview project constraints", () => {
   beforeEach(() => localStorage.clear());
 
@@ -11,19 +27,21 @@ describe("browser preview project constraints", () => {
       tasks: [{ id: "task-1", projectId: "project-1", title: "第一步", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0 }],
     }));
     const api = createNativeApi();
+    const projectDeadline = isoDaysFromNow(30);
+    const milestoneTarget = isoDaysFromNow(10);
 
     const migrated = await api.getWorkspace();
     expect(migrated.projects[0].deadlineLocal).toBeNull();
     expect(migrated.projectMilestones).toEqual([]);
 
-    await api.updateProject({ ...migrated.projects[0], deadlineLocal: "2026-09-30" });
+    await api.updateProject({ ...migrated.projects[0], deadlineLocal: projectDeadline });
     const milestone: ProjectMilestone = {
-      id: "milestone-1", projectId: "project-1", title: "完成第一步", targetLocalDate: "2026-09-15", sortOrder: 0,
+      id: "milestone-1", projectId: "project-1", title: "完成第一步", targetLocalDate: milestoneTarget, sortOrder: 0,
       criterionKind: "orderedTask", targetTaskId: "task-1", targetCount: null, targetProgress: null,
     };
     await api.createProjectMilestone(milestone);
     const updated = await api.updateProjectMilestone({ ...milestone, title: "完成基础阶段" });
-    expect(updated.projects[0].deadlineLocal).toBe("2026-09-30");
+    expect(updated.projects[0].deadlineLocal).toBe(projectDeadline);
     expect(updated.projectMilestones[0].title).toBe("完成基础阶段");
     expect((await api.deleteProjectMilestone("milestone-1")).projectMilestones).toEqual([]);
   });
@@ -35,7 +53,7 @@ describe("browser preview project constraints", () => {
     }));
     const api = createNativeApi();
     await expect(api.createProjectMilestone({
-      id: "bad", projectId: "project-1", title: "错误目标", targetLocalDate: "2026-09-15", sortOrder: 0,
+      id: "bad", projectId: "project-1", title: "错误目标", targetLocalDate: isoDaysFromNow(10), sortOrder: 0,
       criterionKind: "orderedTask", targetTaskId: "task-2", targetCount: null, targetProgress: null,
     })).rejects.toThrow("同一项目");
   });
@@ -75,6 +93,22 @@ describe("browser preview project constraints", () => {
     const afterMutation = await api.getWorkspace();
     expect(afterMutation.milestoneOutcomes).toHaveLength(1);
     expect(afterMutation.milestoneOutcomes[0].resultText).toContain("1/2");
+  });
+
+  it("freezes only milestones whose target date has already passed", async () => {
+    // 冻结边界是 targetLocalDate < today：昨天算已到期，当天不算。
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [{ id: "project-1", title: "项目一", deadlineLocal: null }],
+      tasks: [],
+      projectMilestones: [
+        { id: "ms-expired", projectId: "project-1", title: "昨天到期", targetLocalDate: isoDaysFromNow(-1), sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null },
+        { id: "ms-today", projectId: "project-1", title: "今天到期", targetLocalDate: isoDaysFromNow(0), sortOrder: 1, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null },
+      ],
+    }));
+    const api = createNativeApi();
+
+    const workspace = await api.getWorkspace();
+    expect(workspace.milestoneOutcomes.map((outcome) => outcome.milestoneId)).toEqual(["ms-expired"]);
   });
 
   it("updates a time block's title and interval and rejects invalid edits", async () => {

@@ -25,7 +25,9 @@ async function waitForServer() {
 
 function runPlaywright() {
   return new Promise((resolve, reject) => {
-    const runner = spawn(process.execPath, [playwrightEntry, "test"], {
+    // 透传 CLI 参数（例如 `node scripts/run-e2e.mjs --workers=1`）：
+    // 并发 worker 下两个 spec 冷编译会互相争抢，M3/M4 更容易出现滚动竞态假红。
+    const runner = spawn(process.execPath, [playwrightEntry, "test", ...process.argv.slice(2)], {
       cwd: projectDirectory,
       stdio: "inherit",
     });

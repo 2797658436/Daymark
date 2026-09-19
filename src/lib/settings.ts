@@ -176,20 +176,42 @@ function normalizeCalendarZoom(value: unknown): CalendarZoomByView {
   return { day: valid(candidate.day), week: valid(candidate.week), month: valid(candidate.month) };
 }
 
-function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView): CalendarScaleByView {
-  const candidate = value && typeof value === "object" ? value as Partial<CalendarScaleByView> : {};
-  const valid = (view: CalendarView, scale: unknown) => {
-    const [minimum, maximum] = view === "month" ? [52, 132] : [28, 192];
-    return typeof scale === "number" && Number.isFinite(scale) && scale >= minimum && scale <= maximum
-      ? Math.round(scale)
-      : calendarScaleForZoom(view, zoom[view]);
-  };
-  return { day: valid("day", candidate.day), week: valid("week", candidate.week), month: valid("month", candidate.month) };
-}
+/**
+ * 日历各视图纵向缩放的合法区间与档位预设。
+ *
+ * 两者必须出自同一处定义：校验上界与预设值一旦分叉，预设就会落在区间外，
+ * 而校验失败的回退路径又调用同一个预设 —— 于是「规范化」会产出自己判为非法的值。
+ * 月视图 detailed 预设曾为 160 而上界为 132，正是这个缺陷。
+ * 界面滚轮钳制（App.tsx）也必须读这里，不能再写字面量。
+ */
+export const CALENDAR_SCALE_RANGE: Record<CalendarView, readonly [number, number]> = {
+  day: [28, 192],
+  week: [28, 192],
+  // 上界必须容纳 detailed 预设 160。月视图只通过档位设置，没有连续缩放。
+  month: [52, 160],
+};
+
+const CALENDAR_SCALE_PRESET: Record<CalendarView, Record<CalendarZoom, number>> = {
+  day: { compact: 48, standard: 72, detailed: 96 },
+  week: { compact: 48, standard: 72, detailed: 96 },
+  month: { compact: 80, standard: 120, detailed: 160 },
+};
 
 export function calendarScaleForZoom(view: CalendarView, zoom: CalendarZoom) {
-  if (view === "month") return zoom === "compact" ? 80 : zoom === "detailed" ? 160 : 120;
-  return zoom === "compact" ? 48 : zoom === "detailed" ? 96 : 72;
+  return CALENDAR_SCALE_PRESET[view][zoom];
+}
+
+/** 把外来值收敛到该视图的合法区间；非法返回 null，由调用方决定回退。 */
+function normalizeCalendarScaleValue(view: CalendarView, scale: unknown) {
+  const [minimum, maximum] = CALENDAR_SCALE_RANGE[view];
+  return typeof scale === "number" && Number.isFinite(scale) && scale >= minimum && scale <= maximum ? Math.round(scale) : null;
+}
+
+function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView): CalendarScaleByView {
+  const candidate = value && typeof value === "object" ? value as Partial<CalendarScaleByView> : {};
+  const valid = (view: CalendarView, scale: unknown) =>
+    normalizeCalendarScaleValue(view, scale) ?? calendarScaleForZoom(view, zoom[view]);
+  return { day: valid("day", candidate.day), week: valid("week", candidate.week), month: valid("month", candidate.month) };
 }
 
 function isLocalDate(value: unknown): value is string {
