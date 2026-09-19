@@ -516,6 +516,49 @@ fn show_reminder(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn disable_webview_external_drop(window: &tauri::WebviewWindow) {
+    // WebView2 已知问题（MicrosoftEdge/WebView2Feedback#2805）：AllowExternalDrop
+    // 保持默认开启时，WebView2 注册的原生 OLE 拖放目标会吞掉页面内部的
+    // HTML5 拖拽，导致 dragstart 永远不触发（浏览器里正常、桌面版拖不动）。
+    //
+    // tauri.conf.json 配的是 dragDropEnabled: false（我们并不消费拖入的文件），
+    // 这会让 tauri-runtime-wry 不注册拖放处理器；而 wry 只在处理器存在时才调用
+    // SetAllowExternalDrop(false)（wry 0.55.1 webview2/mod.rs:149）。所以那条
+    // 路径不会替我们关闭外部拖放 —— 下面这次显式调用才是真正生效的机制，不是兜底。
+    fn log(line: &str) {
+        // 诊断日志只在 debug 构建写盘，release 启动不应在 %TEMP% 留下文件。
+        #[cfg(debug_assertions)]
+        {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(std::env::temp_dir().join("daymark-webview2.log"))
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = line;
+    }
+
+    let dispatched = window.with_webview(|webview| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller4;
+        use windows_core::Interface;
+        match webview.controller().cast::<ICoreWebView2Controller4>() {
+            Ok(controller4) => match unsafe { controller4.SetAllowExternalDrop(false) } {
+                Ok(()) => log("SetAllowExternalDrop(false) ok"),
+                Err(error) => log(&format!("SetAllowExternalDrop(false) failed: {error}")),
+            },
+            Err(error) => log(&format!("cast to ICoreWebView2Controller4 failed: {error}")),
+        }
+    });
+    if let Err(error) = dispatched {
+        log(&format!("with_webview dispatch failed: {error}"));
+    }
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -718,6 +761,10 @@ pub fn run() {
                 }
             })
             .build(app)?;
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                disable_webview_external_drop(&window);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
