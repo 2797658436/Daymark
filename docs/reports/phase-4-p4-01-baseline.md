@@ -1,7 +1,9 @@
 # 阶段 4 P4-01 基线报告：固定基线、核对文档差异、记录缩放与滚动现状
 
 日期：2026-09-10。对应工作包：P4-01（`docs/specs/0005-phase-4-daily-workflow-and-reliability.md` §10），依赖：无。
-性质：**检测与记录**。本报告不修改产品代码、不改动既有文档结论；需要用户决定的项集中在第 7 节。
+性质：**检测、记录与建样本**。本报告不改动产品代码、不改动既有文档结论。
+状态：**P4-01 四项产出已全部完成**（固定基线、建立可重复样本、记录缩放与滚动行为、核对文档差异）。待决定事项集中在第 8 节。
+相关记录：执行期间发现并处理了一起 git 对象库事故，另见 [`git-object-store-incident-2026-09-10.md`](git-object-store-incident-2026-09-10.md)。
 
 ## 1. 基线固化
 
@@ -75,7 +77,21 @@
 
 `page.reload()` 返回时日历**尚未挂载**（探针 A 快照：`dayTracks = 0`、`data-calendar-scale` 为 null）。App 的首次定位由 `src/App.tsx:616-627` 的**双 `requestAnimationFrame`** 执行，守卫 `didAutoScrollToNow` 只防止自身重复，**不感知外部对 `scrollTop` 的写入**。因此用例"reload 后手工写 `scrollTop`"与 App"挂载后自动定位当前时间"之间没有仲裁，两者先后顺序取决于时序。
 
-这正是规格 M9 §5.2 要求"单一滚动仲裁"要消除的那类缺陷。但需注意：位移在多次运行中恒为 108px，与竞态应有的随机性并不完全吻合，**该机制目前只是最可疑的候选，不能作为结论**。判定实验（写入用例内、需用户授权）见第 7 节。
+这正是规格 M9 §5.2 要求"单一滚动仲裁"要消除的那类缺陷。不过 108px 在多次运行中恒定，与竞态应有的随机性不完全吻合，因此它只是**最可疑的候选**。
+
+### 3.4 判定结论：是 flaky（时序竞态），不是确定性产品缺陷
+
+判定实验：单跑该用例 `--repeat-each=5`，结果 **1 通过 / 4 失败**，4 次失败都落在同一断言（`phase1.spec.ts:339`）、位移恒为 108px。
+
+推理：用例本身不稳定 → 属时序竞态。108px 之所以恒定，是因为竞态是**二值**的（App 的首次自动定位要么在用例测量 `before` 之前落地、要么在其后），而 5 次运行时刻相近、"当前时间"一致，故位移一致。
+
+据此得到的处置方向（供 P4-04 起手）：
+
+- **不需要重写缩放数学**：§3.2 的三次探针证明锚点补偿算法正确（位移 0，`scrollTop` 增量精确等于轨道高度增量 × 锚点比例）。
+- **要做的是滚动仲裁**：让 App 的首次自动定位与外部／程序性滚动有明确优先级与 generation 失效机制，与规格 M9 §5.2 的要求一致。
+- **用例自身也要收敛**：应先断言滚动已稳定再触发缩放，否则 AC05–AC07 没有可靠的回归网。
+
+尚未定位的细节：按 48→52 的比例反解，108px 对应锚点分钟约 09:55，与"自动定位到当前时间"并不吻合，说明还有第二个因素参与。需在 P4-04 就地插桩确认，本报告不臆测。
 
 ## 4. 核对文档差异（规格 §2 两项）
 
@@ -110,9 +126,35 @@
 | 月摘要与回顾各自遍历事实 | 确认。`calendarSummary.ts` 与 `review.ts` 分别遍历 `progressEvents`／`executionRecords` 等 |
 | 设置规范化与串行保存接缝 | 确认（`settings.ts` 的 `normalizeSettings`、`writeQueue`） |
 
-## 6. 可重复样本现状
+## 6. 可重复样本（已交付）
 
-**不存在。** `scripts/` 只有 `run-e2e.mjs` 与 `tauri-build-env.sh`；`e2e/` 与 `src/lib/*.test.ts` 中没有任何固定随机种子的性能样本（100 项课程 / 1,000 项任务 / 10,000 条历史记录）。规格 §8 的性能预算目前没有可执行载体，属 P4-01 未完成部分。
+新增 [`scripts/fixtures/perf-sample.mjs`](../../scripts/fixtures/perf-sample.mjs) —— 纯确定性生成器，按规格 §8 口径产出 100 项课程 / 1,000 项任务 / 10,000 条混合历史记录。
+
+```powershell
+node scripts/fixtures/perf-sample.mjs                                        # 打印统计，不落盘
+node scripts/fixtures/perf-sample.mjs --out output/perf-sample.json          # 落盘（output/ 已被 .gitignore 覆盖）
+node scripts/fixtures/perf-sample.mjs --anchor 2026-09-10 --seed 20260910    # 完全冻结
+node scripts/fixtures/perf-sample.mjs --courses 5 --tasks 30 --history 200   # 缩量
+```
+
+实测结果（`--anchor 2026-09-10 --seed 20260910`）：
+
+| 项 | 值 |
+| --- | --- |
+| `projects` / `courses` | 100 / 100 |
+| `tasks` | 1,000（项目内 900 + 独立 95 + 习惯内部 5） |
+| 历史记录合计 | 10,000（执行时段 3,000 / 实际记录 1,500 / 进度事件 5,000 / 时间块 300 / 习惯发生项 200） |
+| 其他 | 里程碑 124、到期结果 64、习惯 5、挽救提示 25、未结束执行记录 1 |
+| 体积 | JSON 约 2.87 MB |
+| workspace sha256（前 16 位） | `24d758200a0ea94d` |
+
+已验证的性质：
+
+1. **确定性**：同 `--seed` + 同 `--anchor` 连跑 3 次，sha256 与字节数完全一致；换 `--seed`（`0916ecf5…`）或换 `--anchor`（`f05cd9be…`）后哈希改变，证明种子确实生效。
+2. **自校验**：内置领域不变量检查（id 唯一、本地日期合法、时钟合法、跨午夜必须"次日 + endLocal < startLocal"、`progress` 与最后一条进度事件一致、进度事件链 `from == 上一条 to`、里程碑达成条件恰好一种、最多一条未结束执行记录、引用完整性等），默认运行；当前全部通过。首次运行时正是它抓出了生成器自身的跨午夜计算错误。
+3. **只读边界**：不连接 SQLite／Tauri／备份协议，只产出浏览器预览层可消费的 `workspace` + `preferences`，可直接写入 `localStorage` 的 `daymark.phase1.workspace` / `daymark.phase0.preferences`。
+
+未做：把样本接入 E2E 或性能预算测量（属 P4-09）；未新增 npm script（保持单文件改动面）。
 
 ## 7. 环境注意事项（影响后续所有验证）
 
@@ -122,9 +164,21 @@
 2. **存在 `HTTP_PROXY`／`HTTPS_PROXY`（`http://127.0.0.1:49695`）**：`curl` 访问 `127.0.0.1` 会走代理（服务不在时会返回 502 而非连接失败）。用 `curl --noproxy '*'` 才能得到真实连通性；Chromium 不受影响。
 3. **Playwright 冷启动偶发超时**：`fullyParallel: false` 但默认 2 个 worker，两个 spec 文件并行冷编译时，各自文件的首个用例会在 `page.goto` 撞上 30s 超时。首次全量跑出现 2 例，重跑不复现。判定为环境性抖动，非产品缺陷。
 
-## 8. 需要用户决定
+## 8. 已决定事项与剩余待决
 
-1. **是否提交并推送。** 当前 `9a2a2c0` 未推送，工作区还有 `README.md` 改动、规格 0005 正文与 `.bak-20260910`、以及未跟踪的 `output/`（31 张 PNG）。按 `docs/PROJECT-GUIDE.md` 第七步，未获明确要求不自动提交。
-2. **`output/` 与 `.bak-20260910` 的去留。** `output/` 未被 `.gitignore` 覆盖，会让 `git status` 长期带噪。
-3. **M3 红灯的处置顺序。** 建议在启动 P4-04（逻辑滚动位置与仲裁）前先判定该用例失败的性质：是"用例与 App 自动定位的时序竞态"（改测试／加仲裁即可）还是产品缺陷（须进 M9）。这需要修改 `e2e/phase1.spec.ts` 或 `App.tsx`，**跨文件改动，等你确认后再动**。
+### 8.1 已办
+
+| 事项 | 处置 | 证据 |
+| --- | --- | --- |
+| 提交并推送 | 已推送 3 个提交（`9a2a2c0` 补推 + 规格 0005 + 本报告） | `17246a3..8d77b11 main -> main`，远端 `refs/heads/main = 8d77b11` |
+| `output/` 造成 `git status` 带噪 | `.gitignore` 由 `output/playwright/` 改为 `output/` | `git check-ignore -v output/perf-sample.json` → `.gitignore:14:output/` |
+| M3 红灯性质未定 | 判定为 flaky（时序竞态），非确定性产品缺陷 | 第 3.4 节，`--repeat-each=5` → 1 通过 / 4 失败 |
+| 可重复样本缺失 | 已交付 `scripts/fixtures/perf-sample.mjs` | 第 6 节，确定性 + 自校验均已验证 |
+
+### 8.2 待决
+
+1. **是否提交本轮新增与修改的内容。** 工作区现有：本报告的第 3.4／6／8 节修订（报告本体已在 `8d77b11` 提交）、新增 `?? docs/reports/git-object-store-incident-2026-09-10.md`、新增 `?? scripts/fixtures/`。仍按 `docs/PROJECT-GUIDE.md` 第七步：未获明确要求不自动提交。
+2. **`docs/specs/0005-*.md.bak-20260910` 的去留。** 当前是 v1.0 的唯一副本，未提交；是否要归档进 `docs/` 或直接删除。
+3. **git 对象库里的 broken link 是否现在处理。** 必须做 repack／prune，**只能在沙箱外的终端完成**（命令见事故记录第 3 节）。不处理只影响 `git maintenance` 的噪音，不阻断任何工作。
+4. **P4-01 是否可直接收尾、进入 P4-02。** P4-02（浮层宿主与编辑会话，任务／里程碑先行接入）依赖 P4-01，可开工；但 M3 红灯的收口属于 P4-04，建议不要把它的修复塞进 P4-02。
 4. **P4-01 剩余部分是否继续。** §6 的可重复样本（固定随机种子的性能夹具）与 §4.2 的缩放配置源统一，都可以在本工作包内完成；后者会改动 `src/lib/settings.ts`，同样需要你确认范围。
