@@ -173,8 +173,8 @@ role="dialog"  aria-modal="true"  aria-label="编辑任务 保留原任务"
 | 项 | 说明 |
 | --- | --- |
 | broken link `e29768bc → 2ec33605` | 仍在。修复需 repack／prune，**只能在沙箱外或 `%TEMP%` 副本执行**（沙箱 safe-delete 会拦截，见 git 事故报告） |
-| 两个提交在 `.git` 恢复中丢失 | `d991782`、`47649b1` 从历史中消失（备份取自它们之前）。**文件内容完好**，现以未跟踪／已修改状态留在工作区，需重新提交 |
-| `git push` | 仍被沙箱网络策略阻断（`github.com` → `198.18.0.28` fake-IP） |
+| 两个提交在 `.git` 恢复中丢失 | `d991782`、`47649b1` 从历史中消失（备份取自它们之前）。**文件内容完好**，已于 2026-09-20 重新提交落地（见 §8） |
+| `git push` | **已推翻原结论**。原记录称「被沙箱网络策略阻断（`github.com` → `198.18.0.28` fake-IP）」；2026-09-20 复测发现真实原因是受限沙箱禁止子进程创建命名管道（`error: cannot create standard input pipe for remote-https: Permission denied`），网络本身通畅。放宽沙箱后 `git push` 一次成功：`8d77b11..f070e03 main -> main` |
 | 临时物待清 | `F:\PythonProject\git-broken-20260910-232811`、`F:\PythonProject\dist-old-20260910-235006`；`%TEMP%\dm-git-backup-20260910-162222` **建议保留**（是完整的可用备份） |
 
 ## 8. 落地前的错误评估与修复
@@ -193,5 +193,20 @@ role="dialog"  aria-modal="true"  aria-label="编辑任务 保留原任务"
 **评估后明确不修**（有依据，非遗漏）：
 
 - **M3／M4 的 `108px` 滚动竞态**：P4-01 §3.4 已判定为时序竞态，根因是缺少滚动仲裁，属 **P4-04** 的工作内容。本次落地前复测两次：`24 passed` 与 `23 passed`，失败即 M3，签名恒为 `Expected <= 2 / Received 108`，与 P4-01 记录完全一致。**未通过放宽断言或删除用例掩盖**。
-- **git broken link 与 push 阻断**：受沙箱限制，须在沙箱外处理（§7）。
+- **git broken link**：受沙箱限制，须在沙箱外处理（§7）。原「push 被网络阻断」的结论已推翻并在 §7 订正 —— 真实原因是沙箱管道限制，放宽后推送成功。
 - **`scripts/drag-probe*.mjs`、`0005-*.bak-20260910`、`dsh-usage/`**：均未入库。前两者理由见 §1.4；`dsh-usage/` 是 agent 工具的运行记录，与本项目无关。
+
+### 8.1 落地提交（2026-09-20）
+
+工作区按逻辑边界拆成四个提交；每个提交各自可编译（`settings.ts` 先于消费它的 `App.tsx` 落地，避免中间提交引用未提交的导出）：
+
+| 提交 | 内容 |
+| --- | --- |
+| `26f2c3d` | `docs(phase4)`：P4-01 基线、P4-02 方案与实施记录、git 事故记录、性能夹具与 MSVC 环境脚本 |
+| `f664c67` | `fix(desktop)`：release 控制台窗口、WebView2 外部拖放（含 Windows-only 依赖） |
+| `2f4b6b1` | `fix(quality)`：日期时间炸弹、缩放配置单一来源、E2E 冷启动超时与参数透传、文档订正 |
+| `f070e03` | `feat(phase4)`：P4-02 浮层宿主与编辑会话，以及时间块拖拽反馈 |
+
+`src/App.tsx` 同时承载 P4-02 改造、时间块拖拽与缩放钳制，hunk 交错无法按文件拆分；缩放钳制的两行随 `f070e03` 落地，已在提交说明中标明。
+
+落地后状态：工作区对已跟踪文件无改动；远端 `origin/main = f070e03` 已同步。落地提交状态实测：`tsc --noEmit` 通过、Vitest **144 passed / 13 files**、Rust **37 passed**、E2E **24 passed**（`--workers=1`）。
