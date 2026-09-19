@@ -886,7 +886,9 @@ describe("phase 1 manual alpha", () => {
     const handle = screen.getByRole("button", { name: "调整 通勤 结束时间" });
     const down = createEvent.pointerDown(handle, { button: 0, clientY: 660 }); fireEvent(handle, down);
     const move = createEvent.pointerMove(window, { clientY: 780, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("10:00–12:45");
+    expect(screen.getByRole("status", { name: "时间块时间预览" })).toHaveTextContent("10:00–12:45");
+    // 改时长时卡片边界本身就是最终边界，不该再叠一层落点虚线。
+    expect(document.querySelector(".calendar-time-block-drop")).toBeNull();
     const up = createEvent.pointerUp(window, { clientY: 780, clientX: 100 }); fireEvent(window, up);
     await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-1", startLocal: "10:00", endLocal: "12:45" })));
   });
@@ -903,7 +905,7 @@ describe("phase 1 manual alpha", () => {
     const handle = screen.getByRole("button", { name: "调整 会议 开始时间" });
     const down = createEvent.pointerDown(handle, { button: 0, clientY: 600 }); fireEvent(handle, down);
     const move = createEvent.pointerMove(window, { clientY: 480, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("08:15–11:00");
+    expect(screen.getByRole("status", { name: "时间块时间预览" })).toHaveTextContent("08:15–11:00");
     const up = createEvent.pointerUp(window, { clientY: 480, clientX: 100 }); fireEvent(window, up);
     await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-2", startLocal: "08:15", endLocal: "11:00" })));
   });
@@ -1279,7 +1281,9 @@ describe("phase 1 manual alpha", () => {
     const body = await screen.findByText("午休");
     const down = createEvent.pointerDown(body, { button: 0, clientY: 600 }); fireEvent(body, down);
     const move = createEvent.pointerMove(window, { clientY: 696, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "调整时间块时长预览" })).toHaveTextContent("11:15–12:15");
+    expect(screen.getByRole("status", { name: "时间块时间预览" })).toHaveTextContent("11:15–12:15");
+    // 拖动整块时落点虚线框要出现，且停在吸附后的最终位置（不是跟手的中间像素）。
+    expect(document.querySelector(".calendar-time-block-drop")).toBeTruthy();
     const up = createEvent.pointerUp(window, { clientY: 696, clientX: 100 }); fireEvent(window, up);
     await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-3", startLocal: "11:15", endLocal: "12:15", localDate: "2026-08-05" })));
   });

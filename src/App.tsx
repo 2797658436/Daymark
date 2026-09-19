@@ -7,7 +7,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 
+import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession } from "./hooks/useEditorSession";
 import { FloatingPanel } from "./components/ui/floating-panel";
+import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
 import { extractBvid } from "./lib/bilibili";
@@ -22,7 +24,7 @@ import {
   type HabitOccurrence, type NativeApi, type ProgressEvent, type Project, type ProjectMilestone, type RecurringHabit, type Task, type TimeBlock, type WorkspaceSnapshot,
 } from "./lib/native";
 import {
-  calendarScaleForZoom, createSettingsRepository, DEFAULT_SETTINGS, type AppSettings, type DefaultTimeSlot, type PageId, type SettingsRepository,
+  CALENDAR_SCALE_RANGE, calendarScaleForZoom, createSettingsRepository, DEFAULT_SETTINGS, type AppSettings, type DefaultTimeSlot, type PageId, type SettingsRepository,
 } from "./lib/settings";
 
 type SaveState = "saved" | "saving" | "unsaved";
@@ -40,6 +42,10 @@ const pages: Array<{ id: PageId; label: string; icon: typeof Home }> = [
 ];
 
 export default function App({ settings: injectedSettings, native: injectedNative }: AppProps) {
+  return <OverlayHostProvider><AppShell settings={injectedSettings} native={injectedNative} /></OverlayHostProvider>;
+}
+
+function AppShell({ settings: injectedSettings, native: injectedNative }: AppProps) {
   const [settingsRepository] = useState(() => injectedSettings ?? createSettingsRepository());
   const [native] = useState(() => injectedNative ?? createNativeApi());
   const [preferences, setPreferences] = useState(DEFAULT_SETTINGS);
@@ -474,6 +480,8 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
     }
   };
   const [editing, setEditing] = useState<{ taskId: string; pos: { top: number; left: number } | null } | null>(null);
+  /** 编辑任务气泡的提交态；由 TaskEditorFields 上报，用于在提交期间拦住 Esc 与外部点击。 */
+  const [taskEditorBusy, setTaskEditorBusy] = useState(false);
   const editingTask = editing ? tasks.find((task) => task.id === editing.taskId) ?? null : null;
   const toggleEditor = (task: Task, anchor: HTMLElement) => {
     if (editing?.taskId === task.id) { setEditing(null); return; }
@@ -505,7 +513,7 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
       <button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
     </div>
     {autoScheduleAssist && assistCount > 0 && <button className="schedule-assist" onClick={onAutoSchedule}><Sparkles size={15} /><span><strong>{assistCount} 项还没有下一次安排</strong><small>可以生成未来 7 天草案，确认后才会应用</small></span></button>}
-    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} onClose={() => setHabitAnchor(null)}><div aria-busy={habitBusy} className="habit-form habit-popover"><label>习惯名称<input value={habitTitle} onChange={(event) => setHabitTitle(event.target.value)} /></label><label>重复规则<select value={habitPattern} onChange={(event) => setHabitPattern(event.target.value as RecurringHabit["pattern"])}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>{habitPattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={habitDays.includes(day)} onChange={(event) => setHabitDays((days) => event.target.checked ? [...days, day] : days.filter((value) => value !== day))} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}<label>单次投入（分钟）<input type="number" min="5" max="240" value={habitMinutes} onChange={(event) => setHabitMinutes(Number(event.target.value))} /></label><label>固定开始（可选）<input type="time" value={habitStart} onChange={(event) => setHabitStart(event.target.value)} /></label><div className="form-actions"><Button disabled={habitBusy} onClick={() => setHabitAnchor(null)}>取消</Button><Button variant="primary" disabled={habitBusy || !habitTitle.trim() || habitMinutes < 5 || habitMinutes > 240 || (habitPattern === "weekly" && habitDays.length === 0)} onClick={async () => { if (habitBusy) return; setHabitBusy(true); setHabitError(""); try { await onCreateHabit({ title: habitTitle.trim(), pattern: habitPattern, weekdays: habitPattern === "weekly" ? habitDays : [], startDate: toLocalDate(new Date()), sessionMinutes: habitMinutes, preferredStartLocal: habitStart || null }); setHabitTitle(""); setHabitAnchor(null); } catch (reason) { setHabitError(readError(reason)); } finally { setHabitBusy(false); } }}>创建习惯</Button></div>{habitError && <p role="alert">{habitError}</p>}</div></FloatingPanel>}
+    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><div aria-busy={habitBusy} className="habit-form habit-popover"><label>习惯名称<input value={habitTitle} onChange={(event) => setHabitTitle(event.target.value)} /></label><label>重复规则<select value={habitPattern} onChange={(event) => setHabitPattern(event.target.value as RecurringHabit["pattern"])}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>{habitPattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={habitDays.includes(day)} onChange={(event) => setHabitDays((days) => event.target.checked ? [...days, day] : days.filter((value) => value !== day))} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}<label>单次投入（分钟）<input type="number" min="5" max="240" value={habitMinutes} onChange={(event) => setHabitMinutes(Number(event.target.value))} /></label><label>固定开始（可选）<input type="time" value={habitStart} onChange={(event) => setHabitStart(event.target.value)} /></label><div className="form-actions"><Button disabled={habitBusy} onClick={() => setHabitAnchor(null)}>取消</Button><Button variant="primary" disabled={habitBusy || !habitTitle.trim() || habitMinutes < 5 || habitMinutes > 240 || (habitPattern === "weekly" && habitDays.length === 0)} onClick={async () => { if (habitBusy) return; setHabitBusy(true); setHabitError(""); try { await onCreateHabit({ title: habitTitle.trim(), pattern: habitPattern, weekdays: habitPattern === "weekly" ? habitDays : [], startDate: toLocalDate(new Date()), sessionMinutes: habitMinutes, preferredStartLocal: habitStart || null }); setHabitTitle(""); setHabitAnchor(null); } catch (reason) { setHabitError(readError(reason)); } finally { setHabitBusy(false); } }}>创建习惯</Button></div>{habitError && <p role="alert">{habitError}</p>}</div></FloatingPanel>}
     {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <TaskPoolCard key={task.id} task={task} sessions={sessions} onProgress={onProgress} onEdit={toggleEditor} />)}</div></details>}
     <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
     <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
@@ -531,8 +539,8 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
     {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
 
     <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
-    {editing && editingTask && <FloatingPanel key={editingTask.id} label={`编辑任务 ${editingTask.title}`} onClose={() => setEditing(null)}><div className="task-editor-fields">
-      <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} />
+    {editing && editingTask && <FloatingPanel key={editingTask.id} label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} onClose={() => setEditing(null)}><div className="task-editor-fields">
+      <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
   </aside>;
 }
@@ -562,7 +570,7 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
 }) {
   const anchor = preferences.calendarAnchors[preferences.calendarView] ?? toLocalDate(new Date());
   const setAnchor = (date: string) => onPreferences({ calendarAnchors: { ...preferences.calendarAnchors, [preferences.calendarView]: date } });
-  const [editingSession, setEditingSession] = useState<{ session: ExecutionSession; anchor: DOMRect | null } | null>(null);
+  const [editingSession, setEditingSession] = useState<{ session: ExecutionSession; anchorElement: HTMLElement | null } | null>(null);
   const [continuingSession, setContinuingSession] = useState<ExecutionSession | null>(null);
   const [weekGhost, setWeekGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
   useEffect(() => { const clearGhost = () => setWeekGhost(null); window.addEventListener("dragend", clearGhost); window.addEventListener("drop", clearGhost); return () => { window.removeEventListener("dragend", clearGhost); window.removeEventListener("drop", clearGhost); }; }, []);
@@ -650,7 +658,8 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
   const zoomWithWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!event.ctrlKey || preferences.calendarView === "month" || event.deltaY === 0) return;
     event.preventDefault();
-    const nextScale = Math.max(28, Math.min(192, scale + (event.deltaY < 0 ? 4 : -4)));
+    const [minimumScale, maximumScale] = CALENDAR_SCALE_RANGE[preferences.calendarView];
+    const nextScale = Math.max(minimumScale, Math.min(maximumScale, scale + (event.deltaY < 0 ? 4 : -4)));
     if (nextScale === scale) return;
     const clientY = event.clientY;
     const target = event.target instanceof Element ? event.target : null;
@@ -692,14 +701,14 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
     <div className="calendar-toolbar"><span aria-label="当前日历日期" aria-live="polite">{preferences.calendarView === "day" ? formatLongDate(anchor) : preferences.calendarView === "week" ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}` : formatMonth(anchor)}</span><div>{preferences.calendarView === "day" && <div className="segmented day-display-mode" role="group" aria-label="日视图显示模式">{([['defaultSlots', '默认时段'], ['fullDay', '全天']] as const).map(([value, label]) => <button key={value} aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}<div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([['compact', '紧凑'], ['standard', '标准'], ['detailed', '详细']] as const).map(([value, label]) => <button key={value} aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>{preferences.calendarView !== "month" && <>{preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} />显示实际记录</label>}<Button onClick={() => { setBlockDate(anchor); setBlockForm((value) => !value); }}><Clock3 size={16} />时间块</Button><button className={`magnet-control ${preferences.snapMinutes === "off" ? "" : "active"}`} aria-label={preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`} aria-pressed={preferences.snapMinutes !== "off"} title="拖拽时按 Alt 临时反转吸附" onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} /></button></>}</div></div>
     <div className="time-block-form-slot">{blockForm && <FloatingPanel label="添加时间块" onClose={() => setBlockForm(false)}><section aria-busy={blockBusy} className="time-block-form"><label>标题<input autoFocus value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="会议、通勤或休息" /></label><label>日期<input type="date" value={blockDate} onChange={(event) => setBlockDate(event.target.value)} /></label><label>开始<input type="time" value={blockStart} onChange={(event) => setBlockStart(event.target.value)} /></label><label>结束<input type="time" value={blockEnd} onChange={(event) => setBlockEnd(event.target.value)} /></label><div className="form-actions"><Button disabled={blockBusy} onClick={() => setBlockForm(false)}>取消</Button><Button variant="primary" disabled={blockBusy || !blockTitle.trim() || timeMinutes(blockEnd) <= timeMinutes(blockStart)} onClick={async () => { if (blockBusy) return; setBlockBusy(true); setBlockError(""); try { await onCreateBlock({ id: crypto.randomUUID(), title: blockTitle.trim(), localDate: blockDate, endLocalDate: blockDate, startLocal: blockStart, endLocal: blockEnd, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local", utcOffsetMinutes: -new Date().getTimezoneOffset() }); setBlockTitle(""); setBlockForm(false); } catch (reason) { setBlockError(readError(reason)); } finally { setBlockBusy(false); } }}>创建时间块</Button></div>{blockError && <p role="alert">{blockError}</p>}</section></FloatingPanel>}</div>
     <div className={`calendar-viewport ${preferences.calendarView}-viewport`} role="region" aria-label="日历时间网格" onWheel={zoomWithWheel}>
-      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchor) => setEditingSession({ session, anchor })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
+      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
         <CalendarTimeAxis showHeader={false} />
-        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} preferences={preferences} now={now} hideHeader selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchor) => setEditingSession({ session, anchor })} onDragGhost={(g) => setWeekGhost(g)} />)}
+        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} preferences={preferences} now={now} hideHeader selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
         {weekGhost && weekGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${weekGhost.leftPx}px`, top: `${weekGhost.topPx}px`, width: `${weekGhost.widthPx}px`, height: `${weekGhost.heightPx}px` }}><span>{weekGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
       </div></div>{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div>}
     </div>
     {nowDirection && <button className="back-to-now" onClick={returnToNow}>{nowDirection === "up" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}回到现在</button>}
-    {editingSession && (() => { const task = workspace.tasks.find((item) => item.id === editingSession.session.taskId); return task ? <SessionEditPopover session={editingSession.session} task={task} anchor={editingSession.anchor} onClose={() => setEditingSession(null)} onSave={async (date, start, duration) => { await onMove(editingSession.session, date, start, duration); setEditingSession(null); }} /> : null; })()}
+    {editingSession && (() => { const task = workspace.tasks.find((item) => item.id === editingSession.session.taskId); return task ? <SessionEditPopover session={editingSession.session} task={task} anchorElement={editingSession.anchorElement} onClose={() => setEditingSession(null)} onSave={async (date, start, duration) => { await onMove(editingSession.session, date, start, duration); setEditingSession(null); }} /> : null; })()}
     {continuingSession && (() => { const task = workspace.tasks.find((item) => item.id === continuingSession.taskId); return task ? <ContinueScheduleDialog session={continuingSession} task={task} snapMinutes={preferences.snapMinutes} onClose={() => setContinuingSession(null)} onSave={async (date, start) => { await onSchedule(task, date, start); setContinuingSession(null); }} /> : null; })()}
   </section>;
 }
@@ -711,7 +720,7 @@ function ContinuousDayView({ anchor, workspace, preferences, now, focusSessionId
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
-  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchor: DOMRect | null) => void;
+  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
 }) {
   const axisRef = useRef<HTMLDivElement>(null); const pendingScrollOffset = useRef<number | null>(null); const shifting = useRef(false);
   const [dayGhost, setDayGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
@@ -757,7 +766,7 @@ function DayCalendarGrid({ date, workspace, preferences, now, focusSessionId, on
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
-  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchor: DOMRect | null) => void; onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
+  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void; onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
 }) {
   const [expandedGapKeys, setExpandedGapKeys] = useState<Set<string>>(() => new Set());
   const [dragExpandedGapKey, setDragExpandedGapKey] = useState<string | null>(null);
@@ -860,7 +869,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
-  onEditSession: (session: ExecutionSession, anchor: DOMRect | null) => void;
+  onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
   onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
 }) {
   const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string }>(null);
@@ -958,7 +967,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
       {defaultSlots.map((slot) => { const style = timeline ? timeline.positionForRange(slot.start, slot.end) : positionStyle(slot.start, slot.end); return style ? <div key={slot.id} className="default-slot" style={style}><span>{slot.label}</span></div> : null; })}
       {blankHoverMinute !== null && !blankRange && !dragPreview && <div className="blank-hover-cue" aria-hidden="true" style={{ top: timeline ? `${timeline.offsetAtMinute(blankHoverMinute)}px` : `${blankHoverMinute / 1440 * 100}%` }}><Plus size={14} /><time>{minutesTime(blankHoverMinute)}</time></div>}
       {blankRange && <div className="blank-range-preview" aria-label={`已选择 ${minutesTime(blankRange.start)} 至 ${minutesTime(blankRange.end % 1440)}`} style={timeline ? { top: `${timeline.offsetAtMinute(blankRange.start)}px`, height: `${Math.max(6, timeline.offsetAtMinute(blankRange.end) - timeline.offsetAtMinute(blankRange.start))}px` } : { top: `${blankRange.start / 1440 * 100}%`, height: `${(blankRange.end - blankRange.start) / 1440 * 100}%` }} />}
-      {blankRange && blankAction && <FloatingPanel label="空白时段操作" anchor={blankAnchor} onClose={() => { setBlankAction(null); setBlankRange(null); }}><section ref={blankBubbleRef} aria-busy={blankBusy} className="blank-action-bubble" onPointerDown={(event) => event.stopPropagation()}>
+      {blankRange && blankAction && <FloatingPanel label="空白时段操作" kind="action" anchor={blankAnchor} onClose={() => { setBlankAction(null); setBlankRange(null); }} closeOnOutsideClick><section ref={blankBubbleRef} aria-busy={blankBusy} className="blank-action-bubble" onPointerDown={(event) => event.stopPropagation()}>
         <header><strong>{minutesTime(blankRange.start)}–{minutesTime(blankRange.end % 1440)}</strong><button disabled={blankBusy} aria-label="关闭空白时段操作" onClick={() => { setBlankAction(null); setBlankRange(null); }}><X size={13} /></button></header>
         {blankAction === "menu" && <div className="blank-action-menu"><button className="is-primary" onClick={() => setBlankAction("new")}><Plus size={14} aria-hidden="true" /><span>新建任务</span></button><button onClick={() => setBlankAction("pool")}><Inbox size={14} aria-hidden="true" /><span>从任务池安排</span></button><button onClick={() => setBlankAction("block")}><Clock3 size={14} aria-hidden="true" /><span>时间块</span></button></div>}
         {(blankAction === "new" || blankAction === "block") && <div className="blank-inline-form"><label>{blankAction === "new" ? "任务标题" : "时间块标题"}<input autoFocus value={blankTitle} onChange={(event) => setBlankTitle(event.target.value)} /></label><div><button disabled={blankBusy} className="button-quiet" onClick={() => setBlankAction("menu")}>返回</button><button className="button-primary" disabled={blankBusy || !blankTitle.trim()} onClick={() => { if (blankBusy) return; setBlankBusy(true); setBlankError(""); const title = blankTitle.trim(); const start = minutesTime(blankRange.start); const duration = blankRange.end - blankRange.start; const action = blankAction === "new" ? onCreateTaskAt(title, date, start, duration) : onCreateBlock({ id: crypto.randomUUID(), title, localDate: date, endLocalDate: placementDateTime(date, blankRange.end).date, startLocal: start, endLocal: minutesTime(blankRange.end % 1440), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local", utcOffsetMinutes: -new Date().getTimezoneOffset() }); void action.then(() => { setBlankTitle(""); setBlankAction(null); setBlankRange(null); }).catch((reason) => setBlankError(readError(reason))).finally(() => setBlankBusy(false)); }}>创建</button></div></div>}
@@ -1008,7 +1017,9 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   onUpdate: (next: TimeBlock) => Promise<void>;
   onDelete: () => void;
 }) {
-  const [resize, setResize] = useState<null | { edge: "move" | "top" | "bottom"; startMinute: number; endMinute: number; clientX: number; clientY: number; originX: number }>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const [resize, setResize] = useState<null | { edge: "move" | "top" | "bottom"; startMinute: number; endMinute: number; snapStartMinute: number; snapEndMinute: number; clientX: number; clientY: number; originX: number; trackWidth: number }>(null);
+  const [previewBox, setPreviewBox] = useState<null | { left: number; top: number; above: boolean }>(null);
   const initialStart = timeMinutes(block.startLocal);
   const initialEnd = timeMinutes(block.endLocal);
   const initialDuration = (initialEnd - initialStart + 1440) % 1440 || 1440;
@@ -1019,35 +1030,38 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
     const originY = event.clientY;
     const originX = event.clientX;
     const pixelsPerMinute = hourHeight / 60;
+    const trackWidth = articleRef.current?.closest<HTMLElement>(".day-track")?.getBoundingClientRect().width ?? 0;
     const compute = (next: PointerEvent) => {
       const snap = next.altKey ? (snapMinutes === "off" ? 15 : 1) : snapMinutes === "off" ? 1 : snapMinutes;
       const delta = (next.clientY - originY) / pixelsPerMinute;
       const roundedDelta = Math.round(delta / snap) * snap;
       if (edge === "move") {
-        const newStart = Math.max(0, Math.min(1440 - initialDuration, initialStart + roundedDelta));
-        return { startMinute: newStart, endMinute: newStart + initialDuration };
+        // 卡片本体自由跟手（不吸附），落点单独算吸附值：虚线框会"跳格"停在
+        // 最终真正会落到的那一格，卡片则平滑跟随指针。两者分离才看得出落点。
+        const freeStart = Math.round(Math.max(0, Math.min(1440 - initialDuration, initialStart + delta)));
+        const snapStart = Math.max(0, Math.min(1440 - initialDuration, Math.round(freeStart / snap) * snap));
+        return { startMinute: freeStart, endMinute: freeStart + initialDuration, snapStartMinute: snapStart, snapEndMinute: snapStart + initialDuration };
       }
       if (edge === "top") {
         const newStart = Math.max(0, Math.min(initialEnd, initialStart + roundedDelta));
-        return { startMinute: newStart, endMinute: initialEnd };
+        return { startMinute: newStart, endMinute: initialEnd, snapStartMinute: newStart, snapEndMinute: initialEnd };
       }
       const newEnd = Math.max(initialStart, Math.min(1440, initialEnd + roundedDelta));
-      return { startMinute: initialStart, endMinute: newEnd };
+      return { startMinute: initialStart, endMinute: newEnd, snapStartMinute: initialStart, snapEndMinute: newEnd };
     };
-    const move = (next: PointerEvent) => { const next1 = compute(next); setResize({ edge, ...next1, clientX: next.clientX, clientY: next.clientY, originX }); };
+    const move = (next: PointerEvent) => { const next1 = compute(next); setResize({ edge, ...next1, clientX: next.clientX, clientY: next.clientY, originX, trackWidth }); };
     const up = (next: PointerEvent) => {
       const final = compute(next);
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
       setResize(null);
-      const startLocal = minutesTime(final.startMinute % 1440);
-      const endLocal = minutesTime(final.endMinute % 1440);
+      // 落库一律用吸附后的落点，不把跟手过程中的中间像素写成事实。
+      const startLocal = minutesTime(final.snapStartMinute % 1440);
+      const endLocal = minutesTime(final.snapEndMinute % 1440);
       const baseTime = new Date(`${block.localDate}T00:00:00`).getTime();
-      let localDate = toLocalDate(new Date(baseTime + Math.floor(final.startMinute / 1440) * 86400000));
-      let endLocalDate = toLocalDate(new Date(baseTime + Math.floor(final.endMinute / 1440) * 86400000));
+      let localDate = toLocalDate(new Date(baseTime + Math.floor(final.snapStartMinute / 1440) * 86400000));
+      let endLocalDate = toLocalDate(new Date(baseTime + Math.floor(final.snapEndMinute / 1440) * 86400000));
       if (edge === "move") {
-        const track = document.querySelector<HTMLElement>(`.calendar-day[data-day-date="${block.localDate}"] .day-track`);
-        const colWidth = track?.getBoundingClientRect().width ?? 0;
-        const deltaDays = colWidth > 0 ? Math.round((next.clientX - originX) / colWidth) : 0;
+        const deltaDays = trackWidth > 0 ? Math.round((next.clientX - originX) / trackWidth) : 0;
         if (deltaDays !== 0) {
           localDate = addDays(localDate, deltaDays);
           endLocalDate = addDays(endLocalDate, deltaDays);
@@ -1068,55 +1082,77 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   const liveEnd = resize?.endMinute ?? initialEnd;
   const liveStartStr = minutesTime(liveStart % 1440);
   const liveEndStr = minutesTime(liveEnd % 1440);
-  const liveDuration = (liveEnd - liveStart + 1440) % 1440 || 1440;
-  const displayStyle = resize === null ? baseStyle : (() => {
-    const fresh = position(liveStartStr, liveEndStr);
+  const dropStart = resize?.snapStartMinute ?? initialStart;
+  const dropEnd = resize?.snapEndMinute ?? initialEnd;
+  const dropStartStr = minutesTime(dropStart % 1440);
+  const dropEndStr = minutesTime(dropEnd % 1440);
+  const dropDuration = (dropEnd - dropStart + 1440) % 1440 || 1440;
+  const liveStyleFor = (startStr: string, endStr: string) => {
+    const fresh = position(startStr, endStr);
     const style = fresh ?? (() => {
       const top = baseStyle.top as string;
-      const minutes = timeMinutes(liveStartStr);
-      const endMin = timeMinutes(liveEndStr);
+      const minutes = timeMinutes(startStr);
+      const endMin = timeMinutes(endStr);
       const duration = (endMin - minutes + 1440) % 1440 || 1440;
       return { ...baseStyle, top, height: `${Math.max(duration / 1440 * 100, 1.25)}%` };
     })();
-    if (resize.edge === "move" && resize.clientX !== resize.originX) {
+    if (resize && resize.edge === "move" && resize.clientX !== resize.originX) {
       const deltaX = resize.clientX - resize.originX;
       return { ...style, left: `calc(7px + ${deltaX}px)`, right: "auto", width: "calc(100% - 14px)" };
     }
     return style;
+  };
+  const displayStyle = resize === null ? baseStyle : liveStyleFor(liveStartStr, liveEndStr);
+  // 落点框只在"移动"时出现：改时长时卡片边界本身就是最终边界，再叠一层虚线只是噪音。
+  // 横向同样吸附：框跳到目标列，卡片自由跟手，x/y 两轴都指向最终落点。
+  const dropStyle = resize === null || resize.edge !== "move" ? null : (() => {
+    const style = liveStyleFor(dropStartStr, dropEndStr);
+    const deltaDays = resize.trackWidth > 0 ? Math.round((resize.clientX - resize.originX) / resize.trackWidth) : 0;
+    return { ...style, left: `calc(7px + ${deltaDays * resize.trackWidth}px)`, right: "auto", width: "calc(100% - 14px)" };
   })();
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
-  const previewAbove = resize !== null && liveDuration > 150;
-  const previewTop = resize === null ? 0 : (previewAbove ? resize.clientY - 6 : resize.clientY + 6);
-  const previewLeft = resize === null ? 0 : Math.max(80, Math.min(vw - 80, resize.clientX));
   const isResizing = resize !== null;
+  useLayoutEffect(() => {
+    if (resize === null) { setPreviewBox(null); return; }
+    const rect = articleRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const vw = typeof window === "undefined" ? 1024 : window.innerWidth;
+    const above = rect.bottom + 46 > (typeof window === "undefined" ? 768 : window.innerHeight);
+    setPreviewBox({ left: Math.max(8, Math.min(vw - 190, rect.left)), top: above ? rect.top - 7 : rect.bottom + 7, above });
+  }, [resize]);
   const classes = ["calendar-time-block", isResizing ? "is-resizing" : ""].filter(Boolean).join(" ");
 
   return <>
-    <article className={classes} style={displayStyle} onPointerDown={startMove}>
+    {dropStyle && <div aria-hidden="true" className="calendar-time-block-drop" style={dropStyle} />}
+    {resize !== null && resize.edge === "move" && <div aria-hidden="true" className="calendar-time-block-origin" style={baseStyle} />}
+    <article ref={articleRef} className={classes} style={displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge}>
       <button className="time-block-handle time-block-handle-top" aria-label={`调整 ${block.title} 开始时间`} onPointerDown={(e) => startEdgeResize(e, "top")} />
       <time>{liveStartStr}–{liveEndStr}</time>
       <strong>{block.title}</strong>
       <button className="time-block-delete" aria-label={`删除时间块 ${block.title}`} onClick={onDelete}><X size={13} /></button>
       <button className="time-block-handle time-block-handle-bottom" aria-label={`调整 ${block.title} 结束时间`} onPointerDown={(e) => startEdgeResize(e, "bottom")} />
     </article>
-    {resize !== null && <div className={`session-resize-preview${previewAbove ? " is-above" : ""}`} role="status" aria-label="调整时间块时长预览" style={{ left: `${previewLeft}px`, top: `${previewTop}px` }}>{liveStartStr}–{liveEndStr} · {liveDuration} 分钟</div>}
+    {resize !== null && previewBox && <div className={`session-resize-preview${previewBox.above ? " is-above" : ""}`} role="status" aria-label="时间块时间预览" style={{ left: `${previewBox.left}px`, top: `${previewBox.top}px` }}>{dropStartStr}–{dropEndStr} · {dropDuration} 分钟</div>}
   </>;
 }
 
 function CalendarSession({ style, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, records, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
   style?: CSSProperties; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
   session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; records: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
-  onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchor: DOMRect | null) => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
+  onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
   overlay?: ReactNode;
 }) {
   const articleRef = useRef<HTMLElement>(null);
   const [progressOpen, setProgressOpen] = useState(false);
-  const [resize, setResize] = useState<{ duration: number; clientX: number; clientY: number } | null>(null);
+  const [resize, setResize] = useState<number | null>(null);
+  const [resizeBox, setResizeBox] = useState<null | { left: number; top: number; above: boolean }>(null);
   const [reviewPos, setReviewPos] = useState({ top: 0, left: 0 });
   const [reviewOpen, setReviewOpen] = useState(false);
   const reviewLeaveTimer = useRef<number | null>(null);
-  const openReview = () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; setReviewOpen(true); };
+  // 拖动／缩放期间指针一路贴着卡片边缘，待回顾气泡此时既是视觉噪音，也会把落点盖住
+  const interactingRef = useRef(false);
+  const closeReviewNow = () => { if (reviewLeaveTimer.current !== null) { window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; } setReviewOpen(false); };
+  const openReview = () => { if (interactingRef.current) return; if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; setReviewOpen(true); };
   const scheduleCloseReview = () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = window.setTimeout(() => setReviewOpen(false), 200); };
   useEffect(() => () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); }, []);
   const current = sessionContains(session, now);
@@ -1146,6 +1182,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault(); event.stopPropagation();
     onResizeStart?.();
+    interactingRef.current = true; closeReviewNow();
     const originY = event.clientY;
     const initial = sessionDuration(session);
     const pixelsPerMinute = hourHeight / 60;
@@ -1154,25 +1191,28 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
       const deltaMinutes = (next.clientY - originY) / pixelsPerMinute;
       return Math.max(snap, Math.min(1440, initial + Math.round(deltaMinutes / snap) * snap));
     };
-    const move = (next: PointerEvent) => setResize({ duration: rounded(next), clientX: next.clientX, clientY: next.clientY });
+    const move = (next: PointerEvent) => setResize(rounded(next));
     const up = (next: PointerEvent) => {
       const duration = rounded(next);
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-      setResize(null);
+      setResize(null); interactingRef.current = false;
+      const rect = articleRef.current?.getBoundingClientRect();
+      if (rect && next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom) openReview();
       void onResize(duration);
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
   };
+  useLayoutEffect(() => {
+    if (resize === null) { setResizeBox(null); return; }
+    const rect = articleRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const above = rect.bottom + 46 > window.innerHeight;
+    setResizeBox({ left: Math.max(8, Math.min(window.innerWidth - 190, rect.left)), top: above ? rect.top - 7 : rect.bottom + 7, above });
+  }, [resize]);
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
-  const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize.duration / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(articleRef.current?.getBoundingClientRect() ?? null); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = event.clientY - event.currentTarget.getBoundingClientRect().top; event.dataTransfer.setData("application/x-daymark-grab", String(Math.max(0, Math.round(grabOffsetY)))); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
-    {resize !== null && (() => {
-      const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
-      const flipUp = resize.duration > 150;
-      const top = flipUp ? resize.clientY - 6 : resize.clientY + 6;
-      const left = Math.max(80, Math.min(vw - 80, resize.clientX));
-      return <div className={`session-resize-preview${flipUp ? " is-above" : ""}`} role="status" aria-label="调整时长预览" style={{ left: `${left}px`, top: `${top}px` }}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize.duration) % 1440)} · {resize.duration} 分钟</div>;
-    })()}
+  const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(articleRef.current); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = event.clientY - event.currentTarget.getBoundingClientRect().top; event.dataTransfer.setData("application/x-daymark-grab", String(Math.max(0, Math.round(grabOffsetY)))); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
+    {resize !== null && resizeBox && <div className={`session-resize-preview${resizeBox.above ? " is-above" : ""}`} role="status" aria-label="调整时长预览" style={{ left: `${resizeBox.left}px`, top: `${resizeBox.top}px` }}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize) % 1440)} · {resize} 分钟</div>}
     {showTimeAndProgress && <time className="session-time">{session.startLocal}–{session.endLocal}</time>}<strong>{task.title}</strong>
     {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && <span className="session-status-icon" aria-label={status.label}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
     {showDetails && projectTitle && <span className="session-project">{projectTitle}</span>}
@@ -1180,7 +1220,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     {showTimeAndProgress && <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>}
     {pendingReview && showDetails && <span className="review-summary">时段已结束 · 当前进度 {task.progress}%</span>}
     {overlay}
-    <button className="session-edit-button" data-session-edit-button data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={(event) => onEdit(event.currentTarget.getBoundingClientRect())}><Pencil size={12} /></button>
+    <button className="session-edit-button" data-session-edit-button data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={(event) => onEdit(event.currentTarget)}><Pencil size={12} /></button>
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
   </article>
   {pendingReview && createPortal(
@@ -1198,12 +1238,11 @@ function ContinueScheduleDialog({ session, task, snapMinutes, onClose, onSave }:
   let initialMinutes = initialDate === today ? Math.ceil((new Date().getHours() * 60 + new Date().getMinutes()) / snap) * snap : timeMinutes(session.endLocal);
   if (initialMinutes >= 1440) { initialDate = addDays(initialDate, 1); initialMinutes = 0; }
   const [localDate, setLocalDate] = useState(initialDate); const [startLocal, setStartLocal] = useState(minutesTime(initialMinutes)); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  const dialogRef = useRef<HTMLElement>(null); useModalBehavior(dialogRef, onClose, busy);
   const save = async () => { setBusy(true); setError(""); try { await onSave(localDate, startLocal); } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } };
-  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}><section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="continue-schedule-title"><div className="modal-icon"><CalendarDays /></div><h2 id="continue-schedule-title">继续安排：{task.title}</h2><p>先确认下一次日期和开始时间，创建后原时段与历史事实保持不变。</p><label>日期<input autoFocus type="date" value={localDate} onChange={(event) => setLocalDate(event.target.value)} /></label><label>开始<input type="time" value={startLocal} onChange={(event) => setStartLocal(event.target.value)} /></label><small>默认沿用任务的单次投入时长；你仍可在创建后精确编辑。</small>{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy || !localDate || !startLocal} onClick={() => void save()}>{busy ? "正在创建…" : "创建后续安排"}</Button></div></section></div>, document.body);
+  return <ConfirmDialog id="continue-schedule-dialog" labelledBy="continue-schedule-title" busy={busy} onClose={onClose}><div className="modal-icon"><CalendarDays /></div><h2 id="continue-schedule-title">继续安排：{task.title}</h2><p>先确认下一次日期和开始时间，创建后原时段与历史事实保持不变。</p><label>日期<input autoFocus type="date" value={localDate} onChange={(event) => setLocalDate(event.target.value)} /></label><label>开始<input type="time" value={startLocal} onChange={(event) => setStartLocal(event.target.value)} /></label><small>默认沿用任务的单次投入时长；你仍可在创建后精确编辑。</small>{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy || !localDate || !startLocal} onClick={() => void save()}>{busy ? "正在创建…" : "创建后续安排"}</Button></div></ConfirmDialog>;
 }
 
-function SessionEditPopover({ session, task, anchor, onClose, onSave }: { session: ExecutionSession; task: Task; anchor: DOMRect | null; onClose: () => void; onSave: (localDate: string, startLocal: string, duration: number) => Promise<void> }) {
+function SessionEditPopover({ session, task, anchorElement, onClose, onSave }: { session: ExecutionSession; task: Task; anchorElement: HTMLElement | null; onClose: () => void; onSave: (localDate: string, startLocal: string, duration: number) => Promise<void> }) {
   const [localDate, setLocalDate] = useState(session.localDate);
   const [startLocal, setStartLocal] = useState(session.startLocal);
   const [endLocal, setEndLocal] = useState(session.endLocal);
@@ -1211,8 +1250,8 @@ function SessionEditPopover({ session, task, anchor, onClose, onSave }: { sessio
   const startMinutes = timeMinutes(startLocal); let endMinutes = timeMinutes(endLocal); if (endMinutes <= startMinutes) endMinutes += 1440;
   const duration = endMinutes - startMinutes; const valid = duration >= 5 && duration <= 1440;
   const save = async () => { setBusy(true); setError(""); try { await onSave(localDate, startLocal, duration); } catch (reason) { setError(readError(reason)); setBusy(false); } };
-  return <FloatingPanel label={`编辑时间：${task.title}`} anchor={anchor} onClose={onClose}><section aria-busy={busy} className="session-edit-fields">
-    <header><strong>{task.title}</strong><span className="session-edit-popover-label"><Pencil size={12} aria-hidden="true" />编辑时间</span></header>
+  return <FloatingPanel label={`编辑时间：${task.title}`} anchorElement={anchorElement} onClose={onClose} closeOnOutsideClick><section aria-busy={busy} className="session-edit-fields">
+    <header><strong>{task.title}</strong><span className="session-edit-popover-label">编辑时间</span></header>
     <label>日期<input type="date" value={localDate} onChange={(event) => setLocalDate(event.target.value)} /></label>
     <div className="time-inputs"><label>开始<input type="time" value={startLocal} onChange={(event) => setStartLocal(event.target.value)} /></label><label>结束<input type="time" value={endLocal} onChange={(event) => setEndLocal(event.target.value)} /></label></div>
     <small>{localDate} {startLocal}–{endLocal} · 持续 {duration} 分钟</small>
@@ -1236,9 +1275,11 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
   const [biliSource, setBiliSource] = useState("");
   const [bilibili, setBilibili] = useState<BilibiliVideo | null>(null); const [biliSelected, setBiliSelected] = useState<number[]>([]); const [importError, setImportError] = useState("");
   const [newProjectTask, setNewProjectTask] = useState<Task | null>(null);
+  const [newProjectTaskBusy, setNewProjectTaskBusy] = useState(false);
   const [taskQuery, setTaskQuery] = useState(""); const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [milestoneDraft, setMilestoneDraft] = useState<{ projectId: string; editing: ProjectMilestone | null; continuing: boolean } | null>(null);
+  const [milestoneBusy, setMilestoneBusy] = useState(false);
   const closeForm = () => { setMode("none"); setTitle(""); setDeadline(""); if (mode === "course") { setSource(""); setDrafts([]); } if (mode === "bilibili") { setBiliSource(""); setBilibili(null); setBiliSelected([]); } };
   const create = async () => {
     if (!title.trim() || busy) return; setBusy(true);
@@ -1255,7 +1296,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
       {mode === "bilibili" && <><label>B 站普通视频链接<input autoFocus value={biliSource} onChange={(event) => setBiliSource(event.target.value)} placeholder="https://www.bilibili.com/video/BV…" /></label><Button disabled={!biliSource.trim() || busy} onClick={async () => { setBusy(true); setImportError(""); try { const video = await onFetchBilibili(extractBvid(biliSource)); setBilibili(video); setTitle(video.title); setBiliSelected(video.parts.map((part) => part.page)); } catch (error) { setImportError(readError(error)); } finally { setBusy(false); } }}>{busy ? "正在读取…" : "读取公开元数据"}</Button>{importError && <p className="error-message" role="alert"><CircleAlert />{importError}</p>}{bilibili && <><p className="import-source">{bilibili.ownerName} · {bilibili.bvid} · {bilibili.parts.length} 个分 P</p><div className="import-preview" role="region" aria-label="B 站分 P 预览">{bilibili.parts.map((part) => <div key={part.sourceKey}><input type="checkbox" aria-label={`选择 ${part.title}`} checked={biliSelected.includes(part.page)} onChange={(event) => setBiliSelected((pages) => event.target.checked ? [...pages, part.page] : pages.filter((page) => page !== part.page))} /><span>P{part.page}</span><input aria-label={`编辑第 ${part.page} 个分 P`} value={part.title} onChange={(event) => setBilibili((video) => video ? { ...video, parts: video.parts.map((item) => item.sourceKey === part.sourceKey ? { ...item, title: event.target.value } : item) } : video)} /><span>{Math.ceil(part.durationSeconds / 60)}分钟</span></div>)}</div></>}</>}
       {mode !== "bilibili" && importError && <p role="alert">{importError}</p>}{!title.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={busy} onClick={() => setMode("none")}>取消</Button><Button variant="primary" disabled={!title.trim() || (mode === "course" && !drafts.some((item) => item.selected)) || (mode === "bilibili" && (!bilibili || biliSelected.length === 0)) || busy} onClick={() => void create()}>{busy ? "正在写入…" : "创建"}</Button></div>
     </section></FloatingPanel>}
-    {newProjectTask && <FloatingPanel label="添加项目任务" onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} /></FloatingPanel>}
+    {newProjectTask && <FloatingPanel label="添加项目任务" busy={newProjectTaskBusy} onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></FloatingPanel>}
     <div className="project-list-tools"><input aria-label="搜索项目任务" placeholder="搜索项目或任务" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} /><label><input type="checkbox" checked={incompleteOnly} onChange={(event) => setIncompleteOnly(event.target.checked)} />只看未完成</label></div>
     <div className="project-grid">{workspace.projects.length === 0 ? <article className="surface-card project-card-empty"><span className="eyebrow">还没有项目</span><h2>把长期目标拆成可执行的任务</h2><p>在项目里集中管理一组相关任务，能更快看到推进和截止。</p><Button variant="primary" onClick={() => setMode("project")}><Plus size={17} />创建第一个项目</Button></article> : workspace.projects.map((project) => {
       const tasks = workspace.tasks.filter((task) => task.projectId === project.id);
@@ -1275,7 +1316,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
           })}
           {milestones.length === 0 && <p className="milestone-empty">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
         </div>
-        {milestoneDraft?.projectId === project.id && <FloatingPanel label="里程碑" onClose={() => setMilestoneDraft(null)}><MilestoneForm project={project} tasks={tasks} sortOrder={milestones.length} editing={milestoneDraft.editing} continuing={milestoneDraft.continuing} onCancel={() => setMilestoneDraft(null)} onSave={async (milestone) => { if (milestoneDraft.editing && !milestoneDraft.continuing) await onUpdateMilestone(milestone); else await onCreateMilestone(milestone); setMilestoneDraft(null); }} /></FloatingPanel>}
+        {milestoneDraft?.projectId === project.id && <FloatingPanel label="里程碑" busy={milestoneBusy} onClose={() => setMilestoneDraft(null)}><MilestoneForm project={project} tasks={tasks} sortOrder={milestones.length} editing={milestoneDraft.editing} continuing={milestoneDraft.continuing} onCancel={() => setMilestoneDraft(null)} onPhase={setMilestoneBusy} onSave={async (milestone) => { if (milestoneDraft.editing && !milestoneDraft.continuing) await onUpdateMilestone(milestone); else await onCreateMilestone(milestone); setMilestoneDraft(null); }} /></FloatingPanel>}
         {(() => { const recent = [...workspace.progressEvents].filter((event) => event.toProgress > event.fromProgress && tasks.some((task) => task.id === event.taskId)).sort((a, b) => b.occurredAtUtc.localeCompare(a.occurredAtUtc))[0]; return recent && <Button onClick={() => { setTaskQuery(""); setIncompleteOnly(false); requestAnimationFrame(() => document.getElementById(`project-task-${recent.taskId}`)?.scrollIntoView({ block: "center" })); }}>回到最近推进：{tasks.find((task) => task.id === recent.taskId)?.title}</Button>; })()}
         <Button onClick={() => setNewProjectTask({ id: crypto.randomUUID(), projectId: project.id, title: "", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: null, priority: "normal", sortOrder: tasks.length, kind: "task" })}><Plus size={16} />添加任务</Button>
         <div className="project-tasks">{tasks.filter((task) => (!incompleteOnly || task.status !== "completed") && (!taskQuery.trim() || `${project.title} ${task.title}`.toLowerCase().includes(taskQuery.trim().toLowerCase()))).map((task) => <div id={`project-task-${task.id}`} key={task.id}><span>{tasks.indexOf(task) + 1}</span><div><strong>{task.title}</strong>{task.status === "active" && <Button onClick={() => onArrange(task)}>安排</Button>}<details className="project-task-progress"><summary>进度 {task.progress}% · 调整</summary><ProgressControl task={task} onCommit={onProgress} showComplete /></details></div></div>)}</div></article>;
@@ -1310,48 +1351,57 @@ function ProjectEditor({ project, onSave, onClose }: { project: Project; onSave:
   </form>;
 }
 
-function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false, onSave, onCancel }: {
+function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false, onSave, onCancel, onPhase }: {
   project: Project; tasks: Task[]; sortOrder: number; editing: ProjectMilestone | null; continuing?: boolean;
-  onSave: (milestone: ProjectMilestone) => Promise<void>; onCancel: () => void;
+  onSave: (milestone: ProjectMilestone) => Promise<void>; onCancel: () => void; onPhase?: (busy: boolean) => void;
 }) {
-  const [title, setTitle] = useState(editing?.title ?? "");
-  const [date, setDate] = useState(editing?.targetLocalDate ?? "");
-  const [criterion, setCriterion] = useState<ProjectMilestone["criterionKind"]>(editing?.criterionKind ?? (tasks.length ? "orderedTask" : "projectProgress"));
-  const [targetTaskId, setTargetTaskId] = useState(editing?.targetTaskId ?? "");
-  const [targetCount, setTargetCount] = useState(editing?.targetCount ?? 1);
-  const [targetProgress, setTargetProgress] = useState(editing?.targetProgress ?? 50);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  const goalText = criterion === "orderedTask" ? `完成任务「${tasks.find((task) => task.id === targetTaskId)?.title ?? "…"}」`
-    : criterion === "taskCount" ? `完成 ${targetCount} 个项目任务`
-    : `项目加权进度达到 ${targetProgress}%`;
-  const summaryText = date ? `${goalText} · ${formatShortDate(date)} 前` : goalText;
-  const ready = Boolean(title.trim() && date && (criterion !== "orderedTask" || targetTaskId));
-  const save = async () => {
-    if (!title.trim()) { setError("里程碑名称不能为空"); return; }
-    if (!date) { setError("请选择目标日期"); return; }
-    if (criterion === "orderedTask" && !targetTaskId) { setError("请选择目标任务"); return; }
-    setBusy(true); setError("");
-    const base = { id: editing?.id ?? crypto.randomUUID(), projectId: project.id, title: title.trim(), targetLocalDate: date, sortOrder: editing?.sortOrder ?? sortOrder };
-    let milestone: ProjectMilestone;
-    if (criterion === "orderedTask") milestone = { ...base, criterionKind: "orderedTask", targetTaskId, targetCount: null, targetProgress: null };
-    else if (criterion === "taskCount") milestone = { ...base, criterionKind: "taskCount", targetTaskId: null, targetCount, targetProgress: null };
-    else milestone = { ...base, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress };
-    try { await onSave(milestone); }
-    catch (reason) { setError(readError(reason)); setBusy(false); }
-  };
-  return <form aria-busy={busy} className="milestone-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-    <div className="section-heading"><h3>{continuing ? `续排里程碑：${editing?.title ?? ""}` : editing ? `编辑里程碑：${editing.title}` : "新增里程碑"}</h3><button className="icon-action" type="button" disabled={busy} aria-label="关闭里程碑表单" onClick={onCancel}><X size={15} /></button></div>
+  const blankMilestone: ProjectMilestone = tasks.length
+    ? { id: "", projectId: project.id, title: "", targetLocalDate: "", sortOrder, criterionKind: "orderedTask", targetTaskId: "", targetCount: null, targetProgress: null }
+    : { id: "", projectId: project.id, title: "", targetLocalDate: "", sortOrder, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress: 50 };
+  const session = useEditorSession<ProjectMilestone>({
+    key: editing?.id ?? `new:${project.id}`,
+    initial: editing ?? blankMilestone,
+    canSave: (draft) => Boolean(draft.title.trim() && draft.targetLocalDate && (draft.criterionKind !== "orderedTask" || draft.targetTaskId)),
+    onSave: (draft) => {
+      const base = { id: draft.id || crypto.randomUUID(), projectId: project.id, title: draft.title.trim(), targetLocalDate: draft.targetLocalDate, sortOrder: draft.sortOrder };
+      // 判别联合必须按 criterionKind 显式构造，展开会丢掉窄化。
+      const milestone: ProjectMilestone = draft.criterionKind === "orderedTask"
+        ? { ...base, criterionKind: "orderedTask", targetTaskId: draft.targetTaskId ?? "", targetCount: null, targetProgress: null }
+        : draft.criterionKind === "taskCount"
+          ? { ...base, criterionKind: "taskCount", targetTaskId: null, targetCount: Math.max(1, draft.targetCount ?? 1), targetProgress: null }
+          : { ...base, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress: Math.min(100, Math.max(1, draft.targetProgress ?? 50)) };
+      return onSave(milestone);
+    },
+    onClose: (reason) => { if (reason !== "saved") onCancel(); },
+    onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
+  });
+  // 草稿是唯一事实来源：输入直接写会话草稿，保存与 canSave 都读它。
+  const { draft, patchDraft, busy } = session;
+  const goalText = draft.criterionKind === "orderedTask" ? `完成任务「${tasks.find((task) => task.id === draft.targetTaskId)?.title ?? "…"}」`
+    : draft.criterionKind === "taskCount" ? `完成 ${draft.targetCount ?? 1} 个项目任务`
+    : `项目加权进度达到 ${draft.targetProgress ?? 50}%`;
+  const summaryText = draft.targetLocalDate ? `${goalText} · ${formatShortDate(draft.targetLocalDate)} 前` : goalText;
+
+  return <form aria-busy={busy} className="milestone-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+    <div className="section-heading"><h3>{continuing ? `续排里程碑：${editing?.title ?? ""}` : editing ? `编辑里程碑：${editing.title}` : "新增里程碑"}</h3><button className="icon-action" type="button" disabled={busy} aria-label="关闭里程碑表单" onClick={session.cancel}><X size={15} /></button></div>
     {continuing && <small>保留原累计目标并顺延日期；当前差额会随后续进度继续减少。</small>}
-    <label>里程碑名称<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-    <label>目标日期<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
-    <label>达成条件<select value={criterion} onChange={(event) => setCriterion(event.target.value as ProjectMilestone["criterionKind"])}><option disabled={!tasks.length} value="orderedTask">按顺序完成至指定任务</option><option disabled={!tasks.length} value="taskCount">完成任务数量</option><option value="projectProgress">项目进度达到</option></select></label>
-    {criterion === "orderedTask" && <label>顺序目标任务<select value={targetTaskId} onChange={(event) => setTargetTaskId(event.target.value)}><option value="">选择项目内任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
-    {criterion === "taskCount" && <label>完成任务数（项目内共 {tasks.length} 个）<input type="number" min="1" value={targetCount} onChange={(event) => setTargetCount(Math.max(1, Number(event.target.value) || 1))} /></label>}
-    {criterion === "projectProgress" && <label>项目加权进度（%）<input type="number" min="1" max="100" value={targetProgress} onChange={(event) => setTargetProgress(Math.min(100, Math.max(1, Number(event.target.value) || 1)))} /></label>}
+    <label>里程碑名称<input value={draft.title} onChange={(event) => patchDraft({ title: event.target.value } as Partial<ProjectMilestone>)} /></label>
+    <label>目标日期<input type="date" value={draft.targetLocalDate} onChange={(event) => patchDraft({ targetLocalDate: event.target.value } as Partial<ProjectMilestone>)} /></label>
+    <label>达成条件<select value={draft.criterionKind} onChange={(event) => setCriterion(patchDraft, event.target.value as ProjectMilestone["criterionKind"])}><option disabled={!tasks.length} value="orderedTask">按顺序完成至指定任务</option><option disabled={!tasks.length} value="taskCount">完成任务数量</option><option value="projectProgress">项目进度达到</option></select></label>
+    {draft.criterionKind === "orderedTask" && <label>顺序目标任务<select value={draft.targetTaskId ?? ""} onChange={(event) => patchDraft({ targetTaskId: event.target.value } as Partial<ProjectMilestone>)}><option value="">选择项目内任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
+    {draft.criterionKind === "taskCount" && <label>完成任务数（项目内共 {tasks.length} 个）<input type="number" min="1" value={draft.targetCount ?? 1} onChange={(event) => patchDraft({ targetCount: Math.max(1, Number(event.target.value) || 1) } as Partial<ProjectMilestone>)} /></label>}
+    {draft.criterionKind === "projectProgress" && <label>项目加权进度（%）<input type="number" min="1" max="100" value={draft.targetProgress ?? 50} onChange={(event) => patchDraft({ targetProgress: Math.min(100, Math.max(1, Number(event.target.value) || 1)) } as Partial<ProjectMilestone>)} /></label>}
     {!tasks.length && <small>项目还没有任务。添加任务后即可设置按任务或数量达成。</small>}<small>保存后：{summaryText}</small>
-    {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
-    <div className="form-actions"><Button disabled={busy} onClick={onCancel}>取消</Button><Button variant="primary" disabled={busy || !ready} onClick={() => void save()}>{busy ? "正在保存…" : continuing ? "保存续排" : "保存里程碑"}</Button></div>
+    {session.error && <p className="error-message" role="alert"><CircleAlert />{session.error}</p>}
+    <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button variant="primary" disabled={busy || !session.canSave} onClick={() => void session.save()}>{busy ? "正在保存…" : continuing ? "保存续排" : "保存里程碑"}</Button></div>
   </form>;
+}
+
+/** 切换达成条件时同步清掉另外两个分支的取值，保证草稿始终符合判别联合的形状。 */
+function setCriterion(patchDraft: (patch: Partial<ProjectMilestone>) => void, kind: ProjectMilestone["criterionKind"]) {
+  if (kind === "orderedTask") patchDraft({ criterionKind: "orderedTask", targetCount: null, targetProgress: null } as Partial<ProjectMilestone>);
+  else if (kind === "taskCount") patchDraft({ criterionKind: "taskCount", targetTaskId: null, targetProgress: null } as Partial<ProjectMilestone>);
+  else patchDraft({ criterionKind: "projectProgress", targetTaskId: null, targetCount: null } as Partial<ProjectMilestone>);
 }
 
 function continueMilestoneDraft(milestone: ProjectMilestone, today: string): ProjectMilestone {
@@ -1405,14 +1455,13 @@ function AutoScheduleDialog({ workspace, preferences, onClose, onApply, initialT
   const [query, setQuery] = useState(""); const [projectFilter, setProjectFilter] = useState("");
   const [preview, setPreview] = useState(false); const [busySaving, setBusySaving] = useState(false); const [error, setError] = useState("");
   const plan = useMemo(() => buildSchedulePlan({ startDate: today, days: 7, items: items.filter((item) => selected.has(item.key)), defaultTimeSlots: preferences.defaultTimeSlots, busy, minimumMinutes: preferences.minimumSessionMinutes }), [busy, items, preferences.defaultTimeSlots, preferences.minimumSessionMinutes, selected, today]);
-  const dialogRef = useRef<HTMLElement>(null); useModalBehavior(dialogRef, onClose, busySaving);
   const apply = async () => {
     setBusySaving(true); setError("");
     const sessions = plan.allocations.map((allocation) => sessionFromAllocation(allocation));
     const occurrences = plan.allocations.flatMap((allocation, index) => allocation.habitId ? [{ id: crypto.randomUUID(), habitId: allocation.habitId, localDate: allocation.localDate, status: "scheduled" as const, sessionId: sessions[index].id }] : []);
     try { await onApply(sessions, occurrences); } catch (reason) { setError(readError(reason)); setBusySaving(false); }
   };
-  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busySaving && onClose()}><section ref={dialogRef} className="modal schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-title"><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {formatDuration(plan.usedMinutes)} / 可用 {formatDuration(recommended.availableMinutes)}</div>{preview ? <SchedulePreview allocations={plan.allocations} /> : <div className="schedule-candidates"><label>按项目选择<select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">全部项目与习惯</option>{workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label><input aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="form-actions"><Button onClick={() => setSelected(new Set(items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => item.key)))}>选择搜索结果</Button><Button onClick={() => setSelected(new Set())}>清空选择</Button></div>{items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions">{preview && <Button disabled={busySaving} onClick={onClose}>取消</Button>}<Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></section></div>, document.body);
+  return <ConfirmDialog id="schedule-dialog" className="schedule-modal" labelledBy="schedule-title" busy={busySaving} onClose={onClose}><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {formatDuration(plan.usedMinutes)} / 可用 {formatDuration(recommended.availableMinutes)}</div>{preview ? <SchedulePreview allocations={plan.allocations} /> : <div className="schedule-candidates"><label>按项目选择<select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">全部项目与习惯</option>{workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label><input aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="form-actions"><Button onClick={() => setSelected(new Set(items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => item.key)))}>选择搜索结果</Button><Button onClick={() => setSelected(new Set())}>清空选择</Button></div>{items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions">{preview && <Button disabled={busySaving} onClick={onClose}>取消</Button>}<Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></ConfirmDialog>;
 }
 
 function scheduleDeadlineForTask(workspace: WorkspaceSnapshot, task: Task, today: string) {
@@ -1453,7 +1502,16 @@ function DataPage({ native }: { native: NativeApi }) {
   useEffect(() => { void native.getDataOverview().then((value) => { setBackups(value.backups); setCurrentCounts(value.counts); setBackupError(value.backupError); }).catch((reason) => setError(readError(reason))); }, [native]);
   const run = async (action: () => Promise<BackupInfo | null>, success: string) => { setBusy(true); setError(""); try { const result = await action(); if (result) { setMessage(success); setBackupError(null); setBackups((items) => [result, ...items.filter((item) => item.path !== result.path)]); } } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } };
   const chooseRestore = async () => { setBusy(true); setError(""); try { const source = await native.chooseRestoreSource(); if (source) setRestoreSelection(await native.inspectBackup(source)); } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } };
-  const confirmRestore = async () => { if (!restoreSelection) return; setRestoreBusy(true); setRestoreError(""); try { await native.restoreBackup(restoreSelection.source); window.location.reload(); } catch (reason) { setRestoreError(readError(reason)); setRestoreBusy(false); } };
+  // 恢复会整页重载：先查活动编辑会话（规格 §4.3 表末两行）。
+  // 提交中 → 等待，不打断请求；有未提交草稿 → 返回并要求先处理，不静默丢弃。
+  const confirmRestore = async () => {
+    if (!restoreSelection) return;
+    if (hasSubmittingEditor()) { setRestoreError("有正在保存的编辑，稍候再试。"); return; }
+    if (hasUncommittedEditorDraft()) { setRestoreError("有未保存的编辑，请先保存或取消后再恢复备份。"); return; }
+    setRestoreBusy(true); setRestoreError("");
+    try { await native.restoreBackup(restoreSelection.source); window.location.reload(); }
+    catch (reason) { setRestoreError(readError(reason)); setRestoreBusy(false); }
+  };
   return <section className="page-stack"><PageHeader eyebrow="本地保存 · 保留最近 7 天备份" title="数据与安全" /><section className="surface-card data-card"><ArchiveRestore size={32} /><div><h2>本地备份</h2><p>每次核心写入后刷新当天备份；恢复前会先保存当前状态并验证目标文件。</p></div><div className="form-actions"><Button variant="primary" disabled={busy} onClick={() => void run(() => native.createDailyBackup(), "已刷新今天的备份")}>立即备份</Button><Button disabled={busy} onClick={() => void run(() => native.createManualBackup(), "已导出手动备份")}>导出</Button><Button disabled={busy} onClick={() => void chooseRestore()}>恢复</Button></div></section>{backupError && <p className="error-message" role="alert"><CircleAlert />自动备份未完成：{backupError}。下次核心写入或手动备份时会重试。</p>}{message && <p className="success-message" role="status"><Check />{message}</p>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="backup-list">{backups.map((backup) => <BackupRow key={backup.path} backup={backup} native={native} disabled={busy} onPreview={setRestoreSelection} />)}</div>{restoreSelection && <RestoreDialog currentCounts={currentCounts} preview={restoreSelection} error={restoreError} busy={restoreBusy} onClose={closeRestore} onConfirm={confirmRestore} />}</section>;
 }
 
@@ -1476,33 +1534,18 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
 function FinishDialog({ record, task, onClose, onSubmit }: { record: ExecutionRecord; task: Task; onClose: () => void; onSubmit: (progress: number, note: string, actualEndUtc: string) => Promise<void> }) {
   const [progress, setProgress] = useState(task.progress); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
   const [actualMinutes, setActualMinutes] = useState(() => Math.max(1, Math.round((Date.now() - new Date(record.actualStartUtc).getTime()) / 60_000)));
-  const dialogRef = useRef<HTMLElement>(null); useModalBehavior(dialogRef, onClose, busy);
   const actualEndUtc = new Date(new Date(record.actualStartUtc).getTime() + actualMinutes * 60_000).toISOString();
-  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}><section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="finish-title"><div className="modal-icon"><Square /></div><h2 id="finish-title">结束本次：{task.title}</h2><p>本次执行会立即形成实际投入记录；任务完成度仍由你确认。</p><label>实际投入（分钟）<input type="number" min="1" max="1440" value={actualMinutes} onChange={(event) => setActualMinutes(Math.max(1, Number(event.target.value)))} /></label><label>任务完成度 <strong>{progress}%</strong><input type="range" min="0" max="100" step="5" value={progress} onChange={(event) => setProgress(Number(event.target.value))} /></label><label>本次小结（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="留下对下次有帮助的一句话" /></label><small>开始于 {formatClock(record.actualStartUtc)}</small><div className="form-actions"><Button disabled={busy} onClick={onClose}>继续执行</Button><Button variant="primary" disabled={busy} onClick={async () => { setBusy(true); try { await onSubmit(progress, note, actualEndUtc); } finally { setBusy(false); } }}>{busy ? "正在保存…" : "结束并保存"}</Button></div></section></div>, document.body);
+  return <ConfirmDialog id="finish-dialog" labelledBy="finish-title" busy={busy} onClose={onClose}><div className="modal-icon"><Square /></div><h2 id="finish-title">结束本次：{task.title}</h2><p>本次执行会立即形成实际投入记录；任务完成度仍由你确认。</p><label>实际投入（分钟）<input type="number" min="1" max="1440" value={actualMinutes} onChange={(event) => setActualMinutes(Math.max(1, Number(event.target.value)))} /></label><label>任务完成度 <strong>{progress}%</strong><input type="range" min="0" max="100" step="5" value={progress} onChange={(event) => setProgress(Number(event.target.value))} /></label><label>本次小结（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="留下对下次有帮助的一句话" /></label><small>开始于 {formatClock(record.actualStartUtc)}</small><div className="form-actions"><Button disabled={busy} onClick={onClose}>继续执行</Button><Button variant="primary" disabled={busy} onClick={async () => { setBusy(true); try { await onSubmit(progress, note, actualEndUtc); } finally { setBusy(false); } }}>{busy ? "正在保存…" : "结束并保存"}</Button></div></ConfirmDialog>;
 }
 
 function RestoreDialog({ preview, error, busy, onClose, onConfirm, currentCounts }: { currentCounts?: { projects: number; tasks: number } | null; preview: BackupPreview; error: string; busy: boolean; onClose: () => void; onConfirm: () => Promise<void> }) {
-  const dialogRef = useRef<HTMLElement>(null); useModalBehavior(dialogRef, onClose, busy);
-  return createPortal(<div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}><section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="restore-title"><div className="modal-icon"><ArchiveRestore /></div><h2 id="restore-title">确认恢复备份</h2><p>{currentCounts && <>当前有 {currentCounts.projects} 个项目、{currentCounts.tasks} 个任务。<br /></>}将恢复 <strong>{preview.projects}</strong> 个项目和 <strong>{preview.tasks}</strong> 个任务。开始替换前会创建恢复前备份。</p><p>备份时间：{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB</p><p>恢复会替换当前项目、任务、安排和历史。{preview.includesPreferences === true ? "此备份包含应用设置，将一并恢复。" : preview.includesPreferences === false ? "此备份不包含设置，保留当前设置。" : "设置包含情况待原生版本确认。"}</p><details><summary>来源文件</summary><small>{preview.source}</small></details>{busy && <p role="status"><span className="spinner" />正在验证并安全替换，当前步骤不可取消…</p>}{error && <p className="error-message" role="alert"><CircleAlert />恢复未完成：{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="danger" disabled={busy} onClick={() => void onConfirm()}>{busy ? "正在恢复…" : "验证并恢复"}</Button></div></section></div>, document.body);
+  return <ConfirmDialog id="restore-dialog" labelledBy="restore-title" busy={busy} onClose={onClose}><div className="modal-icon"><ArchiveRestore /></div><h2 id="restore-title">确认恢复备份</h2><p>{currentCounts && <>当前有 {currentCounts.projects} 个项目、{currentCounts.tasks} 个任务。<br /></>}将恢复 <strong>{preview.projects}</strong> 个项目和 <strong>{preview.tasks}</strong> 个任务。开始替换前会创建恢复前备份。</p><p>备份时间：{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB</p><p>恢复会替换当前项目、任务、安排和历史。{preview.includesPreferences === true ? "此备份包含应用设置，将一并恢复。" : preview.includesPreferences === false ? "此备份不包含设置，保留当前设置。" : "设置包含情况待原生版本确认。"}</p><details><summary>来源文件</summary><small>{preview.source}</small></details>{busy && <p role="status"><span className="spinner" />正在验证并安全替换，当前步骤不可取消…</p>}{error && <p className="error-message" role="alert"><CircleAlert />恢复未完成：{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="danger" disabled={busy} onClick={() => void onConfirm()}>{busy ? "正在恢复…" : "验证并恢复"}</Button></div></ConfirmDialog>;
 }
 
-function useModalBehavior(dialogRef: RefObject<HTMLElement | null>, onClose: () => void, busy: boolean) {
-  const busyRef = useRef(busy); busyRef.current = busy;
-  useEffect(() => {
-    const shell = document.querySelector<HTMLElement>(".app-shell"); const previousFocus = document.activeElement as HTMLElement | null;
-    shell?.setAttribute("inert", "");
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyRef.current) { event.preventDefault(); onClose(); return; }
-      if (event.key !== "Tab") return;
-      const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? []);
-      if (!controls.length) return; const first = controls[0]; const last = controls.at(-1)!;
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    requestAnimationFrame(() => (dialogRef.current?.querySelector<HTMLElement>("[autofocus]") ?? dialogRef.current?.querySelector<HTMLElement>("button, input, textarea"))?.focus());
-    return () => { document.removeEventListener("keydown", handleKeyDown); shell?.removeAttribute("inert"); requestAnimationFrame(() => previousFocus?.focus()); };
-  }, [dialogRef, onClose]);
+/** 危险确认模态：语义与几何由调用方保留，inert／Esc／Tab／焦点统一交给浮层宿主。 */
+function ConfirmDialog({ id, children, busy, onClose, className, labelledBy }: { id: string; children: ReactNode; busy: boolean; onClose: () => void; className?: string; labelledBy?: string }) {
+  useOverlayLayer(id, { kind: "confirm", dismissible: !busy, onDismiss: onClose });
+  return createPortal(<div id={id} className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}><section className={className ? `modal ${className}` : "modal"} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>{children}</section></div>, document.body);
 }
 
 function ProgressControl({ task, onCommit, showComplete = false }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; showComplete?: boolean }) {
@@ -1519,17 +1562,24 @@ function useCurrentTime() {
 }
 
 
-function TaskEditorFields({ task, projects, onUpdate, onCancel }: { task: Task; projects: Project[]; onUpdate: (task: Task) => Promise<void>; onCancel: () => void }) {
-  const [draft, setDraft] = useState(task); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  const save = async () => { if (busy) return; setBusy(true); setError(""); try { await onUpdate({ ...draft, title: draft.title.trim() }); } catch (reason) { setError(readError(reason)); setBusy(false); } };
-  return <form aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void save(); }}>
-    <label>标题<input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-    <label>项目<select value={draft.projectId ?? ""} onChange={(event) => setDraft({ ...draft, projectId: event.target.value || null })}><option value="">独立任务</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
-    <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => setDraft({ ...draft, deadlineLocal: event.target.value || null })} /></label>
-    <label>预计耗时（分钟）<input type="number" min="1" max="1440" value={draft.estimatedMinutes ?? ""} onChange={(event) => setDraft({ ...draft, estimatedMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
-    <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes ?? ""} onChange={(event) => setDraft({ ...draft, sessionMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
-    <label>优先级<select value={draft.priority ?? "normal"} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Task["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label>
-    {error && <p role="alert">{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onCancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !draft.title.trim()}>{busy ? "正在保存…" : "保存任务"}</Button></div>
+function TaskEditorFields({ task, projects, onUpdate, onCancel, onPhase }: { task: Task; projects: Project[]; onUpdate: (task: Task) => Promise<void>; onCancel: () => void; onPhase?: (busy: boolean) => void }) {
+  const session = useEditorSession<Task>({
+    key: task.id,
+    initial: task,
+    onSave: (draft) => onUpdate({ ...draft, title: draft.title.trim() }),
+    onClose: (reason) => { if (reason !== "saved") onCancel(); },
+    canSave: (draft) => Boolean(draft.title.trim()),
+    onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
+  });
+  const { draft, patchDraft, busy, error, phase } = session;
+  return <form aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+    <label>标题<input required value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
+    <label>项目<select value={draft.projectId ?? ""} onChange={(event) => patchDraft({ projectId: event.target.value || null })}><option value="">独立任务</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+    <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => patchDraft({ deadlineLocal: event.target.value || null })} /></label>
+    <label>预计耗时（分钟）<input type="number" min="1" max="1440" value={draft.estimatedMinutes ?? ""} onChange={(event) => patchDraft({ estimatedMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
+    <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes ?? ""} onChange={(event) => patchDraft({ sessionMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
+    <label>优先级<select value={draft.priority ?? "normal"} onChange={(event) => patchDraft({ priority: event.target.value as Task["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label>
+    {error && phase === "error" && <p role="alert">{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !draft.title.trim()}>{busy ? "正在保存…" : "保存任务"}</Button></div>
   </form>;
 }
 
