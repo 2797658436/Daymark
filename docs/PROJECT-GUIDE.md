@@ -42,7 +42,7 @@ Daymark 当前可交付能力已完成 **阶段 3 M1–M7：完整日历体验�
 - 执行提醒、启动摘要、关闭窗口驻留托盘、托盘左键／菜单恢复和显式退出；提醒成功后 30 分钟内首次托盘恢复会定位对应日历时段，其他情况进入今日页。
 - 暖杏浅色／深色／跟随系统主题、减少动态偏好（设置页可选跟随系统／减少／完整）、100%–200% 缩放和基础键盘／辅助技术支持。
 - 设置页可编辑零个或多个默认时段（名称、起止时间、适用星期）并新增或删除时段，也可设置日视图默认显示模式；数据页持续显示自动备份失败并可在成功后清除。
-- 阶段 4 P4-01／P4-02：统一下沉浮层宿主（inert 引用计数、Tab 循环与 Esc 的顶层唯一性、焦点归还）与编辑会话（草稿、提交互斥、过期请求丢弃）；任务与里程碑编辑面已接入，项目、时间块、习惯、默认时段、导入 5 个编辑面待 P4-03 接入。本阶段起点见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md)。
+- 阶段 4 P4-01／P4-02／P4-03：统一下沉浮层宿主（inert 引用计数、Tab 循环与 Esc 的顶层唯一性、焦点归还、输入法组合期 Enter／Escape 不误提交不误关）与编辑会话（草稿、提交互斥、失败保留草稿、过期请求丢弃）。全部编辑面已接入：任务、里程碑、时间块、重复习惯、精确时间、默认时段，以及项目／课程文本／B 站导入；导入按规格 §4.1 的显式例外保留「取消按模式保留草稿」。参见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md) 与 [`docs/reports/phase-4-p4-03-implementation.md`](reports/phase-4-p4-03-implementation.md)。
 
 当前已知边界：
 
@@ -139,7 +139,7 @@ flowchart LR
 
 | 路径 | 当前职责 |
 | --- | --- |
-| [`src/App.tsx`](../src/App.tsx) | 六页应用壳、今日／任务池／项目／7 天回顾流程、阶段 2 行动辅助，以及阶段 3 M1–M6 的三视图、连续日轴、状态与实际叠加、缩放、自适应、折叠、完整拖拽、全天截止标记、月摘要和键盘导航；M7 的项目截止编辑、里程碑 CRUD、续排入口与到期结果展示也在项目页与日历标记中实现；同时负责进度与执行闭环、提醒、设置保存、备份错误与恢复模态。 |
+| [`src/App.tsx`](../src/App.tsx) | 六页应用壳、今日／任务池／项目／7 天回顾流程、阶段 2 行动辅助，以及阶段 3 M1–M6 的三视图、连续日轴、状态与实际叠加、缩放、自适应、折叠、完整拖拽、全天截止标记、月摘要和键盘导航；M7 的项目截止编辑、里程碑 CRUD、续排入口与到期结果展示也在项目页与日历标记中实现；阶段 4 起各编辑面由 `TaskEditorFields`、`MilestoneForm`、`TimeBlockEditor`、`HabitEditor`、`DefaultTimeSlotEditor`、`SessionEditPopover` 与 `ProjectsPage` 的导入会话承载，统一走编辑会话；同时负责进度与执行闭环、提醒、设置保存、备份错误与恢复模态。 |
 | [`src/lib/calendarPlacement.ts`](../src/lib/calendarPlacement.ts) | M5 插入后移计算与并行卡片分栏／4 项以上汇总布局的纯逻辑接缝。 |
 | [`src/lib/calendarTimeline.ts`](../src/lib/calendarTimeline.ts) | 日视图默认时段合并、非默认区间补集、当前窗口与临时展开合成，以及折叠时间轴的分钟／像素双向映射；只负责前端布局，不创建领域事实。 |
 | [`src/lib/calendarSummary.ts`](../src/lib/calendarSummary.ts) | M6 任务截止紧迫度、单日截止／完成／推进／未推进摘要及月格三行截断，以及 M7.3 项目截止／里程碑日历标记聚合（`calendarDayMarkers`）的纯读取接缝；只读投影，不创建领域事实。 |
@@ -149,8 +149,8 @@ flowchart LR
 | [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、可调宽任务池、窄窗覆盖规则、纵向日历、焦点、缩放重排和减少动态规则。 |
 | [`src/components/ui/button.tsx`](../src/components/ui/button.tsx) | 共享按钮组件；通过 CVA 提供按钮变体、尺寸和转发 ref。 |
 | [`src/components/ui/floating-panel.tsx`](../src/components/ui/floating-panel.tsx) | 锚点气泡：位置、12px 边界避让、内容测量与外部指针守卫。模态语义（`aria-modal`、inert、Tab／Esc）由浮层宿主按 `kind` 注入，自身不决定。 |
-| [`src/components/ui/overlay-host.tsx`](../src/components/ui/overlay-host.tsx) | 浮层宿主：层级顺序、`.app-shell` 的 inert **引用计数**、Tab 循环与 Esc 的顶层唯一性、关闭后的焦点归还。不承担业务保存与气泡几何。 |
-| [`src/hooks/useEditorSession.ts`](../src/hooks/useEditorSession.ts) | 编辑会话：草稿、同步提交互斥、失败保留草稿、过期请求丢弃，以及供恢复备份等破坏性动作查询的活动会话注册表。 |
+| [`src/components/ui/overlay-host.tsx`](../src/components/ui/overlay-host.tsx) | 浮层宿主：层级顺序、`.app-shell` 的 inert **引用计数**、Tab 循环与 Esc 的顶层唯一性、输入法组合期 Enter／Escape 的例外、关闭后的焦点归还。不承担业务保存与气泡几何。 |
+| [`src/hooks/useEditorSession.ts`](../src/hooks/useEditorSession.ts) | 编辑会话：草稿、同步提交互斥、失败保留草稿、过期请求丢弃，以及供恢复备份等破坏性动作查询的活动会话注册表。常驻会话（导入草稿跨面板保留）用 `registerInRegistry: false` 退出注册表，避免记住的草稿被当成未提交编辑。 |
 | [`src/App.test.tsx`](../src/App.test.tsx) | 今日壳、任务池、纵向时间轴、阶段 2 行动闭环，以及阶段 3 三视图／锚点、跨日边界、当前安排双进度、待回顾三操作、计划／实际叠加、折叠计数／临时展开、全天截止溢出、周／月键盘导航、选中态、跨页目标显露和外部 session 事件路由测试。 |
 | [`src/lib/calendarSummary.test.ts`](../src/lib/calendarSummary.test.ts) | 单日摘要优先级、三行截断、进度合计、未推进事实与任务截止紧迫度边界测试。 |
 | [`src/lib/calendarTimeline.test.ts`](../src/lib/calendarTimeline.test.ts) | 重叠与跨午夜默认时段合并、跨午夜时段的星期归属、无默认时段的当前两小时窗口，以及折叠时间轴分钟／像素可逆映射测试。 |
@@ -329,7 +329,7 @@ flowchart TD
 
 ## 11. 测试体系
 
-当前测试库存为 Rust **37** 个、Vitest **144** 个（13 个文件）、Playwright **24** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期（见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md) §8）。
+当前测试库存为 Rust **37** 个、Vitest **147** 个（13 个文件）、Playwright **24** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期；P4-03 补充了输入法组合期 Enter／Escape 契约、导入连点单次提交与失败保留草稿、以及取消后按模式保留导入草稿三组用例（见 [`docs/reports/phase-4-p4-03-implementation.md`](reports/phase-4-p4-03-implementation.md) §6）。
 
 已知测试侧历史问题（均已修复，留作回归背景）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例曾有 `108px` 滚动时序竞态；2026-09-20 定位为两个成因 —— 挂载后的自动定位覆盖先发生的滚动，以及 `onWheel` 被 React 注册为 passive 使 `preventDefault()` 无效、浏览器默认滚动抢在锚点测量之前。现分别以「自动定位在收到容器 scroll 时让位」和「原生非 passive wheel 监听」修复，M3 ×30、M4 ×15 全通过（详见 [`docs/reports/phase-4-p4-01-baseline.md`](reports/phase-4-p4-01-baseline.md) §3.5）。Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
 
