@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 
-import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession } from "./hooks/useEditorSession";
+import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession, type EditorSessionApi } from "./hooks/useEditorSession";
 import { FloatingPanel } from "./components/ui/floating-panel";
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
@@ -1392,6 +1392,30 @@ function DefaultTimeSlotEditor({ slot, onCancel, onSave, onPhase }: {
   </form>;
 }
 
+type ProjectImportMode = "none" | "project" | "course" | "bilibili";
+
+/**
+ * 新建项目／导入三种模式共用的草稿。
+ *
+ * 三种模式共用一份草稿对象而不是三个会话：模式切换只是改 `mode`，
+ * 各模式自己的标题与来源数据因此天然互不串味（E2E 锁定的行为）。
+ */
+interface ProjectImportDraft {
+  mode: ProjectImportMode;
+  titles: { project: string; course: string; bilibili: string };
+  deadline: string;
+  source: string;
+  drafts: CourseTaskDraft[];
+  biliSource: string;
+  bilibili: BilibiliVideo | null;
+  biliSelected: number[];
+}
+
+const EMPTY_PROJECT_IMPORT: ProjectImportDraft = {
+  mode: "none", titles: { project: "", course: "", bilibili: "" }, deadline: "",
+  source: "", drafts: [], biliSource: "", bilibili: null, biliSelected: [],
+};
+
 function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onFetchBilibili, onCreateTask, onArrange }: {
   onCreateTask: (task: Task) => Promise<void>; onArrange: (task: Task) => void;
   workspace: WorkspaceSnapshot; onCreate: (project: Project, tasks: Task[]) => Promise<void>;
@@ -1400,37 +1424,59 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
   onProgress: (task: Task, value: number) => Promise<void>; onFetchBilibili: (bvid: string) => Promise<BilibiliVideo>;
 }) {
   const today = toLocalDate(new Date());
-  const [mode, setMode] = useState<"none" | "project" | "course" | "bilibili">("none");
-  const [titles, setTitles] = useState({ project: "", course: "", bilibili: "" });
-  const titleKey = mode === "none" ? "project" : mode; const title = titles[titleKey]; const setTitle = (value: string) => setTitles((current) => ({ ...current, [titleKey]: value }));
-  const [deadline, setDeadline] = useState(""); const [source, setSource] = useState(""); const [drafts, setDrafts] = useState<CourseTaskDraft[]>([]); const [busy, setBusy] = useState(false);
-  const [biliSource, setBiliSource] = useState("");
-  const [bilibili, setBilibili] = useState<BilibiliVideo | null>(null); const [biliSelected, setBiliSelected] = useState<number[]>([]); const [importError, setImportError] = useState("");
+  // 导入／新建项目的草稿由编辑会话持有。会话放在 ProjectsPage 而不是面板内部，
+  // 是为了满足规格 §4.1 的显式例外：**取消要按模式保留草稿**，草稿不能随面板卸载而消失。
+  // 代价是会话常驻挂载，所以必须退出活动会话注册表 —— 否则一个「记住的草稿」会被
+  // hasUncommittedEditorDraft() 误判成「正在编辑未提交」，拦住恢复备份等破坏性动作。
+  const [importBusy, setImportBusy] = useState(false);
+  const [importFetching, setImportFetching] = useState(false);
+  const [importFetchError, setImportFetchError] = useState("");
+  const projectImportRef = useRef<EditorSessionApi<ProjectImportDraft> | null>(null);
+  const projectImport = useEditorSession<ProjectImportDraft>({
+    key: "project-import",
+    initial: EMPTY_PROJECT_IMPORT,
+    registerInRegistry: false,
+    canSave: (draft) => {
+      if (draft.mode === "none" || !draft.titles[draft.mode].trim()) return false;
+      if (draft.mode === "course" && !draft.drafts.some((item) => item.selected)) return false;
+      if (draft.mode === "bilibili" && (!draft.bilibili || draft.biliSelected.length === 0)) return false;
+      return true;
+    },
+    onSave: async (draft) => {
+      const name = draft.mode === "none" ? "project" : draft.mode;
+      const project: Project = { id: crypto.randomUUID(), title: draft.titles[name].trim(), deadlineLocal: draft.mode === "project" ? (draft.deadline || null) : null };
+      const selected = draft.mode === "course"
+        ? draft.drafts.filter((item) => item.selected).map((item) => ({ title: item.title, estimatedMinutes: item.estimatedMinutes, mediaMinutes: null as number | null, sourceUrl: null as string | null, sourceKey: null as string | null }))
+        : draft.mode === "bilibili" && draft.bilibili
+          ? draft.bilibili.parts.filter((part) => draft.biliSelected.includes(part.page)).map((part) => ({ title: part.title, estimatedMinutes: null, mediaMinutes: Math.max(1, Math.ceil(part.durationSeconds / 60)), sourceUrl: part.sourceUrl, sourceKey: part.sourceKey }))
+          : [];
+      const tasks: Task[] = selected.map((item, index) => ({ id: crypto.randomUUID(), projectId: project.id, title: item.title, progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: item.estimatedMinutes, sessionMinutes: null, priority: "normal", sortOrder: index, sourceUrl: item.sourceUrl, sourceKey: item.sourceKey, mediaMinutes: item.mediaMinutes, kind: "task" }));
+      await onCreate(project, tasks);
+    },
+    // 成功＝这次事务结束，整份清空；取消只关面板，各模式草稿原样保留。
+    onClose: (reason) => { if (reason === "saved") { projectImportRef.current?.resetDraft(); setImportFetchError(""); } },
+    onPhaseChange: (phase) => setImportBusy(phase === "submitting"),
+  });
+  projectImportRef.current = projectImport;
+  const importDraft = projectImport.draft;
+  const patchImport = projectImport.patchDraft;
+  const importTitle = importDraft.titles[importDraft.mode === "none" ? "project" : importDraft.mode];
   const [newProjectTask, setNewProjectTask] = useState<Task | null>(null);
   const [newProjectTaskBusy, setNewProjectTaskBusy] = useState(false);
   const [taskQuery, setTaskQuery] = useState(""); const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [milestoneDraft, setMilestoneDraft] = useState<{ projectId: string; editing: ProjectMilestone | null; continuing: boolean } | null>(null);
   const [milestoneBusy, setMilestoneBusy] = useState(false);
-  const closeForm = () => { setMode("none"); setTitle(""); setDeadline(""); if (mode === "course") { setSource(""); setDrafts([]); } if (mode === "bilibili") { setBiliSource(""); setBilibili(null); setBiliSelected([]); } };
-  const create = async () => {
-    if (!title.trim() || busy) return; setBusy(true);
-    const project: Project = { id: crypto.randomUUID(), title: title.trim(), deadlineLocal: deadline || null };
-    const selected = mode === "course" ? drafts.filter((draft) => draft.selected).map((draft) => ({ title: draft.title, estimatedMinutes: draft.estimatedMinutes, mediaMinutes: null as number | null, sourceUrl: null as string | null, sourceKey: null as string | null }))
-      : mode === "bilibili" && bilibili ? bilibili.parts.filter((part) => biliSelected.includes(part.page)).map((part) => ({ title: part.title, estimatedMinutes: null, mediaMinutes: Math.max(1, Math.ceil(part.durationSeconds / 60)), sourceUrl: part.sourceUrl, sourceKey: part.sourceKey })) : [];
-    const tasks: Task[] = selected.map((draft, index) => ({ id: crypto.randomUUID(), projectId: project.id, title: draft.title, progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: draft.estimatedMinutes, sessionMinutes: null, priority: "normal", sortOrder: index, sourceUrl: draft.sourceUrl, sourceKey: draft.sourceKey, mediaMinutes: draft.mediaMinutes, kind: "task" }));
-    try { await onCreate(project, tasks); closeForm(); } catch (reason) { setImportError(readError(reason)); } finally { setBusy(false); }
-  };
-  return <section className="page-stack" aria-labelledby="projects-title"><PageHeader eyebrow="把长期结果拆成可行动的任务" title="项目" actions={<><Button variant="primary" onClick={() => setMode("project")}><Plus size={17} />新建项目</Button><Button onClick={() => setMode("course")}><Upload size={17} />导入文本课程</Button><Button onClick={() => setMode("bilibili")}><Upload size={17} />B 站链接 Beta</Button></>} />
-    {mode !== "none" && <FloatingPanel label="创建项目" wide={mode !== "project"} onClose={() => setMode("none")}><section aria-busy={busy} className="project-form"><div className="section-heading"><h2>{mode === "course" ? "导入课程分集" : mode === "bilibili" ? "读取 B 站公开视频" : "创建普通项目"}</h2><button className="icon-action" disabled={busy} aria-label="关闭" onClick={() => setMode("none")}><X /></button></div><label>项目标题<input autoFocus={mode !== "bilibili"} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-      {mode === "project" && <label>项目截止日期（可选）<input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label>}
-      {mode === "course" && <><label>粘贴分集文本<textarea rows={6} value={source} placeholder={'P1 起步 12:30\nP2 数据建模 18:00\n\n使用说明\n23:19\nUnit1 Lesson 1\n58:39'} onChange={(event) => { setSource(event.target.value); setDrafts(parseCourseText(event.target.value)); }} /></label><div className="import-preview" aria-label="课程导入预览">{drafts.map((draft, index) => <div key={`${draft.title}-${index}`}><input type="checkbox" aria-label={`选择 ${draft.title}`} checked={draft.selected} onChange={(event) => setDrafts((items) => items.map((item, at) => at === index ? { ...item, selected: event.target.checked } : item))} /><input aria-label={`编辑第 ${index + 1} 个分集`} value={draft.title} onChange={(event) => setDrafts((items) => items.map((item, at) => at === index ? { ...item, title: event.target.value } : item))} /><span>{draft.estimatedMinutes ? `${draft.estimatedMinutes} 分钟` : "未估时"}</span></div>)}</div></>}
-      {mode === "bilibili" && <><label>B 站普通视频链接<input autoFocus value={biliSource} onChange={(event) => setBiliSource(event.target.value)} placeholder="https://www.bilibili.com/video/BV…" /></label><Button disabled={!biliSource.trim() || busy} onClick={async () => { setBusy(true); setImportError(""); try { const video = await onFetchBilibili(extractBvid(biliSource)); setBilibili(video); setTitle(video.title); setBiliSelected(video.parts.map((part) => part.page)); } catch (error) { setImportError(readError(error)); } finally { setBusy(false); } }}>{busy ? "正在读取…" : "读取公开元数据"}</Button>{importError && <p className="error-message" role="alert"><CircleAlert />{importError}</p>}{bilibili && <><p className="import-source">{bilibili.ownerName} · {bilibili.bvid} · {bilibili.parts.length} 个分 P</p><div className="import-preview" role="region" aria-label="B 站分 P 预览">{bilibili.parts.map((part) => <div key={part.sourceKey}><input type="checkbox" aria-label={`选择 ${part.title}`} checked={biliSelected.includes(part.page)} onChange={(event) => setBiliSelected((pages) => event.target.checked ? [...pages, part.page] : pages.filter((page) => page !== part.page))} /><span>P{part.page}</span><input aria-label={`编辑第 ${part.page} 个分 P`} value={part.title} onChange={(event) => setBilibili((video) => video ? { ...video, parts: video.parts.map((item) => item.sourceKey === part.sourceKey ? { ...item, title: event.target.value } : item) } : video)} /><span>{Math.ceil(part.durationSeconds / 60)}分钟</span></div>)}</div></>}</>}
-      {mode !== "bilibili" && importError && <p role="alert">{importError}</p>}{!title.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={busy} onClick={() => setMode("none")}>取消</Button><Button variant="primary" disabled={!title.trim() || (mode === "course" && !drafts.some((item) => item.selected)) || (mode === "bilibili" && (!bilibili || biliSelected.length === 0)) || busy} onClick={() => void create()}>{busy ? "正在写入…" : "创建"}</Button></div>
-    </section></FloatingPanel>}
+  return <section className="page-stack" aria-labelledby="projects-title"><PageHeader eyebrow="把长期结果拆成可行动的任务" title="项目" actions={<><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />新建项目</Button><Button onClick={() => patchImport({ mode: "course" })}><Upload size={17} />导入文本课程</Button><Button onClick={() => patchImport({ mode: "bilibili" })}><Upload size={17} />B 站链接 Beta</Button></>} />
+    {importDraft.mode !== "none" && <FloatingPanel label="创建项目" wide={importDraft.mode !== "project"} busy={importBusy || importFetching} onClose={() => patchImport({ mode: "none" })}><form aria-busy={importBusy} className="project-form" onSubmit={(event) => { event.preventDefault(); void projectImport.save(); }}><div className="section-heading"><h2>{importDraft.mode === "course" ? "导入课程分集" : importDraft.mode === "bilibili" ? "读取 B 站公开视频" : "创建普通项目"}</h2><button className="icon-action" type="button" disabled={importBusy} aria-label="关闭" onClick={() => patchImport({ mode: "none" })}><X /></button></div><label>项目标题<input autoFocus={importDraft.mode !== "bilibili"} value={importTitle} onChange={(event) => patchImport({ titles: { ...importDraft.titles, [importDraft.mode]: event.target.value } })} /></label>
+      {importDraft.mode === "project" && <label>项目截止日期（可选）<input type="date" value={importDraft.deadline} onChange={(event) => patchImport({ deadline: event.target.value })} /></label>}
+      {importDraft.mode === "course" && <><label>粘贴分集文本<textarea rows={6} value={importDraft.source} placeholder={'P1 起步 12:30\nP2 数据建模 18:00\n\n使用说明\n23:19\nUnit1 Lesson 1\n58:39'} onChange={(event) => patchImport({ source: event.target.value, drafts: parseCourseText(event.target.value) })} /></label><div className="import-preview" aria-label="课程导入预览">{importDraft.drafts.map((draft, index) => <div key={`${draft.title}-${index}`}><input type="checkbox" aria-label={`选择 ${draft.title}`} checked={draft.selected} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, selected: event.target.checked } : item) })} /><input aria-label={`编辑第 ${index + 1} 个分集`} value={draft.title} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, title: event.target.value } : item) })} /><span>{draft.estimatedMinutes ? `${draft.estimatedMinutes} 分钟` : "未估时"}</span></div>)}</div></>}
+      {importDraft.mode === "bilibili" && <><label>B 站普通视频链接<input autoFocus value={importDraft.biliSource} onChange={(event) => patchImport({ biliSource: event.target.value })} placeholder="https://www.bilibili.com/video/BV…" /></label><Button type="button" disabled={!importDraft.biliSource.trim() || importBusy || importFetching} onClick={async () => { setImportFetching(true); setImportFetchError(""); try { const video = await onFetchBilibili(extractBvid(importDraft.biliSource)); patchImport({ bilibili: video, titles: { ...importDraft.titles, bilibili: video.title }, biliSelected: video.parts.map((part) => part.page) }); } catch (error) { setImportFetchError(readError(error)); } finally { setImportFetching(false); } }}>{importFetching ? "正在读取…" : "读取公开元数据"}</Button>{importFetchError && <p className="error-message" role="alert"><CircleAlert />{importFetchError}</p>}{importDraft.bilibili && <><p className="import-source">{importDraft.bilibili.ownerName} · {importDraft.bilibili.bvid} · {importDraft.bilibili.parts.length} 个分 P</p><div className="import-preview" role="region" aria-label="B 站分 P 预览">{importDraft.bilibili.parts.map((part) => <div key={part.sourceKey}><input type="checkbox" aria-label={`选择 ${part.title}`} checked={importDraft.biliSelected.includes(part.page)} onChange={(event) => patchImport({ biliSelected: event.target.checked ? [...importDraft.biliSelected, part.page] : importDraft.biliSelected.filter((page) => page !== part.page) })} /><span>P{part.page}</span><input aria-label={`编辑第 ${part.page} 个分 P`} value={part.title} onChange={(event) => patchImport({ bilibili: importDraft.bilibili ? { ...importDraft.bilibili, parts: importDraft.bilibili.parts.map((item) => item.sourceKey === part.sourceKey ? { ...item, title: event.target.value } : item) } : null })} /><span>{Math.ceil(part.durationSeconds / 60)}分钟</span></div>)}</div></>}</>}
+      {importDraft.mode !== "bilibili" && projectImport.error && <p role="alert">{projectImport.error}</p>}{!importTitle.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={importBusy} onClick={() => patchImport({ mode: "none" })}>取消</Button><Button type="submit" variant="primary" disabled={importBusy || !projectImport.canSave}>{importBusy ? "正在写入…" : "创建"}</Button></div>
+    </form></FloatingPanel>}
     {newProjectTask && <FloatingPanel label="添加项目任务" busy={newProjectTaskBusy} onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></FloatingPanel>}
     <div className="project-list-tools"><input aria-label="搜索项目任务" placeholder="搜索项目或任务" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} /><label><input type="checkbox" checked={incompleteOnly} onChange={(event) => setIncompleteOnly(event.target.checked)} />只看未完成</label></div>
-    <div className="project-grid">{workspace.projects.length === 0 ? <article className="surface-card project-card-empty"><span className="eyebrow">还没有项目</span><h2>把长期目标拆成可执行的任务</h2><p>在项目里集中管理一组相关任务，能更快看到推进和截止。</p><Button variant="primary" onClick={() => setMode("project")}><Plus size={17} />创建第一个项目</Button></article> : workspace.projects.map((project) => {
+    <div className="project-grid">{workspace.projects.length === 0 ? <article className="surface-card project-card-empty"><span className="eyebrow">还没有项目</span><h2>把长期目标拆成可执行的任务</h2><p>在项目里集中管理一组相关任务，能更快看到推进和截止。</p><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />创建第一个项目</Button></article> : workspace.projects.map((project) => {
       const tasks = workspace.tasks.filter((task) => task.projectId === project.id);
       const weighted = projectProgress(tasks);
       const milestones = workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder);

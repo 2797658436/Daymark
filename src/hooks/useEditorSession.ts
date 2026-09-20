@@ -80,6 +80,14 @@ export interface UseEditorSessionOptions<T> {
    * 知道现在处于 submitting，从而在提交期间拦住 Esc 与外部点击。
    */
   onPhaseChange?: (phase: EditorPhase) => void;
+  /**
+   * 是否登记到活动会话注册表，默认 true。
+   *
+   * 常驻会话（组件一直挂载、草稿在面板关闭后仍要保留，例如导入流程的按模式草稿）
+   * 必须设为 false：否则面板关掉之后它仍是 dirty，`hasUncommittedEditorDraft()`
+   * 会把一个「记住的草稿」误报成「正在编辑未提交」，从而拦住恢复备份等破坏性动作。
+   */
+  registerInRegistry?: boolean;
 }
 
 export interface EditorSessionApi<T> {
@@ -123,6 +131,7 @@ export function useEditorSession<T>(options: UseEditorSessionOptions<T>): Editor
   const instanceId = useRef(`editor-session-${Math.random().toString(36).slice(2, 10)}`);
   const dirtyNow = draft !== initialRef.current;
   useEffect(() => {
+    if (optionsRef.current.registerInRegistry === false) return;
     const registryId = instanceId.current;
     activeSessions.set(registryId, { dirty: dirtyNow, busy: phase === "submitting" });
     return () => { activeSessions.delete(registryId); };
