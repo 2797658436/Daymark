@@ -294,12 +294,19 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
   const compactReview = page.locator(".calendar-session.pending-review", { hasText: "待回顾检查" });
   await expect(compactReview.locator(".session-status-icon")).toHaveAttribute("aria-label", "待回顾");
   await expect(compactReview.locator(".review-summary")).toHaveCount(0);
+  // 动作气泡是「点开」的，不是「hover 即弹」：hover 期间不该有任何浮层。
   await compactReview.hover();
+  await expect(page.getByRole("dialog", { name: "待回顾检查 待回顾操作" })).toHaveCount(0);
+  // 这张卡在窄列里只有 39px 宽，右上角的铅笔覆盖了正中心 —— 按 body 上的固定点点击，
+  // 否则点到的是铅笔（打开编辑器），用例名不副实。
+  await compactReview.click({ position: { x: 6, y: 10 } });
   for (const name of ["更新进度", "继续安排", "本次未推进"]) {
     const action = page.getByRole("button", { name });
     await expect(action).toBeVisible();
     expect((await action.boundingBox())?.height).toBeGreaterThanOrEqual(43.9);
   }
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "待回顾检查 待回顾操作" })).toHaveCount(0);
 
   const viewport = page.locator(".calendar-viewport");
   await viewport.evaluate((element) => {

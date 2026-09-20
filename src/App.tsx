@@ -18,6 +18,7 @@ import { buildSevenDayReview } from "./lib/review";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
 import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
+import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag } from "./lib/calendarDrag";
 import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel } from "./lib/calendarSummary";
 import {
   createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type ExecutionRecord, type ExecutionSession,
@@ -547,7 +548,7 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
 function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const upcoming = sessions.filter((item) => item.taskId === task.id && hasFutureSchedule(item)).sort(compareSessions);
   const hint = upcoming.length ? `拖动安排 · 下次：${upcoming[0].localDate} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
-  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); }}>
+  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = Math.max(0, Math.round(event.clientY - event.currentTarget.getBoundingClientRect().top)); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
     <strong className="task-row-title">{task.title}</strong>
     {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
     <span className="task-row-side">
@@ -906,7 +907,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string }>(null);
   const [dragSourceId, setDragSourceId] = useState<string | null>(null);
   const overlapTimer = useRef<number | null>(null); const overlapTarget = useRef("");
-  useEffect(() => { const clearDrag = () => { setDragPreview(null); setDragSourceId(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; }; window.addEventListener("dragend", clearDrag); window.addEventListener("drop", clearDrag); return () => { window.removeEventListener("dragend", clearDrag); window.removeEventListener("drop", clearDrag); }; }, []);
+  useEffect(() => { const clearDrag = () => { setDragPreview(null); setDragSourceId(null); onDragGhost?.(null); endCalendarDrag(); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; }; window.addEventListener("dragend", clearDrag); window.addEventListener("drop", clearDrag); return () => { window.removeEventListener("dragend", clearDrag); window.removeEventListener("drop", clearDrag); clearDrag(); }; }, []);
   const [expandedConcurrency, setExpandedConcurrency] = useState<string | null>(null);
   const [blankHoverMinute, setBlankHoverMinute] = useState<number | null>(null);
   const [blankRange, setBlankRange] = useState<{ start: number; end: number } | null>(null);
@@ -939,13 +940,14 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.height) return null;
     // 抓取偏移：鼠标按下时相对源 session 顶部的距离；虚线框顶 = 鼠标 y - 抓取偏移 → 抓哪儿跟哪儿
-    const grabOffsetPx = Number(event.dataTransfer.getData("application/x-daymark-grab")) || 0;
+    const grabOffsetPx = calendarDragGrabOffset(event.dataTransfer);
     const pointerOffsetPx = Math.max(0, Math.max(0, event.clientY - rect.top) - grabOffsetPx);
     const raw = timeline ? timeline.minuteAtOffset(pointerOffsetPx) : (pointerOffsetPx / rect.height) * 1440;
     const configuredSnap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes;
     const snap = event.altKey ? (preferences.snapMinutes === "off" ? 15 : 1) : configuredSnap;
-    const taskId = event.dataTransfer.getData("application/x-daymark-task");
-    const sessionId = event.dataTransfer.getData("application/x-daymark-session");
+    // `dragover` 期间 `getData` 是空的（保护模式），必须回落到 dragstart 记下的影子副本，
+    // 否则整个拖拽预览在真实浏览器里都不会出现。
+    const { taskId, sessionId } = calendarDragIds(event.dataTransfer);
     const task = workspace.tasks.find((item) => item.id === taskId);
     const session = workspace.executionSessions.find((item) => item.id === sessionId);
     if (!task && !session) return null;
@@ -981,7 +983,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
       onPointerMove={(event) => { if (event.buttons !== 0) { if (blankSelectionStart.current === null) { setBlankHoverMinute(null); } return; } if (!pointsAtBlankTrack(event.target)) { if (blankSelectionStart.current === null) setBlankHoverMinute(null); return; } const minute = minuteAtPointer(event.clientY, event.currentTarget); if (blankSelectionStart.current === null) setBlankHoverMinute(minute); else { const start = Math.min(blankSelectionStart.current, minute); const end = Math.max(blankSelectionStart.current, minute, start + 5); setBlankRange({ start, end }); } }}
       onPointerUp={(event) => { if (blankSelectionStart.current === null) return; const origin = blankSelectionStart.current; const minute = minuteAtPointer(event.clientY, event.currentTarget); const start = Math.min(origin, minute); const end = minute === origin ? origin + 30 : Math.max(origin, minute, start + 5); blankSelectionStart.current = null; setBlankAnchor(new DOMRect(event.clientX, event.clientY, 0, 0)); setBlankRange({ start, end: Math.min(1440, end) }); setBlankAction("menu"); try { if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ } }}
       onPointerLeave={() => { if (blankSelectionStart.current === null) setBlankHoverMinute(null); }}
-      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = Array.from(event.dataTransfer.types ?? []).includes("application/x-daymark-session") ? "move" : "copy"; const nextPreview = previewFromDrag(event); setDragPreview(nextPreview); if (onDragGhost) { if (!nextPreview) onDragGhost(null); else { const track = event.currentTarget; const body = track.closest<HTMLElement>(".week-body, .continuous-day-axis"); const trackRect = track.getBoundingClientRect(); const bodyRect = body?.getBoundingClientRect(); if (!body || !bodyRect || !trackRect.height) onDragGhost(null); else { const pxPerHour = trackRect.height / 24; onDragGhost({ leftPx: Math.max(0, trackRect.left - bodyRect.left), topPx: Math.max(0, trackRect.top - bodyRect.top) + (nextPreview.startMinute % 1440) / 60 * pxPerHour, widthPx: trackRect.width, heightPx: Math.max(nextPreview.duration / 60 * pxPerHour, 2), mode: nextPreview.mode, targetSessionId: nextPreview.targetSessionId, title: nextPreview.title }); } } } const scroller = event.currentTarget.closest<HTMLElement>(".continuous-day-axis, .calendar-viewport"); const rect = scroller?.getBoundingClientRect(); if (scroller && rect) { const edge = 56; if (event.clientY < rect.top + edge) scroller.scrollTop -= Math.ceil((rect.top + edge - event.clientY) / 4); else if (event.clientY > rect.bottom - edge) scroller.scrollTop += Math.ceil((event.clientY - (rect.bottom - edge)) / 4); } }} onDragLeave={(event) => { const target = event.relatedTarget as Node | null; const container = event.currentTarget.closest<HTMLElement>(".calendar-grid.week-body, .continuous-day-axis"); const stillInside = container != null && target != null && container.contains(target); const leftContainer = target != null && !stillInside; if (leftContainer) { setDragPreview(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; } }} onDrop={(event) => {
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = calendarDragTypes(event.dataTransfer).session ? "move" : "copy"; const nextPreview = previewFromDrag(event); setDragPreview(nextPreview); if (onDragGhost) { if (!nextPreview) onDragGhost(null); else { const track = event.currentTarget; const body = track.closest<HTMLElement>(".week-body, .continuous-day-axis"); const trackRect = track.getBoundingClientRect(); const bodyRect = body?.getBoundingClientRect(); if (!body || !bodyRect || !trackRect.height) onDragGhost(null); else { const pxPerHour = trackRect.height / 24; onDragGhost({ leftPx: Math.max(0, trackRect.left - bodyRect.left), topPx: Math.max(0, trackRect.top - bodyRect.top) + (nextPreview.startMinute % 1440) / 60 * pxPerHour, widthPx: trackRect.width, heightPx: Math.max(nextPreview.duration / 60 * pxPerHour, 2), mode: nextPreview.mode, targetSessionId: nextPreview.targetSessionId, title: nextPreview.title }); } } } const scroller = event.currentTarget.closest<HTMLElement>(".continuous-day-axis, .calendar-viewport"); const rect = scroller?.getBoundingClientRect(); if (scroller && rect) { const edge = 56; if (event.clientY < rect.top + edge) scroller.scrollTop -= Math.ceil((rect.top + edge - event.clientY) / 4); else if (event.clientY > rect.bottom - edge) scroller.scrollTop += Math.ceil((event.clientY - (rect.bottom - edge)) / 4); } }} onDragLeave={(event) => { const target = event.relatedTarget as Node | null; const container = event.currentTarget.closest<HTMLElement>(".calendar-grid.week-body, .continuous-day-axis"); const stillInside = container != null && target != null && container.contains(target); const leftContainer = target != null && !stillInside; if (leftContainer) { setDragPreview(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; } }} onDrop={(event) => {
       event.preventDefault();
       const preview = previewFromDrag(event) ?? dragPreview;
       if (!preview) { onClearDragExpansion?.(); return; }
@@ -1056,8 +1058,11 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
    * 从松开到父级 workspace 更新之间，`block` 仍是旧时间。若这段时间直接回落到
    * `baseStyle`，卡片会带着刚恢复的 `top/height` 过渡「弹回」旧位置，等数据回来后
    * 再跳到新位置 —— 看上去就是动画错误。所以把落点记下来渲染，直到 `block` 真的变成它。
+   *
+   * 跨列移动时落点不在本列：源列这一份原地藏起来，落点交给目标列的 `.day-track` 里
+   * 一个 portal 渲染（坐标直接复用 `position()`），否则卡片会先弹回源列再跳过去。
    */
-  const [landed, setLanded] = useState<null | { startLocal: string; endLocal: string; localDate: string; endLocalDate: string }>(null);
+  const [landed, setLanded] = useState<null | { startLocal: string; endLocal: string; localDate: string; endLocalDate: string; track: HTMLElement | null }>(null);
   // 一旦 block 追上落点，覆盖显示就交还给 baseStyle。
   useEffect(() => {
     if (!landed) return;
@@ -1114,7 +1119,11 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
         }
       }
       const unchanged = startLocal === block.startLocal && endLocal === block.endLocal && localDate === block.localDate && endLocalDate === block.endLocalDate;
-      if (!unchanged) { setLanded({ startLocal, endLocal, localDate, endLocalDate }); void onUpdate({ ...block, startLocal, endLocal, localDate, endLocalDate }); }
+      if (!unchanged) {
+        setLanded({ startLocal, endLocal, localDate, endLocalDate, track: localDate === block.localDate ? null : dayTrackFor(localDate) });
+        // 写入失败时把落点覆盖撤掉，让卡片回到事实位置（错误由顶部横幅统一提示）。
+        void onUpdate({ ...block, startLocal, endLocal, localDate, endLocalDate }).catch(() => setLanded(null));
+      }
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
   };
@@ -1133,6 +1142,9 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   const dropStartStr = minutesTime(dropStart % 1440);
   const dropEndStr = minutesTime(dropEnd % 1440);
   const dropDuration = (dropEnd - dropStart + 1440) % 1440 || 1440;
+  // 横向按整列吸附：卡片纵向自由跟手（能看清落点），横向却不会横跨两列压在别的格子上，
+  // 松手时也就不会再多跳一下 —— 跨列落点覆盖层画的正是这一列的坐标。
+  const columnDays = resize && resize.edge === "move" && resize.trackWidth > 0 ? Math.round((resize.clientX - resize.originX) / resize.trackWidth) : 0;
   const liveStyleFor = (startStr: string, endStr: string) => {
     const fresh = position(startStr, endStr);
     const style = fresh ?? (() => {
@@ -1142,22 +1154,15 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
       const duration = (endMin - minutes + 1440) % 1440 || 1440;
       return { ...baseStyle, top, height: `${Math.max(duration / 1440 * 100, 1.25)}%` };
     })();
-    if (resize && resize.edge === "move" && resize.clientX !== resize.originX) {
-      const deltaX = resize.clientX - resize.originX;
-      return { ...style, left: `calc(7px + ${deltaX}px)`, right: "auto", width: "calc(100% - 14px)" };
-    }
+    if (columnDays !== 0 && resize) return { ...style, left: `calc(7px + ${columnDays * resize.trackWidth}px)`, right: "auto", width: "calc(100% - 14px)" };
     return style;
   };
-  // 落点只在同一天内接管显示：跨天时这块卡会换到另一列去，本实例随即卸载。
+  // 落点只在同一天内接管本列的显示；跨天的那一份画进目标列的 .day-track（见下）。
   const landedStyle = landed && landed.localDate === block.localDate ? position(landed.startLocal, landed.endLocal) : null;
+  const landedOverlayStyle = landed && landed.localDate !== block.localDate && landed.track ? position(landed.startLocal, landed.endLocal) : null;
   const displayStyle = resize !== null ? liveStyleFor(liveStartStr, liveEndStr) : (landedStyle ?? baseStyle);
   // 落点框只在"移动"时出现：改时长时卡片边界本身就是最终边界，再叠一层虚线只是噪音。
-  // 横向同样吸附：框跳到目标列，卡片自由跟手，x/y 两轴都指向最终落点。
-  const dropStyle = resize === null || resize.edge !== "move" ? null : (() => {
-    const style = liveStyleFor(dropStartStr, dropEndStr);
-    const deltaDays = resize.trackWidth > 0 ? Math.round((resize.clientX - resize.originX) / resize.trackWidth) : 0;
-    return { ...style, left: `calc(7px + ${deltaDays * resize.trackWidth}px)`, right: "auto", width: "calc(100% - 14px)" };
-  })();
+  const dropStyle = resize === null || resize.edge !== "move" ? null : liveStyleFor(dropStartStr, dropEndStr);
   const isResizing = resize !== null;
   useLayoutEffect(() => {
     if (resize === null) { setPreviewBox(null); return; }
@@ -1172,13 +1177,17 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   return <>
     {dropStyle && <div aria-hidden="true" className="calendar-time-block-drop" style={dropStyle} />}
     {resize !== null && resize.edge === "move" && <div aria-hidden="true" className="calendar-time-block-origin" style={baseStyle} />}
-    <article ref={articleRef} className={classes} style={displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge}>
+    <article ref={articleRef} className={classes} style={landedOverlayStyle ? { ...displayStyle, display: "none" } : displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge}>
       <button className="time-block-handle time-block-handle-top" aria-label={`调整 ${block.title} 开始时间`} onPointerDown={(e) => startEdgeResize(e, "top")} />
       <time>{liveStartStr}–{liveEndStr}</time>
       <strong>{block.title}</strong>
       <button className="time-block-delete" aria-label={`删除时间块 ${block.title}`} onClick={onDelete}><X size={13} /></button>
       <button className="time-block-handle time-block-handle-bottom" aria-label={`调整 ${block.title} 结束时间`} onPointerDown={(e) => startEdgeResize(e, "bottom")} />
     </article>
+    {landedOverlayStyle && landed?.track && createPortal(
+      <article aria-hidden="true" className="calendar-time-block is-landed" style={landedOverlayStyle}><time>{landed.startLocal}–{landed.endLocal}</time><strong>{block.title}</strong></article>,
+      landed.track,
+    )}
     {resize !== null && previewBox && <div className={`session-resize-preview${previewBox.above ? " is-above" : ""}`} role="status" aria-label="时间块时间预览" style={{ left: `${previewBox.left}px`, top: `${previewBox.top}px` }}>{dropStartStr}–{dropEndStr} · {dropDuration} 分钟</div>}
   </>;
 }
@@ -1194,15 +1203,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const [progressOpen, setProgressOpen] = useState(false);
   const [resize, setResize] = useState<number | null>(null);
   const [resizeBox, setResizeBox] = useState<null | { left: number; top: number; above: boolean }>(null);
-  const [reviewPos, setReviewPos] = useState({ top: 0, left: 0 });
   const [reviewOpen, setReviewOpen] = useState(false);
-  const reviewLeaveTimer = useRef<number | null>(null);
-  // 拖动／缩放期间指针一路贴着卡片边缘，待回顾气泡此时既是视觉噪音，也会把落点盖住
-  const interactingRef = useRef(false);
-  const closeReviewNow = () => { if (reviewLeaveTimer.current !== null) { window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; } setReviewOpen(false); };
-  const openReview = () => { if (interactingRef.current) return; if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = null; setReviewOpen(true); };
-  const scheduleCloseReview = () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); reviewLeaveTimer.current = window.setTimeout(() => setReviewOpen(false), 200); };
-  useEffect(() => () => { if (reviewLeaveTimer.current !== null) window.clearTimeout(reviewLeaveTimer.current); }, []);
   const current = sessionContains(session, now);
   const pendingReview = isPendingReview(session, task, records, now);
   const confirmedNoProgress = session.status === "missed";
@@ -1210,17 +1211,24 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const availableHeight = sessionDuration(session) / 60 * hourHeight;
   const density = availableHeight < hourHeight / 2 ? "compact" : availableHeight < hourHeight ? "standard" : "detailed";
   const showTimeAndProgress = density !== "compact";
-  useEffect(() => {
-    if (!pendingReview) return;
-    const update = () => {
-      const rect = articleRef.current?.getBoundingClientRect();
-      if (rect) setReviewPos({ top: Math.min(rect.bottom, window.innerHeight - 64), left: Math.max(8, Math.min(window.innerWidth - 340, rect.left - 2)) });
-    };
-    update();
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => { window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update); };
-  }, [pendingReview, session.id, session.startLocal, session.endLocal]);
+  /**
+   * 待回顾动作的开合。
+   *
+   * 以前是 hover 即弹：鼠标扫过日历就会冒出一串气泡盖住下面的卡片，指针挪到
+   * 「更新进度」的滑块上就自动关掉，键盘 Tab 进去也留不住。现在只在用户明确
+   * 表达时才打开 —— 点卡片本体，或聚焦「待回顾」入口按钮后回车；关闭交给浮层
+   * 宿主（Esc、点外部、动作完成），定位用锚元素实时跟随。
+   */
+  const reviewActions = pendingReview && reviewOpen ? (
+    <FloatingPanel label={`${task.title} 待回顾操作`} kind="action" busy={false} anchorElement={articleRef.current} closeOnOutsideClick onClose={() => { setReviewOpen(false); setProgressOpen(false); }}>
+      <div className="session-review-actions">
+        <button onClick={() => setProgressOpen((value) => !value)}>更新进度</button>
+        <button onClick={() => { setReviewOpen(false); onContinue(); }}>继续安排</button>
+        <button onClick={() => { setReviewOpen(false); void onSkipReview(); }}>本次未推进</button>
+        {progressOpen && <ProgressControl task={task} onCommit={onProgress} />}
+      </div>
+    </FloatingPanel>
+  ) : null;
   const showDetails = density === "detailed";
   const status = current ? { icon: <Clock3 size={12} />, label: "当前安排" }
     : pendingReview ? { icon: <CircleAlert size={12} />, label: "待回顾" }
@@ -1230,7 +1238,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault(); event.stopPropagation();
     onResizeStart?.();
-    interactingRef.current = true; closeReviewNow();
+    setReviewOpen(false);
     const originY = event.clientY;
     const initial = sessionDuration(session);
     const pixelsPerMinute = hourHeight / 60;
@@ -1243,9 +1251,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     const up = (next: PointerEvent) => {
       const duration = rounded(next);
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-      setResize(null); interactingRef.current = false;
-      const rect = articleRef.current?.getBoundingClientRect();
-      if (rect && next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom) openReview();
+      setResize(null);
       void onResize(duration);
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
@@ -1259,10 +1265,12 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   }, [resize]);
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onPointerEnter={pendingReview ? openReview : undefined} onPointerLeave={pendingReview ? scheduleCloseReview : undefined} onFocus={pendingReview ? openReview : undefined} onBlur={pendingReview ? scheduleCloseReview : undefined} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") { event.preventDefault(); onEdit(articleRef.current); } }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = event.clientY - event.currentTarget.getBoundingClientRect().top; event.dataTransfer.setData("application/x-daymark-grab", String(Math.max(0, Math.round(grabOffsetY)))); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = Math.max(0, Math.round(event.clientY - event.currentTarget.getBoundingClientRect().top)); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
     {resize !== null && resizeBox && <div className={`session-resize-preview${resizeBox.above ? " is-above" : ""}`} role="status" aria-label="调整时长预览" style={{ left: `${resizeBox.left}px`, top: `${resizeBox.top}px` }}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize) % 1440)} · {resize} 分钟</div>}
     {showTimeAndProgress && <time className="session-time">{session.startLocal}–{session.endLocal}</time>}<strong>{task.title}</strong>
-    {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && <span className="session-status-icon" aria-label={status.label}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
+    {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && (pendingReview
+      ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</button>
+      : <span className="session-status-icon" aria-label={status.label}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>)}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
     {showDetails && projectTitle && <span className="session-project">{projectTitle}</span>}
     {current && showTimeAndProgress && <div className="session-elapsed" role="progressbar" aria-label={`${task.title} 本时段已过去`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={elapsed}><span style={{ width: `${elapsed}%` }} /></div>}
     {showTimeAndProgress && <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>}
@@ -1271,10 +1279,7 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     <button className="session-edit-button" data-session-edit-button data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={(event) => onEdit(event.currentTarget)}><Pencil size={12} /></button>
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
   </article>
-  {pendingReview && createPortal(
-    <div className={`session-review-actions${reviewOpen ? " open" : ""}`} style={{ top: `${reviewPos.top}px`, left: `${reviewPos.left}px` }} aria-label={`${task.title} 待回顾操作`} onPointerEnter={openReview} onPointerLeave={scheduleCloseReview}><button onClick={() => setProgressOpen((value) => !value)}>更新进度</button><button onClick={onContinue}>继续安排</button><button onClick={() => void onSkipReview()}>本次未推进</button>{progressOpen && <ProgressControl task={task} onCommit={onProgress} />}</div>,
-    document.body
-  )}
+  {reviewActions}
   </>;
 }
 
@@ -1798,6 +1803,15 @@ function clockDuration(startLocal: string, endLocal: string) { const start = tim
 function sessionDuration(session: ExecutionSession) { const start = timeMinutes(session.startLocal); let end = timeMinutes(session.endLocal); if (session.endLocalDate !== session.localDate || end <= start) end += 1440; return end - start; }
 function placementDateTime(date: string, minute: number) { const dayOffset = Math.floor(Math.max(0, minute) / 1440); return { date: addDays(date, dayOffset), time: minutesTime(Math.max(0, minute) % 1440) }; }
 function positionStyle(start: string, end: string) { const top = timeMinutes(start) / 1440 * 100; let duration = timeMinutes(end) - timeMinutes(start); if (duration <= 0) duration += 1440; return { top: `${top}%`, height: `${Math.max(duration / 1440 * 100, 1.25)}%` }; }
+
+/**
+ * 跨列落点要画进目标列里：找到那一列的轨道元素，portal 进去之后
+ * `position()` 的百分比坐标直接成立，不必自己换算视口坐标。
+ */
+function dayTrackFor(date: string): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.querySelector<HTMLElement>(`.calendar-day[data-day-date="${date}"] .day-track`);
+}
 function closestZoom(view: AppSettings["calendarView"], scale: number): AppSettings["calendarZoom"]["day"] {
   return (["compact", "standard", "detailed"] as const).reduce((closest, candidate) =>
     Math.abs(calendarScaleForZoom(view, candidate) - scale) < Math.abs(calendarScaleForZoom(view, closest) - scale) ? candidate : closest);

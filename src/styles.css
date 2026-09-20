@@ -267,6 +267,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-session.planned-outline { border-style: dashed; background: color-mix(in srgb, var(--accent-soft) 38%, var(--panel)); opacity: .62; }
 .calendar-session.planned-outline:focus-within, .calendar-session.planned-outline:hover { opacity: 1; }
 .session-state, .session-status-icon { display: flex; align-items: center; gap: 3px; }
+/* 「待回顾」既是状态也是入口：卡片聚焦后 Tab 到这里按 Enter 就能打开动作气泡，
+   不必把 Enter 从「编辑时间」上挪走（那是已定稿的键盘契约）。*/
+.session-review-trigger { padding: 1px 4px; min-height: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; text-align: left; }
+.session-review-trigger:hover { background: var(--panel-strong); color: var(--accent-strong); }
 .session-state svg { flex: 0 0 auto; }
 .session-project { min-width: 0; color: var(--muted); font-size: .68rem !important; overflow-wrap: anywhere; }
 .session-progress-value { font-variant-numeric: tabular-nums; }
@@ -277,7 +281,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 @container (max-width: 112px) { .calendar-session .session-progress-value { display: none; } }
 @container (max-width: 100px) { .calendar-session .session-status-icon > span { display: none; } .calendar-session .session-state { position: absolute; top: 4px; right: 4px; } }
 @container (max-width: 88px) { .calendar-session .session-time { display: none; } }
-.review-summary { font-size: .68rem !important; overflow-wrap: anywhere; }.session-review-actions { position: fixed; z-index: 50; width: max-content; max-width: 330px; display: flex; flex-wrap: wrap; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow-float); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-2px); transition: opacity .12s ease, transform .12s ease, visibility .12s ease; }.session-review-actions.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }.session-review-actions button { min-height: 44px; padding: 5px 8px; border: 0; border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .72rem; }.session-review-actions button:hover { color: var(--accent-strong); }.session-review-actions .progress-control { flex-basis: 100%; min-width: 250px; }
+.review-summary { font-size: .68rem !important; overflow-wrap: anywhere; }
+/* 待回顾动作现在是 FloatingPanel（非模态 dialog）里的按钮组：定位、开合、Esc、
+   焦点归还都归浮层宿主管。这里只负责排布 —— 不再自己 fixed 定位 + 定时器显隐，
+   那样鼠标从卡片移到「更新进度」滑块上就会把面板关掉。*/
+.session-review-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.session-review-actions button { min-height: 44px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .72rem; }
+.session-review-actions button:hover { color: var(--accent-strong); }
+.session-review-actions .progress-control { flex-basis: 100%; min-width: 250px; }
 .calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); color: var(--action-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
 .back-to-now { position: absolute; z-index: 16; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
 @container (max-height: 28px) { .calendar-actual-record { align-content: center; padding-block: 2px; } .calendar-actual-record span, .calendar-actual-record time { display: none; } }.resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
@@ -386,7 +397,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-drag-preview.insert-before, .calendar-drag-preview.insert-after { border-color: var(--accent); }
 .calendar-insert-line { position: absolute; z-index: 24; left: 1px; right: 1px; height: 2px; background: var(--accent-strong); pointer-events: none; }.calendar-insert-line::before, .calendar-insert-line::after { content: ""; position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-strong); }.calendar-insert-line::before { left: 0; }.calendar-insert-line::after { right: 0; }.calendar-insert-line span { position: absolute; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 5px; background: var(--accent-strong); color: var(--action-text); font-size: .65rem; white-space: nowrap; }
 .calendar-shift-preview { position: absolute; z-index: 18; inset-inline: 5px; display: grid; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel) 72%, transparent); opacity: .55; pointer-events: none; }.calendar-shift-preview strong, .calendar-shift-preview time { overflow: hidden; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
-.calendar-session.is-dragging-source { opacity: .32; filter: grayscale(.55); transform: scale(.98); pointer-events: none; transition: opacity .14s ease, transform .14s ease; }
+/* 拖动中的源卡片只能变「淡」，**绝不能**被设为不可命中。
+   浏览器在拖拽持续期间会不断用指针位置去命中拖拽源：`dragstart` 里把源设成
+   `pointer-events: none`（或任何让它不再可命中的写法），Chromium 会在 `dragstart`
+   之后立刻取消整个拖拽 —— 表现就是「按下去能移动，但卡片永远拖不动」。
+   `transform`/`opacity`/`filter` 本身不触发取消，只有命中性会。*/
+.calendar-session.is-dragging-source { opacity: .32; filter: grayscale(.55); transform: scale(.98); transition: opacity .14s ease, transform .14s ease; }
 .calendar-session.is-resizing { opacity: .85; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); transition: height .16s ease-out, opacity .14s ease, box-shadow .14s ease; }
 .concurrent-summary { position: absolute; z-index: 7; inset: auto 4px 4px; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .68rem; cursor: pointer; }.concurrent-expanded-list { position: absolute; z-index: 6; left: 8px; right: 8px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--accent); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-float); }.concurrent-expanded-list button { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 7px; border: 0; border-radius: 6px; background: var(--panel-strong); color: var(--text); text-align: left; }.concurrent-expanded-list time { color: var(--muted); font-size: .7rem; white-space: nowrap; }
 .simultaneous-count { position: absolute; z-index: 6; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 999px; background: var(--panel); color: var(--accent-strong) !important; font-size: .62rem !important; white-space: nowrap; }
@@ -437,6 +453,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-time-block.is-resizing[data-resize-edge="move"] { transition: box-shadow .12s ease, opacity .14s ease; }
 .calendar-time-block-origin { position: absolute; z-index: 0; inset-inline: 7px; border: 1px dashed color-mix(in srgb, var(--muted) 50%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 40%, transparent); pointer-events: none; }
 .calendar-time-block-drop { position: absolute; z-index: 0; inset-inline: 7px; border: 3px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 24%, transparent); pointer-events: none; animation: drag-preview-in 120ms ease-out; }
+/* 跨列落点：源列那一份在数据写入期间已经藏起来，这份 portal 进目标列的 .day-track，
+   坐标复用正常的 position()，因此位置与随后真正落库的卡片完全一致。没有它，松手
+   瞬间卡片会先弹回源列、等写入回来再跳到目标列 —— 就是「列一变动画就闪」。*/
+.calendar-time-block.is-landed { z-index: 30; pointer-events: none; animation: drag-preview-in 120ms ease-out; }
 @container (max-height: 26px) { .calendar-time-block { padding-block: 2px; align-content: center; } .calendar-time-block time { display: none; } }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
 .review-outcomes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
