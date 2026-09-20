@@ -459,10 +459,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-time-block.is-resizing[data-resize-edge="move"] { opacity: .55; transition: box-shadow .12s ease, opacity .14s ease; }
 .calendar-time-block-origin { position: absolute; z-index: 0; inset-inline: 7px; border: 1px dashed color-mix(in srgb, var(--muted) 50%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 40%, transparent); pointer-events: none; }
 .calendar-time-block-drop { position: absolute; z-index: 0; inset-inline: 7px; min-height: 32px; border: 3px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 24%, transparent); pointer-events: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, height; animation: drag-preview-in 120ms ease-out; }
-/* 跨列落点：源列那一份在数据写入期间已经藏起来，这份 portal 进目标列的 .day-track，
-   坐标复用正常的 position()，因此位置与随后真正落库的卡片完全一致。没有它，松手
-   瞬间卡片会先弹回源列、等写入回来再跳到目标列 —— 就是「列一变动画就闪」。*/
-.calendar-time-block.is-landed { z-index: 30; pointer-events: none; animation: drag-preview-in 120ms ease-out; }
+/* 落点那一份瞬时收到虚线框里：不做过渡，避免"先滑一半、数据回来再跳一下"。
+   虚线框（`.calendar-time-block-drop`）负责动，卡片负责立刻到位。*/
+.calendar-time-block[data-landed="true"] { transition: none; }
 @container (max-height: 26px) { .calendar-time-block { padding-block: 2px; align-content: center; } .calendar-time-block time { display: none; } }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
 .review-outcomes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }

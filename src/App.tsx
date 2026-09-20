@@ -1089,10 +1089,11 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
    * `baseStyle`，卡片会带着刚恢复的 `top/height` 过渡「弹回」旧位置，等数据回来后
    * 再跳到新位置 —— 看上去就是动画错误。所以把落点记下来渲染，直到 `block` 真的变成它。
    *
-   * 跨列移动时落点不在本列：源列这一份原地藏起来，落点交给目标列的 `.day-track` 里
-   * 一个 portal 渲染（坐标直接复用 `position()`），否则卡片会先弹回源列再跳过去。
+   * 跨列时落点仍然由**本列这一份**渲染（横向按整列吸附的 `offsetDays`），只是瞬时收到
+   * 落点、不做过渡：卡片就在虚线落点框的位置上，等 workspace 追上来时目标列渲染的真身
+   * 与之完全重合。这样既没有弹回源列的过程，也不必把一个元素搬进另一列的 DOM。
    */
-  const [landed, setLanded] = useState<null | { startLocal: string; endLocal: string; localDate: string; endLocalDate: string; track: HTMLElement | null }>(null);
+  const [landed, setLanded] = useState<null | { startLocal: string; endLocal: string; localDate: string; endLocalDate: string; offsetDays: number; trackWidth: number }>(null);
   // 一旦 block 追上落点，覆盖显示就交还给 baseStyle。
   useEffect(() => {
     if (!landed) return;
@@ -1140,16 +1141,17 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
       const baseTime = new Date(`${block.localDate}T00:00:00`).getTime();
       let localDate = toLocalDate(new Date(baseTime + Math.floor(final.snapStartMinute / 1440) * 86400000));
       let endLocalDate = toLocalDate(new Date(baseTime + Math.floor(final.snapEndMinute / 1440) * 86400000));
+      let offsetDays = 0;
       if (edge === "move") {
-        const deltaDays = trackWidth > 0 ? Math.round((next.clientX - originX) / trackWidth) : 0;
-        if (deltaDays !== 0) {
-          localDate = addDays(localDate, deltaDays);
-          endLocalDate = addDays(endLocalDate, deltaDays);
+        offsetDays = trackWidth > 0 ? Math.round((next.clientX - originX) / trackWidth) : 0;
+        if (offsetDays !== 0) {
+          localDate = addDays(localDate, offsetDays);
+          endLocalDate = addDays(endLocalDate, offsetDays);
         }
       }
       const unchanged = startLocal === block.startLocal && endLocal === block.endLocal && localDate === block.localDate && endLocalDate === block.endLocalDate;
       if (!unchanged) {
-        setLanded({ startLocal, endLocal, localDate, endLocalDate, track: localDate === block.localDate ? null : dayTrackFor(localDate) });
+        setLanded({ startLocal, endLocal, localDate, endLocalDate, offsetDays, trackWidth });
         // 写入失败时把落点覆盖撤掉，让卡片回到事实位置（错误由顶部横幅统一提示）。
         void onUpdate({ ...block, startLocal, endLocal, localDate, endLocalDate }).catch(() => setLanded(null));
       }
@@ -1171,10 +1173,12 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   const dropStartStr = minutesTime(dropStart % 1440);
   const dropEndStr = minutesTime(dropEnd % 1440);
   const dropDuration = (dropEnd - dropStart + 1440) % 1440 || 1440;
-  // 横向按整列吸附：卡片纵向自由跟手（能看清落点），横向却不会横跨两列压在别的格子上，
-  // 松手时也就不会再多跳一下 —— 跨列落点覆盖层画的正是这一列的坐标。
+  // 纵向与横向都自由跟手（卡片贴着指针走）；横向按整列吸附只用于**落点虚线框**，
+  // 两者分离才看得出最终会落在哪一列哪一格。
   const columnDays = resize && resize.edge === "move" && resize.trackWidth > 0 ? Math.round((resize.clientX - resize.originX) / resize.trackWidth) : 0;
-  const liveStyleFor = (startStr: string, endStr: string) => {
+  const columnShift = (style: CSSProperties, days: number, trackWidth: number): CSSProperties =>
+    days === 0 || trackWidth <= 0 ? style : { ...style, left: `calc(7px + ${days * trackWidth}px)`, right: "auto", width: "calc(100% - 14px)" };
+  const liveStyleFor = (startStr: string, endStr: string, offsetPx = 0) => {
     const fresh = position(startStr, endStr);
     const style = fresh ?? (() => {
       const top = baseStyle.top as string;
@@ -1183,32 +1187,29 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
       const duration = (endMin - minutes + 1440) % 1440 || 1440;
       return { ...baseStyle, top, height: `${Math.max(duration / 1440 * 100, 1.25)}%` };
     })();
-    if (columnDays !== 0 && resize) return { ...style, left: `calc(7px + ${columnDays * resize.trackWidth}px)`, right: "auto", width: "calc(100% - 14px)" };
-    return style;
+    if (offsetPx === 0) return style;
+    return { ...style, left: `calc(7px + ${offsetPx}px)`, right: "auto", width: "calc(100% - 14px)" };
   };
-  // 落点只在同一天内接管本列的显示；跨天的那一份画进目标列的 .day-track（见下）。
-  const landedStyle = landed && landed.localDate === block.localDate ? position(landed.startLocal, landed.endLocal) : null;
-  const landedOverlayStyle = landed && landed.localDate !== block.localDate && landed.track ? position(landed.startLocal, landed.endLocal) : null;
-  const displayStyle = resize !== null ? liveStyleFor(liveStartStr, liveEndStr) : (landedStyle ?? baseStyle);
+  // 落点：吸附后的时间 + 按整列的横向吸附，且不加过渡（瞬时收到虚线框里）。
+  const landedStyle = landed ? columnShift(position(landed.startLocal, landed.endLocal) ?? baseStyle, landed.offsetDays, landed.trackWidth) : null;
+  const displayStyle = resize !== null
+    ? liveStyleFor(liveStartStr, liveEndStr, resize.edge === "move" ? resize.clientX - resize.originX : 0)
+    : (landedStyle ?? baseStyle);
   // 落点框只在"移动"时出现：改时长时卡片边界本身就是最终边界，再叠一层虚线只是噪音。
-  const dropStyle = resize === null || resize.edge !== "move" ? null : liveStyleFor(dropStartStr, dropEndStr);
+  const dropStyle = resize === null || resize.edge !== "move" ? null : columnShift(liveStyleFor(dropStartStr, dropEndStr), columnDays, resize.trackWidth);
   const isResizing = resize !== null;
   const classes = ["calendar-time-block", isResizing ? "is-resizing" : ""].filter(Boolean).join(" ");
 
   return <>
     {dropStyle && <div aria-hidden="true" className="calendar-time-block-drop" style={dropStyle} />}
     {resize !== null && resize.edge === "move" && <div aria-hidden="true" className="calendar-time-block-origin" style={baseStyle} />}
-    <article ref={articleRef} className={classes} style={landedOverlayStyle ? { ...displayStyle, display: "none" } : displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge}>
+    <article ref={articleRef} className={classes} style={displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge} data-landed={landed !== null ? "true" : undefined}>
       <button className="time-block-handle time-block-handle-top" aria-label={`调整 ${block.title} 开始时间`} onPointerDown={(e) => startEdgeResize(e, "top")} />
       <time>{liveStartStr}–{liveEndStr}</time>
       <strong>{block.title}</strong>
       <button className="time-block-delete" aria-label={`删除时间块 ${block.title}`} onClick={onDelete}><X size={13} /></button>
       <button className="time-block-handle time-block-handle-bottom" aria-label={`调整 ${block.title} 结束时间`} onPointerDown={(e) => startEdgeResize(e, "bottom")} />
     </article>
-    {landedOverlayStyle && landed?.track && createPortal(
-      <article aria-hidden="true" className="calendar-time-block is-landed" style={landedOverlayStyle}><time>{landed.startLocal}–{landed.endLocal}</time><strong>{block.title}</strong></article>,
-      landed.track,
-    )}
     <DragTimePreview active={resize !== null} anchorRef={articleRef} label="时间块时间预览" followKey={`${liveStartStr}-${liveEndStr}`}>{dropStartStr}–{dropEndStr} · {dropDuration} 分钟</DragTimePreview>
   </>;
 }
@@ -1816,15 +1817,6 @@ function clockDuration(startLocal: string, endLocal: string) { const start = tim
 function sessionDuration(session: ExecutionSession) { const start = timeMinutes(session.startLocal); let end = timeMinutes(session.endLocal); if (session.endLocalDate !== session.localDate || end <= start) end += 1440; return end - start; }
 function placementDateTime(date: string, minute: number) { const dayOffset = Math.floor(Math.max(0, minute) / 1440); return { date: addDays(date, dayOffset), time: minutesTime(Math.max(0, minute) % 1440) }; }
 function positionStyle(start: string, end: string) { const top = timeMinutes(start) / 1440 * 100; let duration = timeMinutes(end) - timeMinutes(start); if (duration <= 0) duration += 1440; return { top: `${top}%`, height: `${Math.max(duration / 1440 * 100, 1.25)}%` }; }
-
-/**
- * 跨列落点要画进目标列里：找到那一列的轨道元素，portal 进去之后
- * `position()` 的百分比坐标直接成立，不必自己换算视口坐标。
- */
-function dayTrackFor(date: string): HTMLElement | null {
-  if (typeof document === "undefined") return null;
-  return document.querySelector<HTMLElement>(`.calendar-day[data-day-date="${date}"] .day-track`);
-}
 function closestZoom(view: AppSettings["calendarView"], scale: number): AppSettings["calendarZoom"]["day"] {
   return (["compact", "standard", "detailed"] as const).reduce((closest, candidate) =>
     Math.abs(calendarScaleForZoom(view, candidate) - scale) < Math.abs(calendarScaleForZoom(view, closest) - scale) ? candidate : closest);

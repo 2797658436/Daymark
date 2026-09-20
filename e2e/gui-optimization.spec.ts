@@ -168,6 +168,8 @@ const dragGuard = async (page: import("@playwright/test").Page, action: Promise<
 
 test("a real native drag of a scheduled card stays alive across day columns", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
+  // 固定时钟：卡片位置、自动滚动和列宽都跟"现在"有关，跟随真实时钟会在午夜后抖。
+  await page.clock.setFixedTime(new Date("2026-09-20T20:00:00"));
   await page.goto("/");
   await page.evaluate(() => {
     localStorage.clear();
@@ -233,6 +235,7 @@ test("a real native drag of a scheduled card stays alive across day columns", as
 
 test("the drop indicator never shrinks below the card and glides between slots", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
+  await page.clock.setFixedTime(new Date("2026-09-20T20:00:00"));
   await page.goto("/");
   await page.evaluate(() => {
     localStorage.clear();
@@ -285,6 +288,9 @@ test("the drop indicator never shrinks below the card and glides between slots",
 
 test("pending-review actions open from the card itself instead of on hover", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
+  // 固定时钟：这个用例要构造"已经结束但没记录"的时段，跟随真实时钟会在午夜后
+  // 算到负数时间（-1:-57），卡片也就落到滚动容器外面了。
+  await page.clock.setFixedTime(new Date("2026-09-20T20:00:00"));
   await page.goto("/");
   await page.evaluate(() => {
     localStorage.clear();

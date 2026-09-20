@@ -784,7 +784,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("can hide the actual-record toolbar control without disabling the stored overlay", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: today }, showActualRecords: true, showActualRecordsControl: false };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -916,7 +916,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("ends only the running execution and saves its progress summary atomically", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       tasks: [{ id: "task-1", projectId: null, title: "完成第一章", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
       executionSessions: [{ id: "session-1", taskId: "task-1", localDate: today, endLocalDate: today, startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
@@ -1071,7 +1071,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("collects overdue and upcoming-deadline tasks into a collapsible attention section", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       tasks: [
         { id: "task-1", projectId: null, title: "临期任务", progress: 0, status: "active", deadlineLocal: today, estimatedMinutes: 30, sortOrder: 0 },
@@ -1124,7 +1124,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("edits a session time precisely without snapping", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       tasks: [{ id: "task-1", projectId: null, title: "深度工作", progress: 40, status: "active", deadlineLocal: null, estimatedMinutes: 90, sortOrder: 0 }],
       executionSessions: [{ id: "session-1", taskId: "task-1", localDate: today, endLocalDate: today, startLocal: "09:00", endLocal: "10:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
@@ -1142,7 +1142,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("allows a session to end after midnight when edited precisely", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       tasks: [{ id: "task-1", projectId: null, title: "夜猫任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 120, sortOrder: 0 }],
       executionSessions: [{ id: "session-1", taskId: "task-1", localDate: today, endLocalDate: today, startLocal: "22:00", endLocal: "00:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
@@ -1420,26 +1420,26 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     await screen.findByText("跨列块");
     const sourceTrack = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
-    const targetTrack = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-06"] .day-track')!;
     const rect = { x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 1440, width: 100, height: 1440, toJSON: () => ({}) };
     vi.spyOn(sourceTrack, "getBoundingClientRect").mockReturnValue(rect);
 
     const body = screen.getByText("跨列块");
     fireEvent(body, createEvent.pointerDown(body, { button: 0, clientX: 40, clientY: 600 }));
-    fireEvent(window, createEvent.pointerMove(window, { clientX: 140, clientY: 600 }));
-    // 拖动中卡片横向吸附到目标列（7px 内边距 + 一列 100px）：不再横跨两列压在别人格子上。
+    // 横向位移 50px（半列）：卡片必须**自由跟手**（7 + 50 = 57px），不能被卡在整列格子上。
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 90, clientY: 600 }));
     const dragging = body.closest("article") as HTMLElement;
-    expect(dragging.style.left).toContain("107px");
-    fireEvent(window, createEvent.pointerUp(window, { clientX: 140, clientY: 600 }));
+    expect(dragging.style.left).toContain("57px");
+    // 落点虚线框则按整列吸附：半列算作下一列（7 + 100 = 107px）。
+    expect(document.querySelector<HTMLElement>(".calendar-time-block-drop")!.style.left).toContain("107px");
+
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 90, clientY: 600 }));
     await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalled());
 
-    // 源列那份必须让位（否则卡片会先弹回源列、等写入回来再跳到目标列 —— 就是"列一变就闪"）。
-    expect((body.closest("article") as HTMLElement).style.display).toBe("none");
-    const landed = targetTrack.querySelector<HTMLElement>(".calendar-time-block.is-landed");
-    expect(landed).not.toBeNull();
-    expect(landed!.textContent).toContain("跨列块");
-    expect(parseFloat(landed!.style.top)).toBeCloseTo(10 / 24 * 100, 3);
-    expect(parseFloat(landed!.style.height)).toBeCloseTo(1 / 24 * 100, 3);
+    // 松手后卡片瞬时收到虚线框里（吸附列 + 吸附时间），不做过渡、也不弹回源列。
+    expect(dragging.style.left).toContain("107px");
+    expect(dragging).toHaveAttribute("data-landed", "true");
+    expect(parseFloat(dragging.style.top)).toBeCloseTo(600 / 1440 * 100, 3);
+    expect(parseFloat(dragging.style.height)).toBeCloseTo(60 / 1440 * 100, 3);
   });
 
   it("shows a moved session at its landed slot while the write is in flight", async () => {
@@ -1474,7 +1474,7 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("deletes a lightweight time block from the calendar", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       timeBlocks: [{ id: "block-1", title: "午休", localDate: today, endLocalDate: today, startLocal: "12:00", endLocal: "13:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
     };
