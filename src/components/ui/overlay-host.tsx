@@ -153,6 +153,14 @@ export function OverlayHostProvider({ children }: { children: ReactNode }) {
     const onKeyDown = (event: KeyboardEvent) => {
       const currentTop = layersRef.current.at(-1);
       if (!currentTop || currentTop.id !== topId) return;
+      // 输入法组合期间（`isComposing`；`keyCode === 229` 是旧浏览器的兜底信号）规格 §4.3 要求：
+      // Escape 属于输入法（取消候选），不能拿来关编辑器；Enter 只用于确认候选，
+      // 必须拦下浏览器的隐式表单提交。两者都到此为止，不再进入下面的分支。
+      // 只在组合期间生效，所以 textarea 里正常换行的 Enter 不受影响。
+      if (event.isComposing || event.keyCode === 229) {
+        if (event.key === "Enter") event.preventDefault();
+        return;
+      }
       if (event.key === "Escape") {
         if (!currentTop.dismissible) return;
         event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();

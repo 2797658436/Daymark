@@ -33,6 +33,23 @@ function EditorHarness({ busy = false }: { busy?: boolean }) {
   );
 }
 
+function FormHarness() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Shell>
+      <button onClick={() => setOpen(true)}>打开表单</button>
+      {open && (
+        <FloatingPanel label="编辑表单" onClose={() => setOpen(false)}>
+          <form onSubmit={(event) => event.preventDefault()}>
+            <label>标题<input /></label>
+            <button type="submit">保存</button>
+          </form>
+        </FloatingPanel>
+      )}
+    </Shell>
+  );
+}
+
 describe("浮层与编辑气泡语义（M8）", () => {
   it("编辑气泡是模态：背景 inert、带 aria-modal、可访问名沿用 label", async () => {
     const user = userEvent.setup();
@@ -131,5 +148,30 @@ describe("浮层与编辑气泡语义（M8）", () => {
     const bubble = screen.getByRole("dialog", { name: "空白时段操作" });
     expect(bubble).not.toHaveAttribute("aria-modal");
     expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
+  });
+
+  it("输入法组合期间 Enter 不提交、Escape 不关闭编辑器（规格 §4.3）", async () => {
+    const user = userEvent.setup();
+    render(<FormHarness />);
+    await user.click(screen.getByRole("button", { name: "打开表单" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑表单" });
+    const input = within(dialog).getByLabelText("标题");
+
+    // 组合中的 Enter 只用于确认候选：默认动作必须被拦下，否则会走浏览器的隐式表单提交。
+    const composingEnter = new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true });
+    input.dispatchEvent(composingEnter);
+    expect(composingEnter.defaultPrevented).toBe(true);
+    expect(screen.getByRole("dialog", { name: "编辑表单" })).toBeInTheDocument();
+
+    // 组合中的 Escape 属于输入法（取消候选），不能连编辑器一起关掉。
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    expect(screen.getByRole("dialog", { name: "编辑表单" })).toBeInTheDocument();
+
+    // 组合结束后恢复原语义：Enter 不再被拦，Escape 依旧关闭。
+    const plainEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    input.dispatchEvent(plainEnter);
+    expect(plainEnter.defaultPrevented).toBe(false);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "编辑表单" })).not.toBeInTheDocument();
   });
 });

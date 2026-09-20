@@ -1423,3 +1423,44 @@ it("keeps a failed habit draft and prevents duplicate submission while saving", 
   expect(within(dialog).getByLabelText("习惯名称")).toHaveValue("每天阅读");
   expect(save).toBeEnabled();
 });
+
+it("submits a project import once and keeps the draft when the write fails", async () => {
+  const user = userEvent.setup();
+  let rejectSave!: (reason: Error) => void;
+  const createProjectWithTasks = vi.fn(() => new Promise<WorkspaceSnapshot>((_resolve, reject) => { rejectSave = reject; }));
+  render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(structuredClone(EMPTY_WORKSPACE), { createProjectWithTasks })} />);
+  await user.click(await screen.findByRole("button", { name: "项目" }));
+  await user.click(screen.getByRole("button", { name: "新建项目" }));
+  const dialog = screen.getByRole("dialog", { name: "创建项目" });
+  await user.type(within(dialog).getByLabelText("项目标题"), "慢请求项目");
+  const save = within(dialog).getByRole("button", { name: "创建" });
+
+  // 连点只发一次请求，且提交期间取消被禁用（Esc 由浮层宿主拦住，另有专门用例）。
+  await user.click(save); await user.click(save);
+  expect(createProjectWithTasks).toHaveBeenCalledTimes(1);
+  expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+
+  await act(async () => rejectSave(new Error("写入失败")));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("写入失败");
+  expect(within(dialog).getByLabelText("项目标题")).toHaveValue("慢请求项目");
+  expect(save).toBeEnabled();
+});
+
+it("keeps each import mode's draft after cancelling the panel", async () => {
+  const user = userEvent.setup();
+  render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
+  await user.click(await screen.findByRole("button", { name: "项目" }));
+
+  await user.click(screen.getByRole("button", { name: "导入文本课程" }));
+  await user.type(within(screen.getByRole("dialog")).getByLabelText("粘贴分集文本"), "P1 独立草稿 12:30");
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+
+  // 另一种模式不能带上一种模式的草稿。
+  await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
+  expect(within(screen.getByRole("dialog")).getByLabelText("B 站普通视频链接")).toHaveValue("");
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+
+  // 取消保留草稿 —— 规格 §4.1 的显式例外。
+  await user.click(screen.getByRole("button", { name: "导入文本课程" }));
+  expect(within(screen.getByRole("dialog")).getByLabelText("粘贴分集文本")).toHaveValue("P1 独立草稿 12:30");
+});
