@@ -1306,6 +1306,29 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-4", startLocal: "10:00", endLocal: "11:00", localDate: "2026-08-06", endLocalDate: "2026-08-06" })));
   });
 
+  it("keeps a moved time block at the landed position while the write is still in flight", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      timeBlocks: [{ id: "block-land", title: "落点块", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
+    };
+    // 写入一直不返回，正好复现「松手之后、数据回来之前」那段窗口。
+    const native = createNativeApi(initial, { updateTimeBlock: vi.fn(() => new Promise<WorkspaceSnapshot>(() => {})) });
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    await screen.findByText("落点块");
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 100, bottom: 1440, width: 100, height: 1440, toJSON: () => ({}) });
+    const body = screen.getByText("落点块");
+    fireEvent(body, createEvent.pointerDown(body, { button: 0, clientX: 40, clientY: 600 }));
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 40, clientY: 750 }));
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 40, clientY: 750 }));
+
+    // 10:00 → 13:15（15 分钟吸附）。松手后卡片必须停在落点，
+    // 而不是回落到旧时间再等数据回来跳一下。
+    const article = body.closest("article")!;
+    expect(parseFloat(article.style.top)).toBeCloseTo((13 * 60 + 15) / 1440 * 100, 3);
+  });
+
   it("deletes a lightweight time block from the calendar", async () => {
     const today = new Date().toISOString().slice(0, 10);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),

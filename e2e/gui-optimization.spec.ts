@@ -60,6 +60,46 @@ test("draft cancellation never saves and a floating editor blocks a second calen
   await block.getByRole("button", { name: "取消" }).click();
 });
 
+test("the month grid keeps all seven columns visible when the day details are open", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "month",
+      calendarAnchors: { day: "2026-09-15", week: "2026-09-15", month: "2026-09-15" },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+      calendarScale: { day: 48, week: 48, month: 120 },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], tasks: [{ id: "month-task", projectId: null, title: "月视图排程", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      executionSessions: [{ id: "month-session", taskId: "month-task", localDate: "2026-09-15", endLocalDate: "2026-09-15", startLocal: "19:00", endLocal: "20:00", timeZone: "local", utcOffsetMinutes: 0, status: "scheduled" }],
+    }));
+  });
+  await page.reload();
+
+  const headers = page.locator('.month-calendar [role="columnheader"]');
+  await expect(headers).toHaveCount(7);
+  // 排程结果必须出现在月历格子里，而不是只在右侧详情里看得到。
+  const cell = page.getByRole("gridcell", { name: /2026-09-15/ });
+  await expect(cell).toContainText("安排 1 项 · 19:00 起");
+  await cell.click();
+  const detail = page.getByRole("complementary", { name: /2026-09-15.*详情/ });
+  await expect(detail).toBeVisible();
+
+  // 详情面板在窄容器下是覆盖层：它绝不能盖住月历的任何一列 —— 这正是
+  // 「排程之后月视图看不到周六周日」的现象。逐列断言右边缘都落在面板左侧之内。
+  const detailBox = await detail.boundingBox();
+  const covered: string[] = [];
+  for (let index = 0; index < 7; index += 1) {
+    const box = await headers.nth(index).boundingBox();
+    const name = (await headers.nth(index).innerText()).trim();
+    if (!box || box.x + box.width > detailBox!.x + 1) covered.push(`${name}(${Math.round((box?.x ?? 0) + (box?.width ?? 0))} > ${Math.round(detailBox!.x)})`);
+  }
+  expect(covered, "被详情面板盖住的列").toEqual([]);
+});
+
 test("an editor bubble traps Tab, survives a composing Escape and restores focus", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear()); await page.reload();

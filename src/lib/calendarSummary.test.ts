@@ -38,6 +38,27 @@ describe("calendar day summary", () => {
     expect(deadlineUrgencyLabel("overdue")).toBe("已逾期");
   });
 
+  it("surfaces the day's standing schedule so auto-scheduled work shows up in the month cell", () => {
+    const workspace: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-1", projectId: null, title: "排程任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [
+        { id: "later", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "19:00", endLocal: "20:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "earlier", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "gone", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "missed" },
+        { id: "dropped", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "08:00", endLocal: "09:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "cancelled" },
+      ],
+    };
+
+    const summary = calendarDaySummary(workspace, "2026-08-05", "2026-08-05");
+
+    // 安排排在最前，并按当天最早开始时间提示。
+    expect(summary.visible[0]).toMatchObject({ kind: "scheduled", label: "安排 2 项 · 14:00 起" });
+    // 未执行与取消都不能重复算成「安排」。
+    expect(summary.scheduledSessions.map((session) => session.id)).toEqual(["earlier", "later"]);
+    expect(summary.missedTasks.map((task) => task.id)).toEqual(["task-1"]);
+  });
+
   it("aggregates project deadlines and milestones into the day summary after task deadlines", () => {
     const workspace: WorkspaceSnapshot = {
       ...structuredClone(EMPTY_WORKSPACE),

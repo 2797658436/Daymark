@@ -1,6 +1,6 @@
-import type { Project, ProjectMilestone, Task, WorkspaceSnapshot } from "./native";
+import type { ExecutionSession, Project, ProjectMilestone, Task, WorkspaceSnapshot } from "./native";
 
-export type CalendarSummaryKind = "deadline" | "projectDeadline" | "milestone" | "completed" | "progressed" | "missed";
+export type CalendarSummaryKind = "scheduled" | "deadline" | "projectDeadline" | "milestone" | "completed" | "progressed" | "missed";
 export type DeadlineUrgency = "overdue" | "today" | "soon" | "later";
 
 export interface CalendarSummaryItem {
@@ -15,6 +15,8 @@ export interface CalendarSummaryItem {
 
 export interface CalendarDaySummary {
   date: string;
+  /** 当天仍然成立的安排（`scheduled`）。自动排程写入的结果靠它出现在月历格子里。 */
+  scheduledSessions: ExecutionSession[];
   deadlines: Task[];
   projectDeadlines: Project[];
   milestones: ProjectMilestone[];
@@ -58,6 +60,11 @@ export function calendarDayMarkers(workspace: WorkspaceSnapshot, date: string, t
 
 export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, today = browserLocalDate(new Date())): CalendarDaySummary {
   const tasksById = new Map(workspace.tasks.map((task) => [task.id, task]));
+  // 只算仍然成立的安排：`missed` 已经是「未执行」历史，`cancelled` 是取消，
+  // 两者都由下面各自的条目表达，不能再重复算成「安排」。
+  const scheduledSessions = workspace.executionSessions
+    .filter((session) => session.localDate === date && session.status === "scheduled")
+    .sort((left, right) => left.startLocal.localeCompare(right.startLocal) || left.id.localeCompare(right.id));
   const deadlines = workspace.tasks
     .filter((task) => task.deadlineLocal === date && task.status !== "completed")
     .sort((left, right) => left.sortOrder - right.sortOrder || left.title.localeCompare(right.title));
@@ -75,6 +82,8 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
     .map((session) => tasksById.get(session.taskId)));
   const progressDelta = events.reduce((sum, event) => sum + event.toProgress - event.fromProgress, 0);
   const items: CalendarSummaryItem[] = [
+    // 安排排在最前：月历首先回答「这天要做什么」，截止等约束随后。
+    ...(scheduledSessions.length ? [{ id: "scheduled", kind: "scheduled" as const, label: `安排 ${scheduledSessions.length} 项 · ${scheduledSessions[0].startLocal} 起`, taskId: null, projectId: null, milestoneId: null }] : []),
     ...deadlines.map((task) => ({ id: `deadline:${task.id}`, kind: "deadline" as const, label: task.title, taskId: task.id, projectId: null, milestoneId: null, urgency: deadlineUrgency(date, today) })),
     ...projectDeadlines.map((project) => ({ id: `projectDeadline:${project.id}`, kind: "projectDeadline" as const, label: project.title, taskId: null, projectId: project.id, milestoneId: null, urgency: deadlineUrgency(project.deadlineLocal!, today) })),
     ...milestones.map((milestone) => ({ id: `milestone:${milestone.id}`, kind: "milestone" as const, label: milestone.title, taskId: null, projectId: milestone.projectId, milestoneId: milestone.id, urgency: deadlineUrgency(milestone.targetLocalDate, today) })),
@@ -85,6 +94,7 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
 
   return {
     date,
+    scheduledSessions,
     deadlines,
     projectDeadlines,
     milestones,

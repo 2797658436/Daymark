@@ -1050,6 +1050,19 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
 }) {
   const articleRef = useRef<HTMLElement>(null);
   const [resize, setResize] = useState<null | { edge: "move" | "top" | "bottom"; startMinute: number; endMinute: number; snapStartMinute: number; snapEndMinute: number; clientX: number; clientY: number; originX: number; trackWidth: number }>(null);
+  /**
+   * 松手后已经落定的位置。
+   *
+   * 从松开到父级 workspace 更新之间，`block` 仍是旧时间。若这段时间直接回落到
+   * `baseStyle`，卡片会带着刚恢复的 `top/height` 过渡「弹回」旧位置，等数据回来后
+   * 再跳到新位置 —— 看上去就是动画错误。所以把落点记下来渲染，直到 `block` 真的变成它。
+   */
+  const [landed, setLanded] = useState<null | { startLocal: string; endLocal: string; localDate: string; endLocalDate: string }>(null);
+  // 一旦 block 追上落点，覆盖显示就交还给 baseStyle。
+  useEffect(() => {
+    if (!landed) return;
+    if (block.startLocal === landed.startLocal && block.endLocal === landed.endLocal && block.localDate === landed.localDate && block.endLocalDate === landed.endLocalDate) setLanded(null);
+  }, [block.startLocal, block.endLocal, block.localDate, block.endLocalDate, landed]);
   const [previewBox, setPreviewBox] = useState<null | { left: number; top: number; above: boolean }>(null);
   const initialStart = timeMinutes(block.startLocal);
   const initialEnd = timeMinutes(block.endLocal);
@@ -1057,6 +1070,8 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
 
   const startEdgeResize = (event: React.PointerEvent<HTMLElement>, edge: "move" | "top" | "bottom") => {
     event.preventDefault(); event.stopPropagation();
+    // 上一次落点若因写入失败而一直没被 block 追上，这里清掉，避免下一次拖动从陈旧位置起算。
+    setLanded(null);
     onResizeStart?.();
     const originY = event.clientY;
     const originX = event.clientX;
@@ -1099,7 +1114,7 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
         }
       }
       const unchanged = startLocal === block.startLocal && endLocal === block.endLocal && localDate === block.localDate && endLocalDate === block.endLocalDate;
-      if (!unchanged) { void onUpdate({ ...block, startLocal, endLocal, localDate, endLocalDate }); }
+      if (!unchanged) { setLanded({ startLocal, endLocal, localDate, endLocalDate }); void onUpdate({ ...block, startLocal, endLocal, localDate, endLocalDate }); }
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
   };
@@ -1133,7 +1148,9 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
     }
     return style;
   };
-  const displayStyle = resize === null ? baseStyle : liveStyleFor(liveStartStr, liveEndStr);
+  // 落点只在同一天内接管显示：跨天时这块卡会换到另一列去，本实例随即卸载。
+  const landedStyle = landed && landed.localDate === block.localDate ? position(landed.startLocal, landed.endLocal) : null;
+  const displayStyle = resize !== null ? liveStyleFor(liveStartStr, liveEndStr) : (landedStyle ?? baseStyle);
   // 落点框只在"移动"时出现：改时长时卡片边界本身就是最终边界，再叠一层虚线只是噪音。
   // 横向同样吸附：框跳到目标列，卡片自由跟手，x/y 两轴都指向最终落点。
   const dropStyle = resize === null || resize.edge !== "move" ? null : (() => {

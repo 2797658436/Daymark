@@ -35,9 +35,22 @@
 | 文件 | 改动 | 归属 |
 | --- | --- | --- |
 | `src-tauri/src/main.rs` | 补 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`，消除 release 版启动附带黑色控制台窗口 | 桌面缺陷修复（§4.3） |
-| `src-tauri/src/lib.rs`、`src-tauri/Cargo.toml`（含 `Cargo.lock`） | 新增 `disable_webview_external_drop()`：显式调用 `ICoreWebView2Controller4::SetAllowExternalDrop(false)`，修复桌面版 HTML5 拖拽不触发（WebView2Feedback#2805）。为此引入 `webview2-com`／`windows-core`（仅 Windows target） | 桌面缺陷修复 |
+| `src-tauri/src/lib.rs`、`src-tauri/Cargo.toml`（含 `Cargo.lock`） | 新增 `disable_webview_external_drop()`：显式调用 `ICoreWebView2Controller4::SetAllowExternalDrop(false)`。为此引入 `webview2-com`／`windows-core`（仅 Windows target） | **⚠️ 结论已推翻：这个调用本身就是桌面版拖不动的原因，已于 2026-09-20 整体删除**（见下） |
 | `src/styles.css`、`src/App.tsx`、`src/App.test.tsx` | 时间块拖拽／改时长的落点反馈：新增 `.calendar-time-block-drop`／`.calendar-time-block-origin`；拖动整块时卡片自由跟手，改时长用短过渡平滑吸附；可访问名由「调整时间块时长预览」改为「时间块时间预览」 | 时间块拖拽体验修复 |
 | `scripts/drag-probe*.mjs`（13 个，未跟踪） | 排查上述拖拽问题的一次性探针。**建议不入库**：与 `scripts/fixtures/perf-sample.mjs` 不同，它们不确定、不可复现、无自校验 | 调试残留 |
+
+> ### ⚠️ 本段结论已于 2026-09-20 被推翻
+>
+> 那次显式调用不仅没有修好拖拽，**它本身就是「拖不动」的原因**：`AllowExternalDrop = false` 会禁止该
+> webview 的**一切**拖拽，页面内部的 HTML5 拖拽也一并被禁掉
+> （[MicrosoftEdge/WebView2Feedback#4830](https://github.com/MicrosoftEdge/WebView2Feedback/issues/4830)）。
+> 用户报告「日历上已排好的卡片完全拖不动」正是这个。`tauri.conf.json` 的 `dragDropEnabled: false`
+> **本来就是正确的设置**（[tauri#9445](https://github.com/tauri-apps/tauri/issues/9445)、
+> [tauri#15138](https://github.com/tauri-apps/tauri/issues/15138)）。该函数与两个仅 Windows 依赖都已删除，
+> 详见 [`gui-fixes-2026-09-20.md`](gui-fixes-2026-09-20.md)。
+>
+> 下面这段原文保留，用来说明当时的推理错在哪 —— 错在把「关掉外部拖放」当成了「放开页面内拖拽」的开关，
+> 而这两件事的方向恰恰相反。
 
 关于 `lib.rs` 的一处订正：原注释称「tauri.conf.json 现在配成 `dragDropEnabled: true`，wry 自己会关掉外部拖放」。实际配置是 `false`（`492c6c9` 有意设置），而 wry 0.55.1 只在拖放处理器存在时才调 `SetAllowExternalDrop(false)`，因此 wry 不会替我们关。**那次显式调用才是真正生效的机制，不是兜底** —— 注释已按事实改写。
 
