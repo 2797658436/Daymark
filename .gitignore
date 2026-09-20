@@ -14,3 +14,4 @@ artifacts/
 output/
 rustup-init.exe
 .codegraph/
+dsh-usage/
