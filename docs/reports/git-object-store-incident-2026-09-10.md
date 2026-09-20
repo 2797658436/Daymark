@@ -68,15 +68,29 @@ git prune --expire=now
 
 已生效的安全修复：删除两条坏 origin reflog；`git pack-refs --all` 使 `packed-refs` 中 main / origin-main 恢复为正确值，消除静默回退隐患。
 
-## 3. 已知遗留缺陷
+## 3. 遗留缺陷：已清除（2026-09-20）
 
-**broken link 未清除**：`commit e29768bc → tree 2ec33605`（missing）。
+**broken link `commit e29768bc → tree 2ec33605` 已消除。** 实际处置与本记录原先推测的步骤不同，且不需要 `repack`／`prune`：
 
-- 影响：每次 `git commit` / `git push` 会打印一次 repack 失败；几何重包无法完成。
-- 不影响：提交、推送、检出、测试、打包。
-- 修复方式（**不得在本沙箱内对真实仓库执行**）：在沙箱外终端，或对 `%TEMP%` 下的 `.git` 副本执行
-  `git reflog expire --expire-unreachable=now --all && git repack -a -d && git prune --expire=now`，
-  然后复验「36 提交 / 393 可达对象 / fsck 无 broken link」。
+1. **先发现一个未被记录的损伤**：`pack-eecb61dafeb54b7bdcb73d7dca0ac9aa2bab1d46` 只剩 `.pack`、`.rev`、`.keep`，**`.idx` 缺失**，导致该包内所有对象对 Git 不可见（`git fsck` 启动时即在警告 `no corresponding .idx`）。用 `git index-pack <pack>` 重建索引后：可见对象 `in-pack` 由 **708 → 922**（找回 214 个），`garbage` 由 3（301 字节）→ **0**。这一步是纯增量写入，非破坏性。
+2. **`2ec33605` 确实不在任何包内** —— 上一步之后仍然 `missing tree`。所以它不是"索引丢了"，是对象本身真的没了。
+3. **清除它只需让引用者不可达**：执行 `git reflog expire --expire-unreachable=now --all` 后，`e29768bc` 变为普通 dangling commit，`git fsck --full` **退出码 0、不再报告 broken link 或 missing tree**。`git repack`／`git prune` 都不需要。
+
+**先在 `%TEMP%` 副本上彩排验证，再对真实仓库执行**（副本结果与真实仓库一致）。执行前后均对整个 `.git` 做了完整备份。
+
+复验结果：
+
+| 项 | 值 |
+| --- | --- |
+| 提交数 | 43（执行前后一致，未丢历史） |
+| `git fsck --full` | 退出码 0，无 broken link、无 missing |
+| `git maintenance run --task=incremental-repack` | **退出码 0**（此前几何重包必失败） |
+| `HEAD` / `main` / `origin/main` | 均为 `04a375f`，三者一致 |
+
+**原始症状（每次提交／推送打印一次 repack 失败）随之消失。**
+
+同时暴露出一项与本次事故无关的既有问题：`.git` 内存在 `refs/codex/turn-diffs/checkpoints/<超长路径>` 形式的引用，路径超出 Windows 限制，Git 无法解析（`Filename too long` → `invalid sha1 pointer 0000…`）。它会让 `reflog expire --all` 打印一条 `fatal` 但不阻断上述结果。这些引用来自 Codex 工具，与本项目无关，清理需另行决定。
+
 
 ## 4. 环境红线（已写入用户级 skill `git-recycle-bin-recovery`）
 
