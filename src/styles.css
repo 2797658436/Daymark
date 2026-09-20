@@ -294,8 +294,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 @container (max-height: 28px) { .calendar-actual-record { align-content: center; padding-block: 2px; } .calendar-actual-record span, .calendar-actual-record time { display: none; } }.resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
 .session-edit-button { position: absolute; top: 3px; right: 3px; z-index: 2; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }.calendar-session[data-card-density="detailed"] .session-edit-button, .calendar-session:hover .session-edit-button, .calendar-session:focus-within .session-edit-button { opacity: 1; }.session-edit-button:hover { background: var(--panel-strong); color: var(--accent-strong); }
 .calendar-session.missed { border-style: dashed; border-left-style: solid; border-color: color-mix(in srgb, var(--muted) 70%, var(--line)); background: color-mix(in srgb, var(--muted) 16%, var(--panel)); }
-.session-resize-preview { position: fixed; z-index: 90; padding: 4px 10px; border-radius: 7px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); box-shadow: var(--shadow-float); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
-.session-resize-preview.is-above { transform: translateY(-100%); }
+.drag-time-preview { position: fixed; z-index: 90; padding: 4px 10px; border-radius: 7px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); box-shadow: var(--shadow-float); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.drag-time-preview.is-above { transform: translateY(-100%); }
 
 .project-form { display: grid; gap: 14px; }.project-form label, .settings-grid label, .modal label { display: grid; gap: 6px; color: var(--muted); font-size: .78rem; }.project-form input, .project-form textarea { width: 100%; }.form-actions { justify-content: flex-end; }
 .import-preview { max-height: 270px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 10px; }.import-preview > div { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); }.import-preview > div:last-child { border: 0; }.import-preview input[type="checkbox"] { width: 17px; height: 17px; flex: 0 0 auto; }.import-preview > div > span:first-of-type { flex: 0 0 auto; color: var(--muted); font-size: .75rem; }.import-preview > div > input:not([type="checkbox"]) { flex: 1 1 auto; min-width: 0; }.import-preview > div > span:last-of-type { flex: 0 0 auto; margin-left: auto; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -386,8 +386,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .magnet-control.active { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: var(--accent-soft); color: var(--accent-strong); }
 .magnet-control.active:hover { background: color-mix(in srgb, var(--accent) 14%, var(--accent-soft)); }
 
-.calendar-drag-preview { position: absolute; z-index: 35; inset-inline: 4px; min-height: 26px; display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 70ms ease-out; will-change: top; animation: drag-preview-in 120ms ease-out; }
-.calendar-drag-ghost { position: absolute; z-index: 35; min-height: 26px; display: grid; align-items: center; justify-content: center; box-sizing: border-box; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 70ms ease-out, left 70ms ease-out; will-change: top, left; animation: drag-preview-in 120ms ease-out; }
+/* 落点指示框（虚线框）：高度按真实时长算，但**不得矮于卡片** —— 15–30 分钟的短安排
+   在紧凑比例下只有 12–24px，比卡片还矮就既看不清也对不准（用户反馈"太短"）。
+   移动时用同一段过渡扫过格线，而不是一格一格跳。*/
+.calendar-drag-preview { position: absolute; z-index: 35; inset-inline: 4px; min-height: 32px; display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, height; animation: drag-preview-in 120ms ease-out; }
+.calendar-drag-ghost { position: absolute; z-index: 35; min-height: 32px; display: grid; align-items: center; justify-content: center; box-sizing: border-box; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), left 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1), width 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, left, height, width; animation: drag-preview-in 120ms ease-out; }
 .calendar-drag-ghost > span { background: color-mix(in srgb, var(--accent-soft) 86%, transparent); border-radius: 6px; padding: 3px 12px; font-size: .78rem; font-weight: 600; color: var(--accent-strong); white-space: nowrap; letter-spacing: .01em; }
 .week-body { position: relative; }
 @keyframes drag-preview-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -402,7 +405,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
    `pointer-events: none`（或任何让它不再可命中的写法），Chromium 会在 `dragstart`
    之后立刻取消整个拖拽 —— 表现就是「按下去能移动，但卡片永远拖不动」。
    `transform`/`opacity`/`filter` 本身不触发取消，只有命中性会。*/
-.calendar-session.is-dragging-source { opacity: .32; filter: grayscale(.55); transform: scale(.98); transition: opacity .14s ease, transform .14s ease; }
+.calendar-session.is-dragging-source { opacity: .24; filter: grayscale(.55); transform: scale(.98); transition: opacity .14s ease, transform .14s ease; }
+/* 落点覆盖那一份是"还没写进去的位置"：可以看，不该点。 */
+.calendar-session.is-landed { pointer-events: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), var(--shadow-low); }
 .calendar-session.is-resizing { opacity: .85; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); transition: height .16s ease-out, opacity .14s ease, box-shadow .14s ease; }
 .concurrent-summary { position: absolute; z-index: 7; inset: auto 4px 4px; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .68rem; cursor: pointer; }.concurrent-expanded-list { position: absolute; z-index: 6; left: 8px; right: 8px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--accent); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-float); }.concurrent-expanded-list button { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 7px; border: 0; border-radius: 6px; background: var(--panel-strong); color: var(--text); text-align: left; }.concurrent-expanded-list time { color: var(--muted); font-size: .7rem; white-space: nowrap; }
 .simultaneous-count { position: absolute; z-index: 6; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 999px; background: var(--panel); color: var(--accent-strong) !important; font-size: .62rem !important; white-space: nowrap; }
@@ -449,10 +454,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-time-block .time-block-handle-bottom::after { bottom: 3px; }
 .calendar-time-block:hover .time-block-handle::after, .calendar-time-block:focus-within .time-block-handle::after { background: var(--accent-strong); width: 28px; }
 .calendar-time-block.is-resizing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); border-color: var(--accent); }
-/* 拖动整块：卡片自由跟手，位置不缓动；改时长：吸附是跳格的，用短过渡把每格跳变变成平滑动画 */
-.calendar-time-block.is-resizing[data-resize-edge="move"] { transition: box-shadow .12s ease, opacity .14s ease; }
+/* 拖动整块：卡片自由跟手，位置不缓动；改时长：吸附是跳格的，用短过渡把每格跳变变成平滑动画。
+   整块拖动时半透明，好让下面的格线和其他卡片透出来（卡片那边同样处理）。*/
+.calendar-time-block.is-resizing[data-resize-edge="move"] { opacity: .55; transition: box-shadow .12s ease, opacity .14s ease; }
 .calendar-time-block-origin { position: absolute; z-index: 0; inset-inline: 7px; border: 1px dashed color-mix(in srgb, var(--muted) 50%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 40%, transparent); pointer-events: none; }
-.calendar-time-block-drop { position: absolute; z-index: 0; inset-inline: 7px; border: 3px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 24%, transparent); pointer-events: none; animation: drag-preview-in 120ms ease-out; }
+.calendar-time-block-drop { position: absolute; z-index: 0; inset-inline: 7px; min-height: 32px; border: 3px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 24%, transparent); pointer-events: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, height; animation: drag-preview-in 120ms ease-out; }
 /* 跨列落点：源列那一份在数据写入期间已经藏起来，这份 portal 进目标列的 .day-track，
    坐标复用正常的 position()，因此位置与随后真正落库的卡片完全一致。没有它，松手
    瞬间卡片会先弹回源列、等写入回来再跳到目标列 —— 就是「列一变动画就闪」。*/

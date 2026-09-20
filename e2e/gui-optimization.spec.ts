@@ -231,6 +231,58 @@ test("a real native drag of a scheduled card stays alive across day columns", as
   expect(afterStart.sourcePointerEvents, "拖拽源在拖动期间必须仍然可命中").not.toBe("none");
 });
 
+test("the drop indicator never shrinks below the card and glides between slots", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    const now = new Date();
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    const startMinutes = now.getHours() * 60 + Math.floor(now.getMinutes() / 15) * 15;
+    const clock = (minutes: number) => `${String(Math.floor((minutes % 1440) / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", calendarAnchors: { day: today, week: today, month: today },
+      calendarZoom: { day: "compact", week: "compact", month: "compact" }, calendarScale: { day: 48, week: 48, month: 120 }, showActualRecords: false,
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [{ id: "short-task", projectId: null, title: "短安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 15, sessionMinutes: 15, sortOrder: 0, kind: "task" }],
+      executionSessions: [{ id: "short-session", taskId: "short-task", localDate: today, endLocalDate: today, startLocal: clock(startMinutes), endLocal: clock(startMinutes + 15), timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" }],
+    }));
+  });
+  await page.reload();
+
+  const card = page.locator(".calendar-session", { hasText: "短安排" });
+  await expect(card).toBeVisible();
+  const track = page.locator(".calendar-day .day-track").nth(2);
+  const trackBox = await track.boundingBox();
+  if (!trackBox) throw new Error("目标列必须可见");
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  await card.dispatchEvent("dragstart", { dataTransfer: transfer });
+
+  const over = async (clientY: number) => {
+    await track.dispatchEvent("dragover", { dataTransfer: transfer, clientX: trackBox.x + 20, clientY });
+    await page.waitForTimeout(220);
+    return page.locator(".calendar-drag-ghost").boundingBox();
+  };
+  // 15 分钟安排在紧凑比例下只有 12px：虚线框不得比卡片还矮（用户反馈「太短」）。
+  const first = await over(trackBox.y + 200);
+  const cardBox = await card.boundingBox();
+  expect(first).not.toBeNull();
+  expect(cardBox).not.toBeNull();
+  expect(first!.height).toBeGreaterThanOrEqual(cardBox!.height);
+  expect(first!.height).toBeGreaterThanOrEqual(32);
+
+  // 换一格：虚线框要有过渡（不是瞬移），并且确实移动了。
+  const moved = await over(trackBox.y + 480);
+  expect(moved).not.toBeNull();
+  expect(moved!.y).toBeGreaterThan(first!.y + 100);
+  const transition = await page.locator(".calendar-drag-ghost").evaluate((node) => getComputedStyle(node).transitionProperty);
+  expect(transition).toContain("top");
+  expect(await page.locator(".calendar-drag-ghost").evaluate((node) => getComputedStyle(node).transitionDuration)).not.toBe("0s");
+  await transfer.dispose();
+});
+
 test("pending-review actions open from the card itself instead of on hover", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.goto("/");

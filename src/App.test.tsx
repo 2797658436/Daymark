@@ -1442,6 +1442,37 @@ describe("phase 1 manual alpha", () => {
     expect(parseFloat(landed!.style.height)).toBeCloseTo(1 / 24 * 100, 3);
   });
 
+  it("shows a moved session at its landed slot while the write is in flight", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-move", projectId: null, title: "跨列移动", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "session-move", taskId: "task-move", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    // 写入一直不返回：整段「松手之后、数据回来之前」的窗口都被摊开来看。
+    const native = createNativeApi(initial, { applyExecutionSessionChanges: vi.fn(() => new Promise<WorkspaceSnapshot>(() => {})) });
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const card = await screen.findByText("跨列移动", { selector: ".calendar-session strong" });
+    const source = card.closest<HTMLElement>(".calendar-session")!;
+    const targetTrack = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-06"] .day-track')!;
+    vi.spyOn(targetTrack, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+
+    const transfer = { types: ["application/x-daymark-session"], dropEffect: "none", getData: (type: string) => type === "application/x-daymark-session" ? "session-move" : "其他" };
+    fireEvent.dragStart(source, { dataTransfer: { types: [], effectAllowed: "none", setData: () => undefined, getData: () => "" } });
+    const over = createEvent.dragOver(targetTrack, { dataTransfer: transfer }); Object.defineProperty(over, "clientY", { value: 500 }); fireEvent(targetTrack, over);
+    const drop = createEvent.drop(targetTrack, { dataTransfer: transfer }); Object.defineProperty(drop, "clientY", { value: 500 }); fireEvent(targetTrack, drop);
+    await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalled());
+
+    // 源列那一份必须让位，否则松手后旧位置继续显示、数据回来才跳走 —— 就是跨列松手的错位动画。
+    const sourceColumn = document.querySelector('.calendar-day[data-day-date="2026-08-05"]')!;
+    expect(sourceColumn.querySelector(".calendar-session")).toBeNull();
+    const landed = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-06"] .calendar-session')!;
+    expect(landed).toHaveClass("is-landed");
+    expect(landed).toHaveTextContent("跨列移动");
+    // 500 分钟吸附到 495（08:15）并落在目标列，而不是停回旧列旧时间。
+    expect(parseFloat(landed.style.top)).toBeCloseTo(495 / 1440 * 100, 3);
+  });
+
   it("deletes a lightweight time block from the calendar", async () => {
     const today = new Date().toISOString().slice(0, 10);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),

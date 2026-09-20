@@ -9,6 +9,9 @@ import { listen } from "@tauri-apps/api/event";
 
 import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession, type EditorSessionApi } from "./hooks/useEditorSession";
 import { FloatingPanel } from "./components/ui/floating-panel";
+import { DragTimePreview } from "./components/ui/drag-time-preview";
+import { DRAG_TARGET_MIN_PX, snapDelta, snapMinutesFor, snapTo } from "./lib/timelineDrag";
+import { placementSettled, setPendingPlacement, usePendingPlacement } from "./lib/pendingPlacement";
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
@@ -18,7 +21,7 @@ import { buildSevenDayReview } from "./lib/review";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
 import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
-import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag } from "./lib/calendarDrag";
+import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
 import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel } from "./lib/calendarSummary";
 import {
   createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type ExecutionRecord, type ExecutionSession,
@@ -548,7 +551,7 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
 function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const upcoming = sessions.filter((item) => item.taskId === task.id && hasFutureSchedule(item)).sort(compareSessions);
   const hint = upcoming.length ? `拖动安排 · 下次：${upcoming[0].localDate} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
-  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = Math.max(0, Math.round(event.clientY - event.currentTarget.getBoundingClientRect().top)); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
+  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
     <strong className="task-row-title">{task.title}</strong>
     {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
     <span className="task-row-side">
@@ -916,6 +919,21 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   const [blankAnchor, setBlankAnchor] = useState<DOMRect | null>(null);
   const [blankTitle, setBlankTitle] = useState(""); const blankSelectionStart = useRef<number | null>(null); const blankBubbleRef = useRef<HTMLElement>(null);
   const sessions = workspace.executionSessions.filter((item) => item.localDate === date && (item.status === "scheduled" || item.status === "missed"));
+  /**
+   * 刚刚放开去、写入还没回来的那一份。
+   *
+   * 源列把它从 `sessions` 里摘掉，目标列按落点先画一份 —— 否则松手后旧位置会继续
+   * 显示这一份，等数据回来才跳走，就是跨列松手时的错位动画。清除时机见
+   * `lib/pendingPlacement.ts`。
+   */
+  const pendingPlacement = usePendingPlacement();
+  const landingHere = pendingPlacement && pendingPlacement.localDate === date
+    ? workspace.executionSessions.find((item) => item.id === pendingPlacement.sessionId) ?? null
+    : null;
+  useEffect(() => {
+    if (pendingPlacement && placementSettled(pendingPlacement, workspace.executionSessions)) setPendingPlacement(null);
+  }, [pendingPlacement, workspace.executionSessions]);
+  const renderedSessions = [...sessions.filter((item) => item.id !== pendingPlacement?.sessionId), ...(landingHere ? [landingHere] : [])];
   const concurrency = concurrentLayouts(sessions);
   const blocks = workspace.timeBlocks.filter((item) => item.localDate === date);
   const defaultSlots = defaultSlotSlicesForWeekday(preferences.defaultTimeSlots, new Date(`${date}T12:00:00`).getDay());
@@ -932,8 +950,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
   const minuteAtPointer = (clientY: number, track: HTMLDivElement) => {
     const rect = track.getBoundingClientRect(); if (!rect.height) return 0;
     const raw = timeline ? timeline.minuteAtOffset(clientY - rect.top) : ((clientY - rect.top) / rect.height) * 1440;
-    const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes;
-    return Math.max(0, Math.min(1439, Math.round(raw / snap) * snap));
+    return snapTo(raw, snapMinutesFor(preferences.snapMinutes, false), 0, 1439);
   };
   const pointsAtBlankTrack = (target: EventTarget | null) => !(target as HTMLElement | null)?.closest("button, input, .calendar-session, .calendar-time-block, .calendar-actual-record, .blank-action-bubble, .resize-handle, .session-edit-button");
   const previewFromDrag = (event: DragEvent<HTMLDivElement>) => {
@@ -943,8 +960,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     const grabOffsetPx = calendarDragGrabOffset(event.dataTransfer);
     const pointerOffsetPx = Math.max(0, Math.max(0, event.clientY - rect.top) - grabOffsetPx);
     const raw = timeline ? timeline.minuteAtOffset(pointerOffsetPx) : (pointerOffsetPx / rect.height) * 1440;
-    const configuredSnap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes;
-    const snap = event.altKey ? (preferences.snapMinutes === "off" ? 15 : 1) : configuredSnap;
+    const snap = snapMinutesFor(preferences.snapMinutes, event.altKey);
     // `dragover` 期间 `getData` 是空的（保护模式），必须回落到 dragstart 记下的影子副本，
     // 否则整个拖拽预览在真实浏览器里都不会出现。
     const { taskId, sessionId } = calendarDragIds(event.dataTransfer);
@@ -953,7 +969,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
     if (!task && !session) return null;
     const sourceTask = task ?? workspace.tasks.find((item) => item.id === session?.taskId);
     const duration = session ? sessionDuration(session) : Math.max(5, task?.sessionMinutes ?? task?.estimatedMinutes ?? 60);
-    let startMinute = Math.max(0, Math.min(1439, Math.round(raw / snap) * snap));
+    let startMinute = snapTo(raw, snap, 0, 1439);
     let mode: CalendarDropMode = "place"; let targetSessionId = "";
     const targetCard = (event.target as HTMLElement | null)?.closest<HTMLElement>(".calendar-session:not(.calendar-drag-preview)");
     const target = sessions.find((item) => item.id === targetCard?.dataset.sessionId && item.id !== sessionId);
@@ -983,13 +999,23 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
       onPointerMove={(event) => { if (event.buttons !== 0) { if (blankSelectionStart.current === null) { setBlankHoverMinute(null); } return; } if (!pointsAtBlankTrack(event.target)) { if (blankSelectionStart.current === null) setBlankHoverMinute(null); return; } const minute = minuteAtPointer(event.clientY, event.currentTarget); if (blankSelectionStart.current === null) setBlankHoverMinute(minute); else { const start = Math.min(blankSelectionStart.current, minute); const end = Math.max(blankSelectionStart.current, minute, start + 5); setBlankRange({ start, end }); } }}
       onPointerUp={(event) => { if (blankSelectionStart.current === null) return; const origin = blankSelectionStart.current; const minute = minuteAtPointer(event.clientY, event.currentTarget); const start = Math.min(origin, minute); const end = minute === origin ? origin + 30 : Math.max(origin, minute, start + 5); blankSelectionStart.current = null; setBlankAnchor(new DOMRect(event.clientX, event.clientY, 0, 0)); setBlankRange({ start, end: Math.min(1440, end) }); setBlankAction("menu"); try { if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ } }}
       onPointerLeave={() => { if (blankSelectionStart.current === null) setBlankHoverMinute(null); }}
-      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = calendarDragTypes(event.dataTransfer).session ? "move" : "copy"; const nextPreview = previewFromDrag(event); setDragPreview(nextPreview); if (onDragGhost) { if (!nextPreview) onDragGhost(null); else { const track = event.currentTarget; const body = track.closest<HTMLElement>(".week-body, .continuous-day-axis"); const trackRect = track.getBoundingClientRect(); const bodyRect = body?.getBoundingClientRect(); if (!body || !bodyRect || !trackRect.height) onDragGhost(null); else { const pxPerHour = trackRect.height / 24; onDragGhost({ leftPx: Math.max(0, trackRect.left - bodyRect.left), topPx: Math.max(0, trackRect.top - bodyRect.top) + (nextPreview.startMinute % 1440) / 60 * pxPerHour, widthPx: trackRect.width, heightPx: Math.max(nextPreview.duration / 60 * pxPerHour, 2), mode: nextPreview.mode, targetSessionId: nextPreview.targetSessionId, title: nextPreview.title }); } } } const scroller = event.currentTarget.closest<HTMLElement>(".continuous-day-axis, .calendar-viewport"); const rect = scroller?.getBoundingClientRect(); if (scroller && rect) { const edge = 56; if (event.clientY < rect.top + edge) scroller.scrollTop -= Math.ceil((rect.top + edge - event.clientY) / 4); else if (event.clientY > rect.bottom - edge) scroller.scrollTop += Math.ceil((event.clientY - (rect.bottom - edge)) / 4); } }} onDragLeave={(event) => { const target = event.relatedTarget as Node | null; const container = event.currentTarget.closest<HTMLElement>(".calendar-grid.week-body, .continuous-day-axis"); const stillInside = container != null && target != null && container.contains(target); const leftContainer = target != null && !stillInside; if (leftContainer) { setDragPreview(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; } }} onDrop={(event) => {
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = calendarDragTypes(event.dataTransfer).session ? "move" : "copy"; const nextPreview = previewFromDrag(event); setDragPreview(nextPreview); if (onDragGhost) { if (!nextPreview) onDragGhost(null); else { const track = event.currentTarget; const body = track.closest<HTMLElement>(".week-body, .continuous-day-axis"); const trackRect = track.getBoundingClientRect(); const bodyRect = body?.getBoundingClientRect(); if (!body || !bodyRect || !trackRect.height) onDragGhost(null); else { const pxPerHour = trackRect.height / 24; onDragGhost({ leftPx: Math.max(0, trackRect.left - bodyRect.left), topPx: Math.max(0, trackRect.top - bodyRect.top) + (nextPreview.startMinute % 1440) / 60 * pxPerHour, widthPx: trackRect.width, heightPx: Math.max(nextPreview.duration / 60 * pxPerHour, DRAG_TARGET_MIN_PX), mode: nextPreview.mode, targetSessionId: nextPreview.targetSessionId, title: nextPreview.title }); } } } const scroller = event.currentTarget.closest<HTMLElement>(".continuous-day-axis, .calendar-viewport"); const rect = scroller?.getBoundingClientRect(); if (scroller && rect) { const edge = 56; if (event.clientY < rect.top + edge) scroller.scrollTop -= Math.ceil((rect.top + edge - event.clientY) / 4); else if (event.clientY > rect.bottom - edge) scroller.scrollTop += Math.ceil((event.clientY - (rect.bottom - edge)) / 4); } }} onDragLeave={(event) => { const target = event.relatedTarget as Node | null; const container = event.currentTarget.closest<HTMLElement>(".calendar-grid.week-body, .continuous-day-axis"); const stillInside = container != null && target != null && container.contains(target); const leftContainer = target != null && !stillInside; if (leftContainer) { setDragPreview(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; } }} onDrop={(event) => {
       event.preventDefault();
       const preview = previewFromDrag(event) ?? dragPreview;
       if (!preview) { onClearDragExpansion?.(); return; }
       if (preview.mode === "place" && preview.targetSessionId) { setDragPreview(null); onDragGhost?.(null); onClearDragExpansion?.(); return; }
       setDragPreview(null); onDragGhost?.(null);
-      void onPlace({ date, startMinute: preview.startMinute, taskId: preview.taskId, sessionId: preview.sessionId, mode: preview.mode, targetSessionId: preview.targetSessionId }).then(() => onRetainDragExpansion?.()).catch(() => onClearDragExpansion?.());
+      // 已有卡片换位置：先把落点画出来、源列那一份同时藏起来，
+      // 否则松手后旧位置继续显示，等写入回来才跳走（跨列松手的错位动画）。
+      const movingSession = workspace.executionSessions.find((item) => item.id === preview.sessionId);
+      if (movingSession) {
+        const at = placementDateTime(date, preview.startMinute);
+        const atEnd = placementDateTime(date, preview.startMinute + sessionDuration(movingSession));
+        setPendingPlacement({ sessionId: movingSession.id, localDate: at.date, startLocal: at.time, endLocalDate: atEnd.date, endLocal: atEnd.time });
+      }
+      void onPlace({ date, startMinute: preview.startMinute, taskId: preview.taskId, sessionId: preview.sessionId, mode: preview.mode, targetSessionId: preview.targetSessionId })
+        .then(() => onRetainDragExpansion?.())
+        .catch(() => { setPendingPlacement(null); onClearDragExpansion?.(); });
     }}>
       {timeline?.segments.map((segment) => <i key={`map-${segment.start}-${segment.end}`} aria-hidden="true" className="timeline-map-segment" data-start-minute={segment.start} data-end-minute={segment.end} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} />)}
       {Array.from({ length: 24 }, (_, hour) => { const minute = hour * 60; const segment = timeline?.segments.find((item) => minute >= item.start && minute < item.end); return segment?.collapsed ? null : <div key={hour} className="hour-line" style={{ top: timeline ? `${timeline.offsetAtMinute(minute)}px` : `${hour / 24 * 100}%` }} />; })}
@@ -1021,12 +1047,16 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
         const position = (startLocal: string, endLocal: string) => timeline ? timeline.positionForRange(startLocal, endLocal) : positionStyle(startLocal, endLocal);
         return <CalendarTimeBlock key={block.id} block={block} baseStyle={baseStyle} position={position} hourHeight={preferences.calendarScale[preferences.calendarView]} snapMinutes={preferences.snapMinutes} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onUpdate={(next) => onUpdateBlock(block, next)} onDelete={() => void onDeleteBlock(block.id)} />;
       })}
-      {sessions.map((session) => {
-        const task = workspace.tasks.find((item) => item.id === session.taskId); const baseStyle = timeline ? timeline.positionForRange(session.startLocal, session.endLocal) : positionStyle(session.startLocal, session.endLocal); const layout = concurrency.get(session.id);
+      {renderedSessions.map((session) => {
+        const task = workspace.tasks.find((item) => item.id === session.taskId);
+        // 落点覆盖：目标列先用落点时间画这一份（布局分栏等写入回来再算）。
+        const landing = pendingPlacement?.sessionId === session.id ? pendingPlacement : null;
+        const shown = landing ? { ...session, ...landing } : session;
+        const baseStyle = timeline ? timeline.positionForRange(shown.startLocal, shown.endLocal) : positionStyle(shown.startLocal, shown.endLocal); const layout = landing ? undefined : concurrency.get(session.id);
         if (!task || !baseStyle || layout?.hidden) return null;
         const style = layout ? { ...baseStyle, left: `calc(${layout.left}% + 4px)`, right: "auto", width: `calc(${layout.width}% - 8px)` } : baseStyle;
         const isDraggingSource = dragSourceId === session.id;
-        return <CalendarSession key={session.id} style={style} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={session} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} records={workspace.executionRecords} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
+        return <CalendarSession key={session.id} style={style} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} records={workspace.executionRecords} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
       })}
       {expandedConcurrency && (() => {
         const groupSessions = sessions.filter((session) => concurrency.get(session.id)?.groupId === expandedConcurrency);
@@ -1068,7 +1098,6 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
     if (!landed) return;
     if (block.startLocal === landed.startLocal && block.endLocal === landed.endLocal && block.localDate === landed.localDate && block.endLocalDate === landed.endLocalDate) setLanded(null);
   }, [block.startLocal, block.endLocal, block.localDate, block.endLocalDate, landed]);
-  const [previewBox, setPreviewBox] = useState<null | { left: number; top: number; above: boolean }>(null);
   const initialStart = timeMinutes(block.startLocal);
   const initialEnd = timeMinutes(block.endLocal);
   const initialDuration = (initialEnd - initialStart + 1440) % 1440 || 1440;
@@ -1083,9 +1112,9 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
     const pixelsPerMinute = hourHeight / 60;
     const trackWidth = articleRef.current?.closest<HTMLElement>(".day-track")?.getBoundingClientRect().width ?? 0;
     const compute = (next: PointerEvent) => {
-      const snap = next.altKey ? (snapMinutes === "off" ? 15 : 1) : snapMinutes === "off" ? 1 : snapMinutes;
+      const snap = snapMinutesFor(snapMinutes, next.altKey);
       const delta = (next.clientY - originY) / pixelsPerMinute;
-      const roundedDelta = Math.round(delta / snap) * snap;
+      const roundedDelta = snapDelta(delta, snap);
       if (edge === "move") {
         // 卡片本体自由跟手（不吸附），落点单独算吸附值：虚线框会"跳格"停在
         // 最终真正会落到的那一格，卡片则平滑跟随指针。两者分离才看得出落点。
@@ -1164,14 +1193,6 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   // 落点框只在"移动"时出现：改时长时卡片边界本身就是最终边界，再叠一层虚线只是噪音。
   const dropStyle = resize === null || resize.edge !== "move" ? null : liveStyleFor(dropStartStr, dropEndStr);
   const isResizing = resize !== null;
-  useLayoutEffect(() => {
-    if (resize === null) { setPreviewBox(null); return; }
-    const rect = articleRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const vw = typeof window === "undefined" ? 1024 : window.innerWidth;
-    const above = rect.bottom + 46 > (typeof window === "undefined" ? 768 : window.innerHeight);
-    setPreviewBox({ left: Math.max(8, Math.min(vw - 190, rect.left)), top: above ? rect.top - 7 : rect.bottom + 7, above });
-  }, [resize]);
   const classes = ["calendar-time-block", isResizing ? "is-resizing" : ""].filter(Boolean).join(" ");
 
   return <>
@@ -1188,12 +1209,12 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
       <article aria-hidden="true" className="calendar-time-block is-landed" style={landedOverlayStyle}><time>{landed.startLocal}–{landed.endLocal}</time><strong>{block.title}</strong></article>,
       landed.track,
     )}
-    {resize !== null && previewBox && <div className={`session-resize-preview${previewBox.above ? " is-above" : ""}`} role="status" aria-label="时间块时间预览" style={{ left: `${previewBox.left}px`, top: `${previewBox.top}px` }}>{dropStartStr}–{dropEndStr} · {dropDuration} 分钟</div>}
+    <DragTimePreview active={resize !== null} anchorRef={articleRef} label="时间块时间预览" followKey={`${liveStartStr}-${liveEndStr}`}>{dropStartStr}–{dropEndStr} · {dropDuration} 分钟</DragTimePreview>
   </>;
 }
 
-function CalendarSession({ style, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, records, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
-  style?: CSSProperties; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
+function CalendarSession({ style, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, records, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
+  style?: CSSProperties; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
   session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; records: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
   onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
@@ -1202,7 +1223,6 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
   const articleRef = useRef<HTMLElement>(null);
   const [progressOpen, setProgressOpen] = useState(false);
   const [resize, setResize] = useState<number | null>(null);
-  const [resizeBox, setResizeBox] = useState<null | { left: number; top: number; above: boolean }>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const current = sessionContains(session, now);
   const pendingReview = isPendingReview(session, task, records, now);
@@ -1243,9 +1263,9 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     const initial = sessionDuration(session);
     const pixelsPerMinute = hourHeight / 60;
     const rounded = (next: PointerEvent) => {
-      const snap = next.altKey ? (snapMinutes === "off" ? 15 : 1) : snapMinutes === "off" ? 1 : snapMinutes;
+      const snap = snapMinutesFor(snapMinutes, next.altKey);
       const deltaMinutes = (next.clientY - originY) / pixelsPerMinute;
-      return Math.max(snap, Math.min(1440, initial + Math.round(deltaMinutes / snap) * snap));
+      return Math.max(snap, Math.min(1440, initial + snapDelta(deltaMinutes, snap)));
     };
     const move = (next: PointerEvent) => setResize(rounded(next));
     const up = (next: PointerEvent) => {
@@ -1256,17 +1276,10 @@ function CalendarSession({ style, targeted = false, overlapTargeted = false, dra
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
   };
-  useLayoutEffect(() => {
-    if (resize === null) { setResizeBox(null); return; }
-    const rect = articleRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const above = rect.bottom + 46 > window.innerHeight;
-    setResizeBox({ left: Math.max(8, Math.min(window.innerWidth - 190, rect.left)), top: above ? rect.top - 7 : rect.bottom + 7, above });
-  }, [resize]);
-  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
+  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", landing ? "is-landed" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = Math.max(0, Math.round(event.clientY - event.currentTarget.getBoundingClientRect().top)); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
-    {resize !== null && resizeBox && <div className={`session-resize-preview${resizeBox.above ? " is-above" : ""}`} role="status" aria-label="调整时长预览" style={{ left: `${resizeBox.left}px`, top: `${resizeBox.top}px` }}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize) % 1440)} · {resize} 分钟</div>}
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
+    <DragTimePreview active={resize !== null} anchorRef={articleRef} label="调整时长预览" followKey={resize}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize!) % 1440)} · {resize} 分钟</DragTimePreview>
     {showTimeAndProgress && <time className="session-time">{session.startLocal}–{session.endLocal}</time>}<strong>{task.title}</strong>
     {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && (pendingReview
       ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</button>

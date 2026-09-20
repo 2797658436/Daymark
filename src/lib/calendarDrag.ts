@@ -54,5 +54,18 @@ export function calendarDragIds(transfer: DataTransfer | null | undefined): { ta
 export function calendarDragGrabOffset(transfer: DataTransfer | null | undefined): number {
   const fromTransfer = Number(transfer?.getData("application/x-daymark-grab"));
   if (Number.isFinite(fromTransfer) && fromTransfer > 0) return fromTransfer;
-  return active?.grabOffsetY ?? 0;
+  const recorded = active?.grabOffsetY ?? 0;
+  return Number.isFinite(recorded) && recorded > 0 ? recorded : 0;
+}
+
+/**
+ * 抓取偏移：按下点相对被拖卡片顶部的距离。
+ *
+ * 只有一个入口，且**任何非有限值都退化成 0** —— `clientY` 缺失时 `Math.round(NaN)`
+ * 会一路污染「指针 y → 分钟」的换算，最后落点变成 `Invalid Date`（真实拖拽里
+ * 永远拿得到 `clientY`，但合成事件、键盘触发的拖拽、或未来换输入通道时都可能没有）。
+ */
+export function grabOffsetWithin(clientY: number | undefined, element: HTMLElement): number {
+  const offset = Math.round((clientY ?? 0) - element.getBoundingClientRect().top);
+  return Number.isFinite(offset) && offset > 0 ? offset : 0;
 }
