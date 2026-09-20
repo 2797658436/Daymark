@@ -458,10 +458,9 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
   const [filter, setFilter] = useState<"all" | "unscheduled" | "scheduled">("all");
   const [attentionOpen, setAttentionOpen] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [habitBusy, setHabitBusy] = useState(false); const [habitError, setHabitError] = useState("");
-  const [habitAnchor, setHabitAnchor] = useState<DOMRect | null>(null); const [habitTitle, setHabitTitle] = useState("");
-  const [habitPattern, setHabitPattern] = useState<RecurringHabit["pattern"]>("daily"); const [habitDays, setHabitDays] = useState<number[]>([1]);
-  const [habitMinutes, setHabitMinutes] = useState(30); const [habitStart, setHabitStart] = useState("");
+  // 提交态由 HabitEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
+  const [habitBusy, setHabitBusy] = useState(false);
+  const [habitAnchor, setHabitAnchor] = useState<DOMRect | null>(null);
   const today = toLocalDate(useCurrentTime());
   const attention = tasks.filter((task) => task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
   const visible = tasks.filter((task) => !attention.includes(task) && (filter === "all" || (sessions.some((item) => item.taskId === task.id && hasFutureSchedule(item)) ? filter === "scheduled" : filter === "unscheduled")));
@@ -513,7 +512,7 @@ function TaskPool({ tasks, sessions, projects, habits, occurrences, autoSchedule
       <button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
     </div>
     {autoScheduleAssist && assistCount > 0 && <button className="schedule-assist" onClick={onAutoSchedule}><Sparkles size={15} /><span><strong>{assistCount} 项还没有下一次安排</strong><small>可以生成未来 7 天草案，确认后才会应用</small></span></button>}
-    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><div aria-busy={habitBusy} className="habit-form habit-popover"><label>习惯名称<input value={habitTitle} onChange={(event) => setHabitTitle(event.target.value)} /></label><label>重复规则<select value={habitPattern} onChange={(event) => setHabitPattern(event.target.value as RecurringHabit["pattern"])}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>{habitPattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={habitDays.includes(day)} onChange={(event) => setHabitDays((days) => event.target.checked ? [...days, day] : days.filter((value) => value !== day))} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}<label>单次投入（分钟）<input type="number" min="5" max="240" value={habitMinutes} onChange={(event) => setHabitMinutes(Number(event.target.value))} /></label><label>固定开始（可选）<input type="time" value={habitStart} onChange={(event) => setHabitStart(event.target.value)} /></label><div className="form-actions"><Button disabled={habitBusy} onClick={() => setHabitAnchor(null)}>取消</Button><Button variant="primary" disabled={habitBusy || !habitTitle.trim() || habitMinutes < 5 || habitMinutes > 240 || (habitPattern === "weekly" && habitDays.length === 0)} onClick={async () => { if (habitBusy) return; setHabitBusy(true); setHabitError(""); try { await onCreateHabit({ title: habitTitle.trim(), pattern: habitPattern, weekdays: habitPattern === "weekly" ? habitDays : [], startDate: toLocalDate(new Date()), sessionMinutes: habitMinutes, preferredStartLocal: habitStart || null }); setHabitTitle(""); setHabitAnchor(null); } catch (reason) { setHabitError(readError(reason)); } finally { setHabitBusy(false); } }}>创建习惯</Button></div>{habitError && <p role="alert">{habitError}</p>}</div></FloatingPanel>}
+    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); }} onPhase={setHabitBusy} /></FloatingPanel>}
     {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <TaskPoolCard key={task.id} task={task} sessions={sessions} onProgress={onProgress} onEdit={toggleEditor} />)}</div></details>}
     <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
     <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
@@ -571,14 +570,17 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
   const anchor = preferences.calendarAnchors[preferences.calendarView] ?? toLocalDate(new Date());
   const setAnchor = (date: string) => onPreferences({ calendarAnchors: { ...preferences.calendarAnchors, [preferences.calendarView]: date } });
   const [editingSession, setEditingSession] = useState<{ session: ExecutionSession; anchorElement: HTMLElement | null } | null>(null);
+  // 精确时间编辑的提交态：FloatingPanel 据此在提交中拦住 Esc 与外部点击。
+  const [editingSessionBusy, setEditingSessionBusy] = useState(false);
   const [continuingSession, setContinuingSession] = useState<ExecutionSession | null>(null);
   const [weekGhost, setWeekGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
   useEffect(() => { const clearGhost = () => setWeekGhost(null); window.addEventListener("dragend", clearGhost); window.addEventListener("drop", clearGhost); return () => { window.removeEventListener("dragend", clearGhost); window.removeEventListener("drop", clearGhost); }; }, []);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null); const [detailTaskId, setDetailTaskId] = useState<string | null>(null); const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   const [monthFocusDate, setMonthFocusDate] = useState<string | null>(null);
   const [weekKeyboardFocus, setWeekKeyboardFocus] = useState<{ kind: "header" | "grid"; date: string; minute: number }>(() => ({ kind: "header", date: anchor, minute: 540 }));
-  const [blockDate, setBlockDate] = useState(anchor); const [blockBusy, setBlockBusy] = useState(false); const [blockError, setBlockError] = useState("");
-  const [blockForm, setBlockForm] = useState(false); const [blockTitle, setBlockTitle] = useState(""); const [blockStart, setBlockStart] = useState("12:00"); const [blockEnd, setBlockEnd] = useState("13:00");
+  const [blockForm, setBlockForm] = useState(false);
+  // 提交态由 TimeBlockEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
+  const [blockBusy, setBlockBusy] = useState(false);
   const calendarRef = useRef<HTMLElement>(null); const weekFocusRequested = useRef(false); const [nowDirection, setNowDirection] = useState<"up" | "down" | null>(null);
   const zoomAnchorRef = useRef<null | { scroller: HTMLElement; date: string | null; anchorRatio: number | null; anchorMinute: number | null; clientY: number; pointerOffset: number; contentRatio: number | null }>(null);
   const now = useCurrentTime();
@@ -727,8 +729,8 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
   const calendarStyle = { "--calendar-hour-height": `${scale}px`, "--calendar-month-row-height": `${scale}px` } as CSSProperties;
   return <section ref={calendarRef} className="calendar-page" aria-labelledby="calendar-title" data-calendar-zoom={zoom} data-calendar-scale={scale} style={calendarStyle}>
     <PageHeader eyebrow="手动排程" title="日历" actions={<><div className="segmented"><button aria-pressed={preferences.calendarView === "day"} className={preferences.calendarView === "day" ? "active" : ""} onClick={() => onPreferences({ calendarView: "day" })}>日</button><button aria-pressed={preferences.calendarView === "week"} className={preferences.calendarView === "week" ? "active" : ""} onClick={() => onPreferences({ calendarView: "week" })}>周</button><button aria-pressed={preferences.calendarView === "month"} className={preferences.calendarView === "month" ? "active" : ""} onClick={() => onPreferences({ calendarView: "month" })}>月</button></div><button className="icon-action" aria-label="上一段日期" onClick={() => shift(-1)}><ChevronLeft /></button><button className="today-button" onClick={() => setAnchor(toLocalDate(new Date()))}>{preferences.calendarView === "day" ? "回到今天" : preferences.calendarView === "week" ? "本周" : "本月"}</button><button className="icon-action" aria-label="下一段日期" onClick={() => shift(1)}><ChevronRight /></button></>} />
-    <div className="calendar-toolbar"><span aria-label="当前日历日期" aria-live="polite">{preferences.calendarView === "day" ? formatLongDate(anchor) : preferences.calendarView === "week" ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}` : formatMonth(anchor)}</span><div>{preferences.calendarView === "day" && <div className="segmented day-display-mode" role="group" aria-label="日视图显示模式">{([['defaultSlots', '默认时段'], ['fullDay', '全天']] as const).map(([value, label]) => <button key={value} aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}<div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([['compact', '紧凑'], ['standard', '标准'], ['detailed', '详细']] as const).map(([value, label]) => <button key={value} aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>{preferences.calendarView !== "month" && <>{preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} />显示实际记录</label>}<Button onClick={() => { setBlockDate(anchor); setBlockForm((value) => !value); }}><Clock3 size={16} />时间块</Button><button className={`magnet-control ${preferences.snapMinutes === "off" ? "" : "active"}`} aria-label={preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`} aria-pressed={preferences.snapMinutes !== "off"} title="拖拽时按 Alt 临时反转吸附" onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} /></button></>}</div></div>
-    <div className="time-block-form-slot">{blockForm && <FloatingPanel label="添加时间块" onClose={() => setBlockForm(false)}><section aria-busy={blockBusy} className="time-block-form"><label>标题<input autoFocus value={blockTitle} onChange={(event) => setBlockTitle(event.target.value)} placeholder="会议、通勤或休息" /></label><label>日期<input type="date" value={blockDate} onChange={(event) => setBlockDate(event.target.value)} /></label><label>开始<input type="time" value={blockStart} onChange={(event) => setBlockStart(event.target.value)} /></label><label>结束<input type="time" value={blockEnd} onChange={(event) => setBlockEnd(event.target.value)} /></label><div className="form-actions"><Button disabled={blockBusy} onClick={() => setBlockForm(false)}>取消</Button><Button variant="primary" disabled={blockBusy || !blockTitle.trim() || timeMinutes(blockEnd) <= timeMinutes(blockStart)} onClick={async () => { if (blockBusy) return; setBlockBusy(true); setBlockError(""); try { await onCreateBlock({ id: crypto.randomUUID(), title: blockTitle.trim(), localDate: blockDate, endLocalDate: blockDate, startLocal: blockStart, endLocal: blockEnd, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local", utcOffsetMinutes: -new Date().getTimezoneOffset() }); setBlockTitle(""); setBlockForm(false); } catch (reason) { setBlockError(readError(reason)); } finally { setBlockBusy(false); } }}>创建时间块</Button></div>{blockError && <p role="alert">{blockError}</p>}</section></FloatingPanel>}</div>
+    <div className="calendar-toolbar"><span aria-label="当前日历日期" aria-live="polite">{preferences.calendarView === "day" ? formatLongDate(anchor) : preferences.calendarView === "week" ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}` : formatMonth(anchor)}</span><div>{preferences.calendarView === "day" && <div className="segmented day-display-mode" role="group" aria-label="日视图显示模式">{([['defaultSlots', '默认时段'], ['fullDay', '全天']] as const).map(([value, label]) => <button key={value} aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}<div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([['compact', '紧凑'], ['standard', '标准'], ['detailed', '详细']] as const).map(([value, label]) => <button key={value} aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>{preferences.calendarView !== "month" && <>{preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} />显示实际记录</label>}<Button onClick={() => setBlockForm((value) => !value)}><Clock3 size={16} />时间块</Button><button className={`magnet-control ${preferences.snapMinutes === "off" ? "" : "active"}`} aria-label={preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`} aria-pressed={preferences.snapMinutes !== "off"} title="拖拽时按 Alt 临时反转吸附" onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} /></button></>}</div></div>
+    <div className="time-block-form-slot">{blockForm && <FloatingPanel label="添加时间块" busy={blockBusy} onClose={() => setBlockForm(false)}><TimeBlockEditor defaultDate={anchor} onCancel={() => setBlockForm(false)} onCreate={async (block) => { await onCreateBlock(block); setBlockForm(false); }} onPhase={setBlockBusy} /></FloatingPanel>}</div>
     <div ref={viewportRef} className={`calendar-viewport ${preferences.calendarView}-viewport`} role="region" aria-label="日历时间网格">
       {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
         <CalendarTimeAxis showHeader={false} />
@@ -737,7 +739,7 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
       </div></div>{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div>}
     </div>
     {nowDirection && <button className="back-to-now" onClick={returnToNow}>{nowDirection === "up" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}回到现在</button>}
-    {editingSession && (() => { const task = workspace.tasks.find((item) => item.id === editingSession.session.taskId); return task ? <SessionEditPopover session={editingSession.session} task={task} anchorElement={editingSession.anchorElement} onClose={() => setEditingSession(null)} onSave={async (date, start, duration) => { await onMove(editingSession.session, date, start, duration); setEditingSession(null); }} /> : null; })()}
+    {editingSession && (() => { const task = workspace.tasks.find((item) => item.id === editingSession.session.taskId); return task ? <SessionEditPopover session={editingSession.session} task={task} anchorElement={editingSession.anchorElement} onClose={() => setEditingSession(null)} onPhase={setEditingSessionBusy} onSave={async (date, start, duration) => { await onMove(editingSession.session, date, start, duration); setEditingSession(null); }} /> : null; })()}
     {continuingSession && (() => { const task = workspace.tasks.find((item) => item.id === continuingSession.taskId); return task ? <ContinueScheduleDialog session={continuingSession} task={task} snapMinutes={preferences.snapMinutes} onClose={() => setContinuingSession(null)} onSave={async (date, start) => { await onSchedule(task, date, start); setContinuingSession(null); }} /> : null; })()}
   </section>;
 }
@@ -1271,22 +1273,94 @@ function ContinueScheduleDialog({ session, task, snapMinutes, onClose, onSave }:
   return <ConfirmDialog id="continue-schedule-dialog" labelledBy="continue-schedule-title" busy={busy} onClose={onClose}><div className="modal-icon"><CalendarDays /></div><h2 id="continue-schedule-title">继续安排：{task.title}</h2><p>先确认下一次日期和开始时间，创建后原时段与历史事实保持不变。</p><label>日期<input autoFocus type="date" value={localDate} onChange={(event) => setLocalDate(event.target.value)} /></label><label>开始<input type="time" value={startLocal} onChange={(event) => setStartLocal(event.target.value)} /></label><small>默认沿用任务的单次投入时长；你仍可在创建后精确编辑。</small>{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy || !localDate || !startLocal} onClick={() => void save()}>{busy ? "正在创建…" : "创建后续安排"}</Button></div></ConfirmDialog>;
 }
 
-function SessionEditPopover({ session, task, anchorElement, onClose, onSave }: { session: ExecutionSession; task: Task; anchorElement: HTMLElement | null; onClose: () => void; onSave: (localDate: string, startLocal: string, duration: number) => Promise<void> }) {
-  const [localDate, setLocalDate] = useState(session.localDate);
-  const [startLocal, setStartLocal] = useState(session.startLocal);
-  const [endLocal, setEndLocal] = useState(session.endLocal);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  const startMinutes = timeMinutes(startLocal); let endMinutes = timeMinutes(endLocal); if (endMinutes <= startMinutes) endMinutes += 1440;
-  const duration = endMinutes - startMinutes; const valid = duration >= 5 && duration <= 1440;
-  const save = async () => { setBusy(true); setError(""); try { await onSave(localDate, startLocal, duration); } catch (reason) { setError(readError(reason)); setBusy(false); } };
-  return <FloatingPanel label={`编辑时间：${task.title}`} anchorElement={anchorElement} onClose={onClose} closeOnOutsideClick><section aria-busy={busy} className="session-edit-fields">
+function SessionEditPopover({ session: planned, task, anchorElement, onClose, onSave, onPhase }: {
+  session: ExecutionSession; task: Task; anchorElement: HTMLElement | null;
+  onClose: () => void; onSave: (localDate: string, startLocal: string, duration: number) => Promise<void>;
+  onPhase?: (busy: boolean) => void;
+}) {
+  const editor = useEditorSession<{ localDate: string; startLocal: string; endLocal: string }>({
+    key: planned.id,
+    initial: { localDate: planned.localDate, startLocal: planned.startLocal, endLocal: planned.endLocal },
+    canSave: (draft) => { const value = clockDuration(draft.startLocal, draft.endLocal); return value >= 5 && value <= 1440; },
+    onSave: (draft) => onSave(draft.localDate, draft.startLocal, clockDuration(draft.startLocal, draft.endLocal)),
+    onClose: (reason) => { if (reason !== "saved") onClose(); },
+    onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
+  });
+  const { draft, patchDraft, busy, error } = editor;
+  const duration = clockDuration(draft.startLocal, draft.endLocal);
+  return <FloatingPanel label={`编辑时间：${task.title}`} anchorElement={anchorElement} busy={busy} onClose={onClose} closeOnOutsideClick><form aria-busy={busy} className="session-edit-fields" onSubmit={(event) => { event.preventDefault(); void editor.save(); }}>
     <header><strong>{task.title}</strong><span className="session-edit-popover-label">编辑时间</span></header>
-    <label>日期<input type="date" value={localDate} onChange={(event) => setLocalDate(event.target.value)} /></label>
-    <div className="time-inputs"><label>开始<input type="time" value={startLocal} onChange={(event) => setStartLocal(event.target.value)} /></label><label>结束<input type="time" value={endLocal} onChange={(event) => setEndLocal(event.target.value)} /></label></div>
-    <small>{localDate} {startLocal}–{endLocal} · 持续 {duration} 分钟</small>
+    <label>日期<input type="date" value={draft.localDate} onChange={(event) => patchDraft({ localDate: event.target.value })} /></label>
+    <div className="time-inputs"><label>开始<input type="time" value={draft.startLocal} onChange={(event) => patchDraft({ startLocal: event.target.value })} /></label><label>结束<input type="time" value={draft.endLocal} onChange={(event) => patchDraft({ endLocal: event.target.value })} /></label></div>
+    <small>{draft.localDate} {draft.startLocal}–{draft.endLocal} · 持续 {duration} 分钟</small>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
-    <div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy || !valid} onClick={() => void save()}>{busy ? "正在保存…" : "保存时间"}</Button></div>
-  </section></FloatingPanel>;
+    <div className="form-actions"><Button disabled={busy} onClick={editor.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !editor.canSave}>{busy ? "正在保存…" : "保存时间"}</Button></div>
+  </form></FloatingPanel>;
+}
+
+/**
+ * 轻量时间块的新建表单（P4-03）。
+ *
+ * 接入编辑会话后，「提交只发一次、失败保留草稿、提交中 Esc／取消无效」不再由
+ * 本地 `busy` 逐个手写，而与任务／里程碑走同一条状态机。
+ */
+function TimeBlockEditor({ defaultDate, onCancel, onCreate, onPhase }: {
+  defaultDate: string; onCancel: () => void; onCreate: (block: TimeBlock) => Promise<void>; onPhase?: (busy: boolean) => void;
+}) {
+  const session = useEditorSession<{ title: string; localDate: string; startLocal: string; endLocal: string }>({
+    key: "new-time-block",
+    initial: { title: "", localDate: defaultDate, startLocal: "12:00", endLocal: "13:00" },
+    canSave: (draft) => Boolean(draft.title.trim() && draft.localDate && timeMinutes(draft.endLocal) > timeMinutes(draft.startLocal)),
+    onSave: (draft) => onCreate({
+      id: crypto.randomUUID(), title: draft.title.trim(), localDate: draft.localDate, endLocalDate: draft.localDate,
+      startLocal: draft.startLocal, endLocal: draft.endLocal,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "local", utcOffsetMinutes: -new Date().getTimezoneOffset(),
+    }),
+    onClose: (reason) => { if (reason !== "saved") onCancel(); },
+    onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
+  });
+  const { draft, patchDraft, busy, error } = session;
+  return <form aria-busy={busy} className="time-block-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+    <label>标题<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} placeholder="会议、通勤或休息" /></label>
+    <label>日期<input type="date" value={draft.localDate} onChange={(event) => patchDraft({ localDate: event.target.value })} /></label>
+    <label>开始<input type="time" value={draft.startLocal} onChange={(event) => patchDraft({ startLocal: event.target.value })} /></label>
+    <label>结束<input type="time" value={draft.endLocal} onChange={(event) => patchDraft({ endLocal: event.target.value })} /></label>
+    <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建时间块"}</Button></div>
+    {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
+  </form>;
+}
+
+/** 新建重复习惯表单（P4-03）。这里只定义规则；发生项与欠账由后续执行闭环处理。 */
+function HabitEditor({ onCancel, onCreate, onPhase }: {
+  onCancel: () => void;
+  onCreate: (habit: Omit<RecurringHabit, "id" | "taskId" | "status">) => Promise<void>;
+  onPhase?: (busy: boolean) => void;
+}) {
+  const session = useEditorSession<{ title: string; pattern: RecurringHabit["pattern"]; weekdays: number[]; sessionMinutes: number; preferredStartLocal: string }>({
+    key: "new-habit",
+    initial: { title: "", pattern: "daily", weekdays: [1], sessionMinutes: 30, preferredStartLocal: "" },
+    canSave: (draft) => Boolean(draft.title.trim() && draft.sessionMinutes >= 5 && draft.sessionMinutes <= 240 && (draft.pattern !== "weekly" || draft.weekdays.length > 0)),
+    onSave: (draft) => onCreate({
+      title: draft.title.trim(),
+      pattern: draft.pattern,
+      weekdays: draft.pattern === "weekly" ? draft.weekdays : [],
+      startDate: toLocalDate(new Date()),
+      sessionMinutes: draft.sessionMinutes,
+      preferredStartLocal: draft.preferredStartLocal || null,
+    }),
+    onClose: (reason) => { if (reason !== "saved") onCancel(); },
+    onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
+  });
+  const { draft, patchDraft, busy, error } = session;
+  return <form aria-busy={busy} className="habit-form habit-popover" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+    <label>习惯名称<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
+    <label>重复规则<select value={draft.pattern} onChange={(event) => patchDraft({ pattern: event.target.value as RecurringHabit["pattern"] })}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>
+    {draft.pattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={draft.weekdays.includes(day)} onChange={(event) => patchDraft({ weekdays: event.target.checked ? [...draft.weekdays, day] : draft.weekdays.filter((value) => value !== day) })} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}
+    <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes} onChange={(event) => patchDraft({ sessionMinutes: Number(event.target.value) })} /></label>
+    <label>固定开始（可选）<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
+    <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建习惯"}</Button></div>
+    {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
+  </form>;
 }
 
 function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onFetchBilibili, onCreateTask, onArrange }: {
@@ -1625,6 +1699,8 @@ function sessionFromAllocation(allocation: ScheduleAllocation): ExecutionSession
 }
 function moveSessionTo(session: ExecutionSession, date: string, start: string, duration: number): ExecutionSession { const end = timeMinutes(start) + duration; return { ...session, localDate: date, endLocalDate: end >= 1440 ? addDays(date, 1) : date, startLocal: start, endLocal: minutesTime(end % 1440), status: "scheduled" }; }
 function progressEvent(task: Task, toProgress: number): ProgressEvent { return { id: crypto.randomUUID(), taskId: task.id, fromProgress: task.progress, toProgress, occurredAtUtc: new Date().toISOString() }; }
+/** 由起止时钟算时长；结束不晚于开始即视为跨午夜。 */
+function clockDuration(startLocal: string, endLocal: string) { const start = timeMinutes(startLocal); let end = timeMinutes(endLocal); if (end <= start) end += 1440; return end - start; }
 function sessionDuration(session: ExecutionSession) { const start = timeMinutes(session.startLocal); let end = timeMinutes(session.endLocal); if (session.endLocalDate !== session.localDate || end <= start) end += 1440; return end - start; }
 function placementDateTime(date: string, minute: number) { const dayOffset = Math.floor(Math.max(0, minute) / 1440); return { date: addDays(date, dayOffset), time: minutesTime(Math.max(0, minute) % 1440) }; }
 function positionStyle(start: string, end: string) { const top = timeMinutes(start) / 1440 * 100; let duration = timeMinutes(end) - timeMinutes(start); if (duration <= 0) duration += 1440; return { top: `${top}%`, height: `${Math.max(duration / 1440 * 100, 1.25)}%` }; }

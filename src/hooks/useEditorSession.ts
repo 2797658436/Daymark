@@ -64,7 +64,14 @@ export interface UseEditorSessionOptions<T> {
   initial: T;
   /** 提交。抛错即进入 error 阶段，草稿保留。 */
   onSave: (draft: T) => Promise<void>;
-  /** 关闭回调，携带关闭原因；`saved` 表示已成功落库。 */
+  /**
+   * 关闭回调，携带关闭原因。
+   *
+   * `saved` 表示已成功落库。注意**它不负责关闭面板**：成功时的关闭由调用方在 `onSave`
+   * 包装里完成（`await onSave(...)` 之后再 `setX(null)`），失败时保持打开以便显示错误。
+   * 因此常见写法是 `(reason) => { if (reason !== "saved") onCancel(); }`；
+   * 若这里对 `saved` 也调用关闭，反而会让面板在保存成功后仍然留在原地。
+   */
   onClose: (reason: CloseReason) => void;
   /** 乐观判定：为 false 时保存按钮应禁用。 */
   canSave?: (draft: T) => boolean;
