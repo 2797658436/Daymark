@@ -71,16 +71,17 @@ onClose: (reason) => { if (reason !== "saved") onCancel(); }
 | `tsc --noEmit` | 通过 |
 | Vitest | **147 passed / 13 files** |
 | Rust（`cargo test --all-targets`） | **37 passed** |
-| E2E（Playwright，`--workers=1`） | **24 passed** |
+| E2E（Playwright，`--workers=1`） | **25 passed** |
 
 新增用例：
 
 - `overlay-semantics.test.tsx`：组合期间 Enter 被拦、Escape 不关面板、组合结束后恢复原语义。**已验证禁用守卫时该用例会失败**（`expected false to be true`），不是空跑。
 - `App.test.tsx`：导入连点只发一次请求、失败保留草稿且取消在提交中禁用；取消面板后各模式草稿分别保留且互不串味。
+- `e2e/gui-optimization.spec.ts`：新增 AC02 浏览器用例「气泡内 Tab 绕行多圈焦点不落到背景 → 组合期间的 Escape 不关闭 → 组合结束后 Escape 关闭并把焦点还给触发按钮」。P4-02 只用一个一次性探针验过 Tab 收敛，现在变成常驻回归。**该用例同样已验证会在守卫被禁用时失败**（`expect(editor).toBeVisible()` 不成立），因此它确实在检验 `isComposing` 被浏览器透传、而不是空跑。
 
 定位器面：所有 `FloatingPanel` 标签、字段标签与 `role` 均未改动，既有 Vitest 与 Playwright 的 `getByRole`／`getByLabel` 全部继续命中。
 
-**未新增 E2E 用例**，理由：本轮接入没有改变任何跨页持久化或定位器面，既有 24 条 E2E（含 `gui-optimization.spec.ts` 的「取消保留导入草稿且模式互不串味」与「项目内添加任务」）已覆盖这些流程并全部通过；输入法组合按规格 §11 的验收矩阵归「组件＋桌面键盘」层，Playwright 也无法可靠合成组合事件。真实桌面键盘与输入法仍需 P4-10 的实机验收。
+真实桌面键盘与输入法（而非合成事件）仍需 P4-10 的实机验收。
 
 ## 7. 未做与边界
 

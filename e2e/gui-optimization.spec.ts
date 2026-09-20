@@ -60,6 +60,36 @@ test("draft cancellation never saves and a floating editor blocks a second calen
   await block.getByRole("button", { name: "取消" }).click();
 });
 
+test("an editor bubble traps Tab, survives a composing Escape and restores focus", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear()); await page.reload();
+  await page.getByRole("textbox", { name: "任务标题", exact: true }).fill("焦点收敛检查");
+  await page.getByRole("button", { name: "创建任务", exact: true }).click();
+  const trigger = page.getByRole("button", { name: "编辑任务 焦点收敛检查" });
+  await trigger.click();
+  const editor = page.getByRole("dialog", { name: "编辑任务 焦点收敛检查" });
+  await expect(editor).toBeVisible();
+
+  // AC02：连续 Tab／Shift+Tab 绕行多圈，焦点始终留在气泡内（宿主的循环，而不是只靠 inert）。
+  for (let index = 0; index < 12; index += 1) {
+    await page.keyboard.press("Tab");
+    expect(await editor.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+  }
+  await page.keyboard.press("Shift+Tab");
+  expect(await editor.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+
+  // AC02：输入法组合期间的 Escape 属于输入法，不能关掉编辑器（规格 §4.3）。
+  await editor.locator("input").first().evaluate((node) => {
+    node.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+  });
+  await expect(editor).toBeVisible();
+
+  // 组合结束后的普通 Escape 恢复原语义，并把焦点还给触发按钮。
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
 test("project task creation and import drafts remain separate", async ({ page }) => {
   await page.goto("/"); await page.evaluate(() => localStorage.clear()); await page.reload();
   await page.getByRole("button", { name: "项目", exact: true }).click();
