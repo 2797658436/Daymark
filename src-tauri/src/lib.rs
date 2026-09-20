@@ -780,6 +780,22 @@ pub fn run() {
 mod phase2_tests {
     use super::*;
 
+    /// 桌面版能否拖动卡片，取决于这一个配置值。
+    ///
+    /// WebView2 的原生拖放与页面内 HTML5 拖放**只能二选一**：`dragDropEnabled: true` 会让原生
+    /// 监听劫持窗口的拖放系统，页面里的 `dragstart` 永远不触发（tauri#9445、tauri#15138）。
+    /// 曾经有人试图用 `SetAllowExternalDrop(false)` 在运行时切换，那会禁止**一切**拖拽
+    /// （WebView2Feedback#4830），正是「日历上已排的卡片拖不动」的原因。
+    /// 这里把配置值钉住，避免它被改回 `true`。
+    #[test]
+    fn drag_drop_stays_disabled_so_html5_drag_keeps_working() {
+        let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
+            .expect("应该能读到 tauri.conf.json");
+        let config: serde_json::Value = serde_json::from_str(&raw).expect("tauri.conf.json 应是合法 JSON");
+        let windows = config["app"]["windows"].as_array().expect("app.windows 应是数组");
+        assert_eq!(windows.first().expect("至少一个窗口")["dragDropEnabled"], serde_json::Value::Bool(false));
+    }
+
     #[test]
     fn bilibili_public_metadata_is_mapped_without_treating_media_as_progress() {
         let video = parse_bilibili_response(r#"{"code":0,"message":"0","data":{"bvid":"BV1xx411c7mD","title":"公开课程","owner":{"name":"UP 主"},"pages":[{"cid":42,"page":1,"part":"第一讲","duration":601}]}}"#).unwrap();
