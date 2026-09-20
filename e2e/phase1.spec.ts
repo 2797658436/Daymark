@@ -1,5 +1,27 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import path from "node:path";
+
+/**
+ * 等待某个滚动容器连续多帧不再变化。
+ *
+ * 缩放锚点补偿是在测量时刻的滚动位置上做加减的，所以「测量前位置必须已经稳定」
+ * 是用例成立的前提。挂载后的首次「定位到当前时间」是异步的（requestAnimationFrame），
+ * 不等它落地就写 scrollTop，两个写入的先后顺序就取决于时序 —— M3 曾因此随机失败。
+ */
+async function waitForScrollSettled(locator: Locator) {
+  await locator.evaluate((element) => new Promise<void>((resolve) => {
+    let last = element.scrollTop;
+    let stable = 0;
+    let frames = 0;
+    const tick = () => {
+      if (element.scrollTop === last) { if (++stable >= 6) return resolve(); }
+      else { stable = 0; last = element.scrollTop; }
+      if (++frames > 180) return resolve();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }));
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -323,7 +345,9 @@ test("phase 3 M3 zooms around the pointed time and keeps schedule facts unchange
 
   const calendar = page.getByRole("region", { name: "日历时间网格" });
   const todayTrack = page.locator(".calendar-day.today .day-track");
+  await waitForScrollSettled(calendar);
   await calendar.evaluate((element) => { element.scrollTop = 52 + 12 * 48 - element.clientHeight / 2; });
+  await waitForScrollSettled(calendar);
   const pointedTimeY = async () => todayTrack.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return rect.top + rect.height / 2;
@@ -432,7 +456,10 @@ test("phase 3 M4 folds non-default hours and retains only a successful drag expa
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarDayMode)).toBe("defaultSlots");
   expect(await page.evaluate(() => localStorage.getItem("daymark.phase0.preferences"))).not.toContain("expandedGap");
 
+  const dayAxis = page.locator(".continuous-day-axis");
+  await waitForScrollSettled(dayAxis);
   await dropped.scrollIntoViewIfNeeded();
+  await waitForScrollSettled(dayAxis);
   const droppedBox = await dropped.boundingBox();
   if (!droppedBox) throw new Error("Dropped session must be visible");
   await page.mouse.move(droppedBox.x + droppedBox.width / 2, droppedBox.y + 1);

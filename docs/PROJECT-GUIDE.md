@@ -331,7 +331,7 @@ flowchart TD
 
 当前测试库存为 Rust **37** 个、Vitest **144** 个（13 个文件）、Playwright **24** 个。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期（见 [`docs/reports/phase-4-p4-02-implementation.md`](reports/phase-4-p4-02-implementation.md) §8）。
 
-已知测试侧不稳定性（非产品缺陷）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例存在 `108px` 滚动时序竞态，属 P4-04 的最小滚动仲裁范围；Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
+已知测试侧历史问题（均已修复，留作回归背景）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例曾有 `108px` 滚动时序竞态；2026-09-20 定位为两个成因 —— 挂载后的自动定位覆盖先发生的滚动，以及 `onWheel` 被 React 注册为 passive 使 `preventDefault()` 无效、浏览器默认滚动抢在锚点测量之前。现分别以「自动定位在收到容器 scroll 时让位」和「原生非 passive wheel 监听」修复，M3 ×30、M4 ×15 全通过（详见 [`docs/reports/phase-4-p4-01-baseline.md`](reports/phase-4-p4-01-baseline.md) §3.5）。Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
 
 | 层级 | 当前验证重点 |
 | --- | --- |
