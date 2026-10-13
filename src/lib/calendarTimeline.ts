@@ -46,6 +46,33 @@ export function timelineRangeFromKey(key: string): TimelineRange | null {
   return Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end <= 1440 && end > start ? { start, end } : null;
 }
 
+/**
+ * 折叠时间轴的分钟 → 轨道内像素。
+ *
+ * `createCalendarTimeline` 的 `offsetAtMinute` 与它同源：M9 的浏览位置恢复必须用同一套换算，
+ * 不能在滚动代码里再写一份。折叠分段也按同一公式内插（折叠段的 `height` 就是压缩后的高度）。
+ */
+export function segmentOffsetAtMinute(segments: TimelineSegment[], totalHeight: number, minute: number): number {
+  const value = Math.max(0, Math.min(1440, minute));
+  const segment = segments.find((item) => value >= item.start && value <= item.end) ?? segments.at(-1)!;
+  if (value === 1440) return totalHeight;
+  return segment.top + (value - segment.start) / Math.max(1, segment.end - segment.start) * segment.height;
+}
+
+/** 轨道内像素 → 分钟，与 `minuteAtOffset` 同源。 */
+export function segmentMinuteAtOffset(segments: TimelineSegment[], totalHeight: number, offset: number): number {
+  const value = Math.max(0, Math.min(totalHeight, offset));
+  const segment = segments.find((item) => value >= item.top && value <= item.top + item.height) ?? segments.at(-1)!;
+  return segment.start + (value - segment.top) / Math.max(1, segment.height) * (segment.end - segment.start);
+}
+
+/** `HH:MM`（含 `24:00`）→ 分钟，0–1440。 */
+export function clockMinutes(value: string) {
+  if (value === "24:00") return 1440;
+  const [hours, minutes] = value.split(":").map(Number);
+  return Math.max(0, Math.min(1440, hours * 60 + minutes));
+}
+
 export function createCalendarTimeline({ mode, slots, expandedGapKeys, currentMinute, revealedRanges = [], pixelsPerHour }: {
   mode: CalendarDayMode;
   slots: Array<Pick<DefaultTimeSlot, "start" | "end">>;
@@ -85,17 +112,8 @@ export function createCalendarTimeline({ mode, slots, expandedGapKeys, currentMi
     return positioned;
   });
 
-  const offsetAtMinute = (value: number) => {
-    const minute = Math.max(0, Math.min(1440, value));
-    const segment = segments.find((item) => minute >= item.start && minute <= item.end) ?? segments.at(-1)!;
-    if (minute === 1440) return top;
-    return segment.top + (minute - segment.start) / Math.max(1, segment.end - segment.start) * segment.height;
-  };
-  const minuteAtOffset = (value: number) => {
-    const offset = Math.max(0, Math.min(top, value));
-    const segment = segments.find((item) => offset >= item.top && offset <= item.top + item.height) ?? segments.at(-1)!;
-    return segment.start + (offset - segment.top) / Math.max(1, segment.height) * (segment.end - segment.start);
-  };
+  const offsetAtMinute = (value: number) => segmentOffsetAtMinute(segments, top, value);
+  const minuteAtOffset = (value: number) => segmentMinuteAtOffset(segments, top, value);
   const positionForRange = (start: string, end: string) => {
     const startMinute = clockMinutes(start); let endMinute = clockMinutes(end);
     if (endMinute <= startMinute) endMinute = 1440;
@@ -137,10 +155,4 @@ function complement(ranges: TimelineRange[]) {
 
 function gapContaining(gaps: TimelineGap[], minute: number) {
   return gaps.find((gap) => minute >= gap.start && minute < gap.end);
-}
-
-function clockMinutes(value: string) {
-  if (value === "24:00") return 1440;
-  const [hours, minutes] = value.split(":").map(Number);
-  return Math.max(0, Math.min(1440, hours * 60 + minutes));
 }

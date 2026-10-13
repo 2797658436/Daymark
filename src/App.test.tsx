@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
+import { readCalendarPositions, resetCalendarPositions } from "./hooks/useCalendarViewport";
 import { EMPTY_WORKSPACE, type BackupInfo, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
 import { DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./lib/settings";
 
@@ -1630,4 +1631,103 @@ it("keeps each import mode's draft after cancelling the panel", async () => {
   // 取消保留草稿 —— 规格 §4.1 的显式例外。
   await user.click(screen.getByRole("button", { name: "导入文本课程" }));
   expect(within(screen.getByRole("dialog")).getByLabelText("粘贴分集文本")).toHaveValue("P1 独立草稿 12:30");
+});
+
+// ---------------------------------------------------------------------------
+// 阶段 4 P4-04：日历滚动仲裁与逻辑浏览位置（内存版）
+// ---------------------------------------------------------------------------
+
+function fakeRect(top: number, height: number, width = 400) {
+  return { top, left: 0, bottom: top + height, right: width, width, height, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+}
+
+/** 给日视图的连续轴装上可预测布局：轨道屏幕位置随 `scrollTop` 变化。 */
+function stubDayAxisLayout(axis: HTMLElement, viewportTop = 100, viewportHeight = 600) {
+  let scrollTop = 0;
+  Object.defineProperty(axis, "clientHeight", { configurable: true, get: () => viewportHeight });
+  Object.defineProperty(axis, "clientTop", { configurable: true, get: () => 0 });
+  Object.defineProperty(axis, "scrollTop", { configurable: true, get: () => scrollTop, set: (value: number) => { scrollTop = value; } });
+  vi.spyOn(axis, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop, viewportHeight));
+  Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel")).forEach((panel, index) => {
+    const track = panel.querySelector<HTMLElement>(".day-track");
+    if (!track) return;
+    const offsetTop = index * 1200 + 40;
+    vi.spyOn(track, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop + offsetTop - scrollTop, 1152));
+  });
+  return { read: () => scrollTop };
+}
+
+class ImmediateResizeObserver {
+  constructor(private readonly callback: () => void) { /* 只需让恢复在尺寸变化时再推一次 */ }
+  observe() { this.callback(); }
+  disconnect() { /* no-op */ }
+}
+
+describe("phase 4 P4-04 calendar viewport arbitration", () => {
+  beforeEach(() => { resetCalendarPositions(); });
+
+  it("marks folded timeline segments so the sampled minute stays stable", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+      defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [3] }],
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    try {
+      await screen.findByRole("button", { name: "默认时段" });
+      const segments = Array.from(document.querySelectorAll<HTMLElement>('.continuous-day-panel[data-calendar-date="2026-08-05"] .timeline-map-segment'));
+      expect(segments.length).toBeGreaterThan(0);
+      // 折叠条必须自报折叠，否则采样会按像素内插，1px 滚动就能把分钟甩出几小时。
+      expect(segments.some((segment) => segment.dataset.collapsed === "true")).toBe(true);
+      expect(segments.some((segment) => segment.dataset.collapsed === "false")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the browsing position in memory only and never writes it into preferences", async () => {
+    const user = userEvent.setup();
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" } };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await screen.findByRole("button", { name: "日" });
+    await user.click(screen.getByRole("button", { name: "周" }));
+    await user.click(screen.getByRole("button", { name: "日" }));
+    const stored = backend.value as Record<string, unknown>;
+    expect(stored).not.toHaveProperty("calendarPositions");
+    expect(JSON.stringify(stored)).not.toContain("viewportRatio");
+  });
+
+  it("restores the day browsing position after a round trip through the week view", async () => {
+    vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
+    try {
+      const user = userEvent.setup();
+      const backend = new MemorySettingsBackend();
+      backend.value = {
+        ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day",
+        calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+      };
+      render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
+      const layout = stubDayAxisLayout(axis);
+      act(() => { axis.scrollTop = 500; axis.dispatchEvent(new Event("scroll")); });
+      await new Promise((resolve) => setTimeout(resolve, 360));
+      const remembered = readCalendarPositions().day;
+      expect(remembered?.minute).toBeCloseTo((500 + 300 - 40) / 1152 * 1440, 3);
+
+      await user.click(screen.getByRole("button", { name: "周" }));
+      await user.click(screen.getByRole("button", { name: "日" }));
+      const restoredAxis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
+      const restored = stubDayAxisLayout(restoredAxis);
+      // 没有记忆时这里会落到「首次定位」（今天→现在），恢复记忆后必须回到用户离开的位置。
+      await waitFor(() => expect(restored.read()).toBeCloseTo(500, 0));
+    } finally {
+      vi.unstubAllGlobals();
+      resetCalendarPositions();
+    }
+  });
 });

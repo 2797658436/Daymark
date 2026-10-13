@@ -573,6 +573,81 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
   await expect(page.getByRole("dialog", { name: "空白时段操作" })).toContainText("09:15–09:45");
 });
 
+/**
+ * 阶段 4 P4-04 / AC05：日与周各自记住自己的**逻辑**浏览位置，反复切换不累计漂移；
+ * 月视图不存时间轴坐标，进入时置顶。切换视图不得改写任何排程事实。
+ *
+ * 阈值按规格 §5.3：恢复逻辑时间误差 ≤1 分钟或 2 CSS px，取较宽松的可测量者 ——
+ * 这里在 48px/小时下换算成像素断言。
+ */
+test("phase 4 M9 keeps the logical browsing position across day and week switches", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date("2026-08-05T14:00:00"));
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", calendarDayMode: "fullDay",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "detailed" },
+      calendarScale: { day: 48, week: 48, month: 104 },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [
+        { id: "m9-morning", projectId: null, title: "M9 上午安排", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "m9-evening", projectId: null, title: "M9 晚间安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "m9-session-am", taskId: "m9-morning", localDate: date, endLocalDate: date, startLocal: "09:00", endLocal: "10:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+        { id: "m9-session-pm", taskId: "m9-evening", localDate: date, endLocalDate: date, startLocal: "20:00", endLocal: "21:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+      ],
+    }));
+  }, anchor);
+  await page.reload();
+
+  const calendarViewport = page.getByRole("region", { name: "日历时间网格" });
+  await waitForScrollSettled(calendarViewport);
+  const factsBefore = await page.evaluate(() => localStorage.getItem("daymark.phase1.workspace"));
+
+  const centreMinute = (container: string, track: string) => page.evaluate(({ container: containerSelector, track: trackSelector }) => {
+    const scroller = document.querySelector<HTMLElement>(containerSelector);
+    const element = document.querySelector<HTMLElement>(trackSelector);
+    if (!scroller || !element) return Number.NaN;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const trackRect = element.getBoundingClientRect();
+    if (trackRect.height <= 0) return Number.NaN;
+    return (scrollerRect.top + scroller.clientHeight / 2 - trackRect.top) / trackRect.height * 1440;
+  }, { container, track });
+
+  const dayMinutes: number[] = [];
+  const weekMinutes: number[] = [];
+  for (let round = 0; round < 10; round += 1) {
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await waitForScrollSettled(page.getByRole("region", { name: "连续日时间轴" }));
+    dayMinutes.push(await centreMinute(".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${anchor}"] .day-track`));
+
+    await page.getByRole("button", { name: "周", exact: true }).click();
+    await waitForScrollSettled(calendarViewport);
+    weekMinutes.push(await centreMinute(".calendar-viewport", `.calendar-day[data-day-date="${anchor}"] .day-track`));
+  }
+
+  const toPixels = (minutes: number) => minutes / 60 * 48;
+  const spread = (values: number[]) => toPixels(Math.max(...values) - Math.min(...values));
+  // 固定窗口与布局下，14:00 应当始终落在视口中心，且 10 次往返不累计漂移。
+  for (const minute of [...dayMinutes, ...weekMinutes]) expect(Math.abs(toPixels(minute - 840))).toBeLessThanOrEqual(2);
+  expect(spread(dayMinutes)).toBeLessThanOrEqual(2);
+  expect(spread(weekMinutes)).toBeLessThanOrEqual(2);
+
+  // 切视图只改浏览位置，不改写任何排程事实。
+  expect(await page.evaluate(() => localStorage.getItem("daymark.phase1.workspace"))).toBe(factsBefore);
+
+  // 月视图不存时间轴坐标：离开再进入必须置顶。
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await calendarViewport.evaluate((element) => { element.scrollTop = 200; });
+  await page.getByRole("button", { name: "周", exact: true }).click();
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await expect.poll(() => calendarViewport.evaluate((element) => element.scrollTop)).toBe(0);
+});
+
 function localDate(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
