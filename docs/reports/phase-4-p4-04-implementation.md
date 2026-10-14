@@ -12,7 +12,9 @@
 3. 采样取视口中心对应的日期／分钟；中心命中折叠条时取该条时间区间中点，恢复不展开整段非默认时间；像素一律由 `src/lib/calendarTimeline.ts` 的分钟／像素映射产出。布局未测量时等轨道可测量再恢复。
 4. 程序性滚动不写偏好；用户滚动停止 300ms 后采样；切页时刷新最后一次内存值。
 
-明确未做（越界项）：不写 Tauri Store、不新增偏好字段、不新增迁移／Command／依赖；不改排程事实与拖拽／插入后移／撤销语义；不动 M10／M11；不重新引入全局 `overflow: clip`，未关闭浏览器滚动锚定。
+明确未做（越界项）：不写 Tauri Store、不新增偏好字段、不新增迁移／Command；不改排程事实与拖拽／插入后移／撤销语义；不动 M10／M11；不重新引入全局 `overflow: clip`，未关闭浏览器滚动锚定。
+
+唯一超出原工作包范围的改动是**原生层构建配置**：按用户明确要求处理本机 `cargo test` 无法编译的问题，在 `src-tauri/Cargo.toml` 的 `[build-dependencies]` 显式启用 `indexmap/std`（一行 + 注释）并加护栏测试；诊断与证据见 §6.4。前端依赖、SQLite、Tauri Command 均未动。
 
 ## 2. 交付清单
 
@@ -24,10 +26,13 @@
 | `src/App.tsx` | `CalendarPage` 接入 hook；删除自带的首次定位／缩放锚点两段 `useLayoutEffect`；`returnToNow`、`focusSessionId` 显露、拖拽边缘自动滚动改走仲裁入口；`ContinuousDayView` 的缓冲定位改为 `useLayoutEffect` 并上报程序化写入；折叠分段补 `data-collapsed`。 |
 | `src/App.test.tsx` | 新增 3 个用例（折叠标记、位置不落偏好、日↔周往返恢复）。 |
 | `e2e/phase1.spec.ts` | 新增 AC05 用例 1 个。 |
+| `src/lib/nativeBuildConfig.test.ts` | **新增**（环境修复的护栏）：钉住 `src-tauri/Cargo.toml` 的 `[build-dependencies] indexmap`（带 `std`）。 |
+| `src-tauri/Cargo.toml` | `[build-dependencies]` 新增 `indexmap = { version = "1.9", features = ["std"] }` + 解释性注释（原生层 E0107 的根因修复，见 §6.4）。 |
+| `src-tauri/Cargo.lock` | 随之 +1 行（`daymark` 的依赖表里加入 `indexmap 1.9.3`）。 |
 | `docs/reports/phase-4-p4-04-implementation.md` | 本报告。 |
 | `docs/PROJECT-GUIDE.md` | 按文档同步协议更新。 |
 
-无新增依赖、无 SQLite 变更（schema 仍为 v7）、无 Tauri Command。
+前端部分无新增依赖、无 SQLite 变更（schema 仍为 v7）、无 Tauri Command。`src-tauri/Cargo.toml` 的唯一改动是上面那一行**构建**依赖（它已经在依赖树里，只是显式启用 `std`），不进产物、不改运行时行为。
 
 ## 3. 契约
 
@@ -101,12 +106,13 @@ useCalendarViewport({ view, date, now, scale, slots, dates, rootRef }) => {
 
 | 层级 | 本次实测 | 本包增量 |
 | --- | --- | --- |
-| Vitest | **180 / 17 文件** | +17（14 新增文件 + 3 App 用例） |
-| Playwright | **30** | +1（AC05） |
-| Rust | **未能运行**（见 §6.4） | 0 |
+| Vitest | **181 / 18 文件** | +18（14 新增文件 + 3 App 用例 + 1 原生构建配置护栏） |
+| Playwright | **30**（官方命令，自带 Chromium） | +1（AC05） |
+| Rust | **38 passed / 0 failed** | 0（本包未改 Rust 代码） |
 | `tsc --noEmit` + Vite 生产构建 | 通过（`dist` JS 419.32 kB / CSS 74.63 kB） | — |
+| `npm run check`（四步串行） | **exit 0，四步全绿** | — |
 
-命令：`vitest run`、`node scripts/run-e2e.mjs --workers=1`（见 §6.3 的浏览器说明）、`tsc --noEmit && vite build`。
+命令：`npm run check`（= `build` → `test` → `test:e2e` → `test:native`）。
 
 ### 6.2 反向验证（去掉修复即失败）
 
@@ -132,17 +138,22 @@ useCalendarViewport({ view, date, now, scale, slots, dates, rootRef }) => {
 | 日 | 840 ×10 | **0 分钟（0px）** | **0px** |
 | 周 | 838.75 ×10 | 1.25 分钟（**1px**） | **0px** |
 
-阈值是「≤1 分钟或 2 CSS px，取较宽松者」，两项均在 2px 内且极差为 0（无累计漂移）。同一用例还断言 10 次切换后 `daymark.phase1.workspace` 序列化结果与切换前**逐字节相同**（切视图不改写任何排程事实），以及月视图离开再进入 `scrollTop === 0`（进入置顶）。
+阈值是「≤1 分钟或 2 CSS px，取较宽松者」，两项均在 2px 内且极差为 0（无累计漂移）。同一组数值在**系统 Chrome 与 Playwright 自带 Chromium 上完全一致**。同一用例还断言 10 次切换后 `daymark.phase1.workspace` 序列化结果与切换前**逐字节相同**（切视图不改写任何排程事实），以及月视图离开再进入 `scrollTop === 0`（进入置顶）。
 
 **AC06**：现有 E2E 全部保持通过 —— 指针锚点缩放（M3，含日／周两段）、连续日跨午夜三日缓冲、折叠条临时展开与成功投放、插入后移与整体撤销、真实指针拖拽、落点虚线框、待回顾气泡。新增组合用例（AC05）额外覆盖「反复切视图后缩放与拖拽仍然正确」。
 
 **AC07**：未回退。`CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET` 仍是唯一配置源，`src/lib/settings.test.ts` 的「预设必须落在合法区间内」回归保持通过；本包未触碰缩放规范化与滚轮钳制。
 
-### 6.4 环境限制与偏差（影响结论可信度）
+### 6.4 环境问题与处置（本轮已全部收口）
 
-1. **Playwright 自带 Chromium 未安装且下载被限速**：`ms-playwright` 缓存为空，`playwright install chromium` 实测约 50 KB/s（183.6 MiB 需约 1 小时），无法完成。本次 E2E 用**系统 Chrome**（`channel: "chrome"`）跑同一套用例：临时配置 `playwright.chrome.config.ts`（已删除，内容与 `playwright.config.ts` 相同，仅多一行 `channel: "chrome"`），命令为 `node scripts/run-e2e.mjs --config=playwright.chrome.config.ts --workers=1`。**请在装有 Playwright 自带浏览器的环境用 `npm run test:e2e` 复跑确认。**
-2. **Rust 原生测试在本机无法编译**：`cargo test --manifest-path src-tauri/Cargo.toml --all-targets` 在编译第三方 crate `schemars 0.8.22` 时失败（`indexmap 1.9.3` 的 `IndexMap<K, V, S>` 缺省类型参数问题，E0107），发生在 `daymark` 自身编译之前。本机 rustc/cargo 为 1.97.1，`Cargo.toml`／`Cargo.lock` 未被本包改动（`git status` 可证），因此判定为**环境／工具链问题**，与本次改动无关。`npm run check` 因此会在 `test:e2e` 与 `test:native` 两步失败；各步已分别执行并记录。
-3. `npm run check` 未整体跑通，原因是上述两项环境限制，不是断言失败。
+1. **Playwright 自带 Chromium 原先缺失，已装好**：`ms-playwright` 缓存为空；直连约 50 KB/s（183.6 MiB 需约 1 小时），开启代理后约 600 KB/s，3 分钟装完（chromium ＋ chromium-headless-shell ＋ winldd）。E2E 用官方命令 `node scripts/run-e2e.mjs --workers=1`（自带 Chromium）跑完，30 全通过；中途为定位回归曾用系统 Chrome（临时 `channel: "chrome"` 配置，已删除）交叉验证，两种浏览器数值一致。
+2. **原生层 `error[E0107]`：真实问题，已修**。`indexmap 1.9.3` 只出现在**构建依赖图**里（`tauri-build` → `tauri-utils` → `schemars 0.8.22`），而它的 `build.rs` 在 `CARGO_FEATURE_STD` 未设置时会用 autocfg **探测**目标是否带 `std`；探测失败时编译出的 `IndexMap<K, V, S>` 没有 `S` 的默认值，`schemars` 写的是 `indexmap::IndexMap<K, V>`，于是整个原生层以 `error[E0107]` 编译失败。
+   - **复现证据**：删掉 `target/debug/build/indexmap-*` 后干净重建仍失败（与缓存无关）；无沙箱、无 `RUSTFLAGS`、无 `.cargo/config` 下同样失败；失败那次的 `indexmap-*/output` 里确实没有 `rustc-cfg=has_std`（而构建脚本 `stderr` 里是 `warning: autocfg could not probe for 'std'`）。
+   - **处置**：`src-tauri/Cargo.toml` 的 `[build-dependencies]` 显式加 `indexmap = { version = "1.9", features = ["std"] }`（附解释性注释），让那个 `build.rs` 走 `autocfg::emit("has_std")` 分支、完全跳过探测；`Cargo.lock` 随之 +1 行。
+   - **护栏**：`src/lib/nativeBuildConfig.test.ts`。刻意放在**前端**测试里 —— 那一行被删掉时原生测试根本编译不出来，Rust 侧守不住。
+3. **rustc 1.97.1 的 ICE：环境问题，已清除**。现象是 `error: the compiler unexpectedly panicked`，位置 `rustc_metadata/rmeta/encoder.rs:2457 "no entry found for key"`，发生在编译 `daymark_lib`（`--crate-type staticlib cdylib rlib`）时。根因是**陈旧的增量编译缓存**（`src-tauri/target/debug/incremental` 约 604 MiB；同一次日志里还有 `error deleting lock file for incremental ... 拒绝访问 (os error 5)`）。`CARGO_INCREMENTAL=0` 与「删掉 incremental 目录」两种方式都能通过；与链接器无关（`scripts/with-msvc-env.sh` 不解决它），与沙箱无关（无沙箱下同样复现）。
+4. **`npm run test:native` 不需要套 MSVC 环境**：本机 PATH 里 `/usr/bin/link.exe`（Git Bash 的 GNU link）确实排在最前，但所有通过的运行都是**裸 `cargo test`**，说明 rustc 并未按名字命中它。因此**没有**修改 `package.json`；`scripts/with-msvc-env.sh` 保留给它真正需要的场景（如 `npm run tauri build`）。
+5. **一次偶发抖动（既有用例脆弱性，未在本包内改动）**：`npm run check` 曾有一次失败在 `App.test.tsx` 的 Bilibili 重试用例（`findByRole("alert")` 用默认 1s 超时，重负载下会超时）。随后连跑两次全量 Vitest（181/18 通过）与一次完整 `npm run check`（四步全绿）均未复现。
 
 ## 7. 未做与边界
 
@@ -161,6 +172,8 @@ useCalendarViewport({ view, date, now, scale, slots, dates, rootRef }) => {
 4. 未发现规格与领域事实冲突之处；未新建 ADR（本包不引入新的长期架构决策，只是把既有滚动逻辑收敛到一个接缝）。
 
 ## 9. 独立复核（2026-10-13，复核者：另一 agent 会话）
+
+> **2026-10-14 收尾说明**：§9.2／§9.3 的「订正」是针对本报告**旧版** §6.4 写的；§6.4 已按最终实测重写。§9.3 末尾「`npm run check` 无法整体跑通、`npm run tauri build` 同样会失败」**已不再成立**：根因已修复（`[build-dependencies] indexmap/std`，见 §6.4 第 2 条），另有一处独立的 rustc ICE 由陈旧的 `target/debug/incremental` 引起（§6.4 第 3 条）。2026-10-14 实测 `npm run check` **四步全绿**（Vitest 181/18、Playwright 30、Rust 38）。§9.4 记的偶发与 §6.4 第 5 条属同一类（并行满载下的等待超时），两例都已留作回归背景。
 
 对本报告的代码与结论逐项独立复核，结论：**P4-04 通过，可进入 P4-05**。差异与订正如下。
 

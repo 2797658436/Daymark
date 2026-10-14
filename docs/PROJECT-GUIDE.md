@@ -174,6 +174,7 @@ flowchart LR
 | [`src/components/ui/overlay-semantics.test.tsx`](../src/components/ui/overlay-semantics.test.tsx) | 三类浮层语义（动作气泡不锁背景）、inert 引用计数、Esc／Tab 顶层唯一性与焦点归还测试。 |
 | [`src/hooks/useEditorSession.test.tsx`](../src/hooks/useEditorSession.test.tsx) | 提交互斥、旧请求不串对象、失败保留草稿与活动会话注册表测试。 |
 | [`src/hooks/useCalendarViewport.test.tsx`](../src/hooks/useCalendarViewport.test.tsx) | 逻辑坐标采样与恢复的往返一致性、折叠条取中点、分隔条边缘钳制、跨周回退锚点、首次定位回退（现在／首个默认时段／09:00）、拖拽边缘滚动，以及仲裁行为：记忆恢复、等待可测量、用户滚动作废、拖拽延后、程序化写入不作废、尺寸未变不重排、generation 递增、月视图不存坐标。 |
+| [`src/lib/nativeBuildConfig.test.ts`](../src/lib/nativeBuildConfig.test.ts) | 原生构建配置护栏：`src-tauri/Cargo.toml` 必须保留 `[build-dependencies]` 的 `indexmap`（带 `std`）。刻意放在前端测试里 —— 那一行被删掉时原生测试根本编译不出来，Rust 侧守不住。 |
 | [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) | Tauri 组装、托盘与关闭行为、桌面通知及 30 分钟内的提醒目标恢复事件、`AppState`、Command、后台串行执行、写后备份及 SQLite／Store 协调恢复。 |
 | [`src-tauri/src/database.rs`](../src-tauri/src/database.rs) | SQLite v7 连接、迁移、工作区查询、任务／项目／里程碑／到期结果／排程／执行／进度／习惯／时间块／挽救事实事务写入和时间校验。 |
 | [`src/lib/scheduling.ts`](../src/lib/scheduling.ts) | 自动排程 Lite 的确定性候选排序、空档扣除、最小时长与固定习惯时间计算。 |
@@ -345,7 +346,7 @@ flowchart TD
 
 ## 11. 测试体系
 
-当前测试库存为 Vitest **180** 个（17 个文件）、Playwright **30** 个、Rust **38** 个（2026-09-20 GUI 修复轮的实测值；P4-04 未改动 Rust 代码，本机工具链无法编译 `schemars 0.8.22`，见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6.4）。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期；P4-03 补充了输入法组合期 Enter／Escape 契约、导入连点单次提交与失败保留草稿、以及取消后按模式保留导入草稿三组用例；P4-04 补充了 `useCalendarViewport` 的 14 条仲裁／采样用例、3 条 App 组件用例与 1 条 AC05 E2E（见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6）。
+当前测试库存为 Vitest **181** 个（18 个文件）、Playwright **30** 个、Rust **38** 个，`npm run check` 四步全绿。原生层的两处环境坑已收口并留了护栏：① `src-tauri/Cargo.toml` 的 `[build-dependencies]` 里那行 `indexmap = { version = "1.9", features = ["std"] }` **不是未使用的依赖**（`indexmap 1.9.3` 的 `build.rs` 用 autocfg 探测 `std`，探测失败会让 `schemars` 以 E0107 编译失败），由 `src/lib/nativeBuildConfig.test.ts` 守住；② `src-tauri/target/debug/incremental` 陈旧时会触发 rustc 1.97.1 的 `encoder.rs "no entry found for key"` ICE，删掉该目录（或 `CARGO_INCREMENTAL=0`）即可。完整诊断见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6.4。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期；P4-03 补充了输入法组合期 Enter／Escape 契约、导入连点单次提交与失败保留草稿、以及取消后按模式保留导入草稿三组用例；P4-04 补充了 `useCalendarViewport` 的 14 条仲裁／采样用例、3 条 App 组件用例、1 条原生构建配置护栏与 1 条 AC05 E2E（见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6）。
 
 已知测试侧历史问题（均已修复，留作回归背景）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例曾有 `108px` 滚动时序竞态；2026-09-20 定位为两个成因 —— 挂载后的自动定位覆盖先发生的滚动，以及 `onWheel` 被 React 注册为 passive 使 `preventDefault()` 无效、浏览器默认滚动抢在锚点测量之前。现分别以「自动定位在收到容器 scroll 时让位」和「原生非 passive wheel 监听」修复，M3 ×30、M4 ×15 全通过（详见 [`docs/reports/phase-4-p4-01-baseline.md`](reports/phase-4-p4-01-baseline.md) §3.5）。Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
 
@@ -385,6 +386,7 @@ npm run tauri build
 | 修改日历滚动／浏览位置 | `src/hooks/useCalendarViewport.ts` 的优先级表与 generation、`CalendarPage` 的接线、`ContinuousDayView` 的程序化定位上报、`calendarTimeline` 的分钟／像素映射（不得另写一套）、折叠分段的 `data-collapsed`，以及 P4-04 的仲裁用例与 AC05 E2E。改缩放范围时同时检查 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET` 与滚轮钳制。 |
 | 修改 Tauri Command | 把磁盘／SQLite 工作放入 `run_data_operation()`；不要阻塞事件线程，并判断是否需要与其他破坏性操作串行化。 |
 | 修改测试基础设施 | `package.json`、Vitest／Playwright 配置、`run-e2e.mjs`、README 命令和本文测试清单。 |
+| 修改原生构建配置 | `src-tauri/Cargo.toml`／`Cargo.lock`、`src/lib/nativeBuildConfig.test.ts` 护栏、本文 §11 的测试数量与环境说明。**不要删掉 `[build-dependencies]` 的 `indexmap`（带 `std`）** —— 删了原生层会以 E0107 编译失败，原因见 §11。`npm run test:native` 用裸 `cargo test` 即可，不需要套 `scripts/with-msvc-env.sh`。 |
 
 需要迁移测试：schema、字段语义、默认值、历史事实处理变化。需要恢复测试：备份格式、验证、临时文件、替换、Store 协调或回滚变化。需要 E2E：跨页面持久化、关键键盘路径、缩放／主题或用户可见错误变化。
 
