@@ -15,6 +15,15 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# 这一行不是「没人用的构建依赖」，不要当垃圾清理（`src/lib/nativeBuildConfig.test.ts` 盯着它）。
+#
+# `indexmap 1.9.3` 是 schemars 0.8 的构建期依赖（tauri-build → tauri-utils → schemars）。
+# 它自己的 build.rs 会在 `CARGO_FEATURE_STD` 未设置时用 autocfg **探测**目标是否带 std；
+# 探测一旦失败，编译出的 `IndexMap<K, V, S>` 就没有 `S` 的默认值，而 schemars 写的是
+# `indexmap::IndexMap<K, V>`，于是整个原生层以 `error[E0107]` 编译失败（rustc/cargo 1.97.1
+# 可稳定复现，删掉 target 缓存也一样）。显式启用 `std` 会让那个 build.rs 走
+# `autocfg::emit("has_std")` 分支、完全跳过探测。
+indexmap = { version = "1.9", features = ["std"] }
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

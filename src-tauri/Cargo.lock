@@ -695,6 +695,7 @@ name = "daymark"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "indexmap 1.9.3",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
