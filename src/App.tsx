@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 
 import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession, type EditorSessionApi } from "./hooks/useEditorSession";
-import { dragEdgeScrollTop, useCalendarViewport } from "./hooks/useCalendarViewport";
+import { dragEdgeScrollTop, seedCalendarPositions, useCalendarViewport, type CalendarPosition, type TimelineView } from "./hooks/useCalendarViewport";
 import { FloatingPanel } from "./components/ui/floating-panel";
 import { DragTimePreview } from "./components/ui/drag-time-preview";
 import { DRAG_TARGET_MIN_PX, snapDelta, snapMinutesFor, snapTo } from "./lib/timelineDrag";
@@ -88,6 +88,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     Promise.all([settingsRepository.load(), native.getWorkspace()])
       .then(([savedPreferences, data]) => {
         if (!alive) return;
+        // 把偏好里的日／周浏览位置播种进滚动仲裁入口的内存：内存是位置的单一真相，
+        // 偏好是它的持久化镜像。恢复备份会整页重载，走的也是同一条路径，因此内存
+        // 一定与恢复后的偏好一致，不会残留恢复前的位置。
+        seedCalendarPositions(savedPreferences.calendarPositions);
         setPreferences(savedPreferences); setPage(savedPreferences.lastPage); setWorkspace(data);
       })
       .catch((error) => alive && setLoadError(readError(error)))
@@ -132,6 +136,23 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const updatePreferences = useCallback((patch: Partial<AppSettings>) => {
     setPreferences((current) => { const next = { ...current, ...patch }; void persist(next); return next; });
     if (patch.lastPage) { setPage(patch.lastPage); setPoolOverlayOpen(false); }
+  }, [persist]);
+
+  /**
+   * 用户滚动停止 300ms 后的日／周浏览位置写入偏好。
+   *
+   * 位置只在用户滚动时到这里（程序性滚动由 `useCalendarViewport` 的闸门挡住），
+   * 写入沿用 `persist` 的同一条 `SettingsRepository.writeQueue`，不另建通道。
+   * 值与当前偏好完全相同时不触发重渲染，也不重复写盘。
+   */
+  const rememberCalendarPosition = useCallback((view: TimelineView, position: CalendarPosition) => {
+    setPreferences((current) => {
+      const existing = current.calendarPositions[view];
+      if (existing && existing.date === position.date && existing.minute === position.minute && existing.viewportRatio === position.viewportRatio) return current;
+      const next = { ...current, calendarPositions: { ...current.calendarPositions, [view]: position } };
+      void persist(next);
+      return next;
+    });
   }, [persist]);
 
   const openCalendarSession = useCallback((sessionId: string) => {
@@ -361,7 +382,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {undoStack.length > 0 && <button className="undo-toast" onClick={() => void undo()}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
         {page === "today" && <TodayPage workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} />}
-        {page === "calendar" && <CalendarPage workspace={workspace} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
+        {page === "calendar" && <CalendarPage workspace={workspace} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
         {page === "projects" && <ProjectsPage workspace={workspace} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
           onUpdateProject={async (project) => { await commit(() => native.updateProject(project)); }}
           onCreateMilestone={async (milestone) => { await commit(() => native.createProjectMilestone(milestone)); }}
@@ -563,8 +584,10 @@ function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sess
   </article>;
 }
 
-function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
+function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
   workspace: WorkspaceSnapshot; preferences: AppSettings; focusSessionId: string | null; onPreferences: (patch: Partial<AppSettings>) => void;
+  /** 用户滚动落定后的日／周浏览位置（只有用户滚动会到这里，见 `useCalendarViewport`）。 */
+  onCalendarPosition: (view: TimelineView, position: CalendarPosition) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
@@ -592,10 +615,12 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
   const zoom = preferences.calendarZoom[preferences.calendarView];
   const scale = preferences.calendarScale[preferences.calendarView];
   // 日／周共用的单一滚动仲裁入口：恢复记忆位置、首次定位、缩放锚点、三日缓冲与拖拽
-  // 优先级都在这里排队（规格 §5.2）。位置只存在内存里，持久化属 P4-05。
+  // 优先级都在这里排队（规格 §5.2）。位置以模块级内存为单一真相，用户滚动落定后
+  // 经 `onCalendarPosition` 写进偏好；跨启动由 App 播种回来（P4-05）。
   const viewport = useCalendarViewport({
     view: preferences.calendarView, date: anchor, now, scale,
     slots: preferences.defaultTimeSlots, dates, rootRef: calendarRef,
+    onPositionSettled: onCalendarPosition,
   });
   const setZoom = (value: AppSettings["calendarZoom"]["day"]) => onPreferences({
     calendarZoom: { ...preferences.calendarZoom, [preferences.calendarView]: value },

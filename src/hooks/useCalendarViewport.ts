@@ -3,33 +3,24 @@ import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 
 import {
   clockMinutes, defaultSlotSlicesForWeekday, segmentMinuteAtOffset, segmentOffsetAtMinute, type TimelineSegment,
 } from "../lib/calendarTimeline";
-import type { CalendarView, DefaultTimeSlot } from "../lib/settings";
+import type { CalendarPosition, CalendarPositions, CalendarView, DefaultTimeSlot } from "../lib/settings";
 
 /**
- * 日历滚动仲裁与逻辑浏览位置（阶段 4 / P4-04，对应规格 §5 M9）。
+ * 日历滚动仲裁与逻辑浏览位置（阶段 4 / P4-04 仲裁与内存记忆，P4-05 持久化）。
  *
  * 为什么不能跨视图复用 `scrollTop`：日视图有 52px 日期头、折叠区间与三日缓冲，
  * 周视图有吸顶日期头与全天区 —— 同样的像素在不同视图里不是同一个时间。
  * 因此这里保存的是逻辑坐标 `{date, minute, viewportRatio}`，恢复时再用
  * `lib/calendarTimeline` 的分钟／像素映射重新算像素。
  *
- * 本工作包只做**内存**版：位置存在模块级内存里（切页仍在，重启不恢复）。
- * 写入 Store、跨启动恢复与非法偏好回退属于 P4-05。
+ * 位置的**单一真相**是这里的模块级内存：切页仍在，程序化滚动（恢复、三日缓冲平移、
+ * 首次定位、缩放锚点补偿）也会刷新它 —— 它记录的就是视图实际所在的位置。
+ * 偏好里的 `calendarPositions` 是它的持久化镜像，只由**用户滚动**停止 300ms 后的
+ * 采样写入（`onPositionSettled`）；跨启动／恢复备份后由 `seedCalendarPositions()`
+ * 从偏好播种回来。这样既不出现「两套真相」，也不会把程序性滚动记成用户偏好。
  */
 
-export interface CalendarPosition {
-  /** 合法本地日期。 */
-  date: string;
-  /** 0 <= minute <= 1440。 */
-  minute: number;
-  /** 该时刻在可见高度中的比例，0..1。 */
-  viewportRatio: number;
-}
-
-export interface CalendarPositions {
-  day: CalendarPosition | null;
-  week: CalendarPosition | null;
-}
+export type { CalendarPosition, CalendarPositions } from "../lib/settings";
 
 /** 只有日／周有时间轴坐标；月视图沿用日期锚点并在进入时置顶。 */
 export type TimelineView = "day" | "week";
@@ -196,13 +187,26 @@ function clamp01(value: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 内存记忆：App 层（模块级）保存，切页仍在，重启不恢复
+// 内存记忆：App 层（模块级）保存，切页仍在；跨启动由偏好播种
 // ---------------------------------------------------------------------------
 
 const calendarPositions: CalendarPositions = { day: null, week: null };
 
 export function readCalendarPositions(): CalendarPositions {
   return { day: calendarPositions.day, week: calendarPositions.week };
+}
+
+/**
+ * 用偏好里的位置**覆盖**内存位置（设置加载后、协调恢复后）。
+ *
+ * 这是权威写入而不是「仅在为空时填充」：恢复备份会把偏好换成备份里的快照，
+ * 内存必须跟着换成同一份，否则会残留恢复前的位置，出现两套真相。
+ * 传入 `null`／`undefined`（旧设置或旧备份缺少该字段）时两项都回到 `null`，
+ * 之后由优先级 6 的首次定位重新落位 —— 不抛错，也不伪造一个位置。
+ */
+export function seedCalendarPositions(positions: CalendarPositions | null | undefined) {
+  calendarPositions.day = positions?.day ?? null;
+  calendarPositions.week = positions?.week ?? null;
 }
 
 /** 仅供测试：清空内存浏览位置，避免用例之间串味。 */
@@ -254,6 +258,14 @@ export interface UseCalendarViewportOptions {
   /** 当前周（周视图）的 7 个本地日期，用于判断「日期是否包含今天」。 */
   dates: string[];
   rootRef: RefObject<HTMLElement | null>;
+  /**
+   * 用户滚动停止 300ms 后的采样值（切页时若最后动作来自用户滚动，也会再推一次）。
+   *
+   * **只有用户滚动会调用它**：恢复记忆、三日缓冲平移、进入视图定位与缩放锚点补偿
+   * 都是程序性滚动，只刷新内存位置，不写偏好（规格 §5.2）。调用方负责把值交给
+   * `SettingsRepository` 的顺序写入队列，不要在这里直接碰存储。
+   */
+  onPositionSettled?: (view: TimelineView, position: CalendarPosition) => void;
 }
 
 export function useCalendarViewport(options: UseCalendarViewportOptions): CalendarViewportApi {
@@ -263,6 +275,7 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const nowRef = useRef(options.now); nowRef.current = options.now;
   const slotsRef = useRef(slots); slotsRef.current = slots;
   const datesRef = useRef(dates); datesRef.current = dates;
+  const onSettledRef = useRef(options.onPositionSettled); onSettledRef.current = options.onPositionSettled;
 
   const generationRef = useRef(0);
   /** 最近一次采样到的位置；切页／卸载时用它刷新内存。 */
@@ -275,6 +288,16 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const zoomAnchorRef = useRef<ZoomAnchorMeasurement | null>(null);
   /** 应用自己刚写过的程序化滚动位置：只有落在这个位置上的 scroll 事件才算「不是用户滚动」。 */
   const programmaticTopRef = useRef<number | null>(null);
+  /**
+   * 应用自己刚写下的程序化位置（恢复记忆、三日缓冲平移、进入视图定位、缩放锚点补偿）。
+   *
+   * 它是「不写偏好」闸门的判据：滚动停下来时如果视口仍停在**这个**位置上，说明这次
+   * 位置变化是应用自己造成的，只刷新内存、不写偏好。用户随后滚走（位置不再等于它）
+   * 就恢复正常写入，并在下一次落定时清掉这个标记。
+   */
+  const programmaticSettleTopRef = useRef<number | null>(null);
+  /** 该视图最近一次位置变化是否来自用户滚动；切页时的补写（`flush`）据此决定要不要写偏好。 */
+  const userScrollRef = useRef<Record<TimelineView, boolean>>({ day: false, week: false });
 
   const priorityOf = (reason: CalendarScrollReason) => CALENDAR_SCROLL_PRIORITY[reason];
 
@@ -305,6 +328,14 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     detachRef.current = null;
     pendingRef.current = null;
     if (frameRef.current !== null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; }
+  }, []);
+
+  /**
+   * 记下应用自己刚写下的滚动位置。它同时供两件事使用：`queue()` 用它区分
+   * 「用户滚动」与「自己刚写完的定位」，落定采样用它决定要不要写偏好。
+   */
+  const markProgrammaticSettle = useCallback((scroller: HTMLElement | null) => {
+    programmaticSettleTopRef.current = scroller ? scroller.scrollTop : null;
   }, []);
 
   const pump = useCallback(() => {
@@ -370,9 +401,10 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     const next = scrollTopForCalendarPosition({ position, viewportHeight: viewport.height, track });
     if (next === null) return true;
     scroller.scrollTop = next;
+    markProgrammaticSettle(scroller);
     if (options?.resetHorizontal) scroller.scrollLeft = 0;
     return true;
-  }, [rootRef, scrollerFor]);
+  }, [markProgrammaticSettle, rootRef, scrollerFor]);
 
   // 每次视图／日期变更递增 generation，并把离开前的最后一次内存值刷新下来。
   // 顺序很重要：它必须排在下面的恢复 effect 之前，先作废旧请求再排新请求。
@@ -424,10 +456,14 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     const pending = pendingRef.current;
     if (pending && priorityOf(pending.reason) > CALENDAR_SCROLL_PRIORITY.zoomAnchor) cancelPending();
     compensateZoomAnchor(anchor, rootRef.current);
-  }, [cancelPending, rootRef, scale]);
+    // 缩放补偿是程序性滚动：只把视图停在指针所指的时间上，不是用户在挑选位置。
+    markProgrammaticSettle(anchor.scroller);
+  }, [cancelPending, markProgrammaticSettle, rootRef, scale]);
 
-  // 用户滚动：采样当前位置。滚动停止 300ms 后写成「已停下」的内存值；
-  // 程序性滚动不写偏好（本工作包根本不写 Store），内存值只在下一次采样时刷新。
+  // 用户滚动：采样当前位置。滚动停止 300ms 后写成「已停下」的内存值，并且 ——
+  // 只有这一次位置变化确实来自用户 —— 才把同一个值交给偏好写入。
+  // 恢复记忆、三日缓冲平移、进入视图定位与缩放锚点补偿都会改变 `scrollTop`，
+  // 但它们落在 `markProgrammaticSettle` 记下的位置上，因此不写偏好（规格 §5.2）。
   useEffect(() => {
     if (view !== "day" && view !== "week") return;
     const scroller = scrollerFor(view);
@@ -440,7 +476,15 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
       settleRef.current = window.setTimeout(() => {
         settleRef.current = null;
         const settled = sampleNow(target, dateRef.current);
-        if (settled) { calendarPositions[target] = settled; latestRef.current = { view: target, position: settled }; }
+        if (settled) {
+          calendarPositions[target] = settled;
+          latestRef.current = { view: target, position: settled };
+          const programmatic = programmaticSettleTopRef.current !== null && Math.abs(scroller.scrollTop - programmaticSettleTopRef.current) < 1;
+          userScrollRef.current[target] = !programmatic;
+          if (!programmatic) onSettledRef.current?.(target, settled);
+        }
+        // 应用自己的定位已经落定，闸门就此关闭；用户随后的滚动照常写偏好。
+        programmaticSettleTopRef.current = null;
       }, CALENDAR_SAMPLE_SETTLE_MS);
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
@@ -503,7 +547,14 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     const current = viewRef.current;
     if (current !== "day" && current !== "week") return;
     const sampled = sampleNow(current, dateRef.current);
-    if (sampled) { calendarPositions[current] = sampled; latestRef.current = { view: current, position: sampled }; return; }
+    if (sampled) {
+      calendarPositions[current] = sampled;
+      latestRef.current = { view: current, position: sampled };
+      // 切页／卸载前补写：只有「最后一次位置变化来自用户滚动」才值得写偏好。
+      // 刚刚被恢复或首次定位过的视图不该因为一次切页就把程序性位置记成偏好。
+      if (userScrollRef.current[current]) onSettledRef.current?.(current, sampled);
+      return;
+    }
     commitLatest(current);
   }, [commitLatest, sampleNow]);
 
@@ -542,10 +593,12 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const noteProgrammaticPosition = useCallback(() => {
     const scroller = scrollerFor(viewRef.current as TimelineView);
     programmaticTopRef.current = scroller ? scroller.scrollTop : null;
+    // 同一次写入也是「不写偏好」的判据：三日缓冲平移不是用户在挑位置。
+    markProgrammaticSettle(scroller);
     // 浏览器的同一个渲染帧里先派发 scroll 事件、再跑 rAF 回调；两帧足以覆盖
     // 「写入发生在 rAF 回调内、事件被推迟到下一帧」的情况。
     requestAnimationFrame(() => requestAnimationFrame(() => { programmaticTopRef.current = null; }));
-  }, [scrollerFor]);
+  }, [markProgrammaticSettle, scrollerFor]);
 
   const readGeneration = useCallback(() => generationRef.current, []);
 

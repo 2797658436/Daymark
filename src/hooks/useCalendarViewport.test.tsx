@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CALENDAR_SAMPLE_SETTLE_MS, dragEdgeScrollTop, firstDefaultSlotMinute, initialCalendarMinute, pickTrackForPosition,
-  readCalendarPositions, resetCalendarPositions, sampleCalendarPosition, scrollTopForCalendarPosition,
-  useCalendarViewport, type CalendarPosition, type CalendarViewportApi, type TrackGeometry,
+  readCalendarPositions, resetCalendarPositions, sampleCalendarPosition, scrollTopForCalendarPosition, seedCalendarPositions,
+  useCalendarViewport, type CalendarPosition, type CalendarViewportApi, type TimelineView, type TrackGeometry,
 } from "./useCalendarViewport";
 import type { CalendarView, DefaultTimeSlot } from "../lib/settings";
 
@@ -137,12 +137,14 @@ interface HarnessProps {
   date?: string;
   now?: Date;
   dates?: string[];
+  scale?: number;
   onApi: (api: CalendarViewportApi) => void;
+  onSettled?: (view: TimelineView, position: CalendarPosition) => void;
 }
 
-function Harness({ view, date = "2026-08-05", now = new Date("2026-08-05T14:00:00"), dates = WEEK, onApi }: HarnessProps) {
+function Harness({ view, date = "2026-08-05", now = new Date("2026-08-05T14:00:00"), dates = WEEK, scale = 48, onApi, onSettled }: HarnessProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const api = useCalendarViewport({ view, date, now, scale: 48, slots: SLOTS, dates, rootRef });
+  const api = useCalendarViewport({ view, date, now, scale, slots: SLOTS, dates, rootRef, onPositionSettled: onSettled });
   useEffect(() => { onApi(api); });
   if (view === "day") {
     return <div ref={rootRef}><div className="continuous-day-axis">
@@ -289,6 +291,95 @@ describe("useCalendarViewport", () => {
     installLayout(scroller, []);
     act(() => { scroller.scrollTop = 120; scroller.dispatchEvent(new Event("scroll")); });
     await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(readCalendarPositions()).toEqual({ day: null, week: null });
+  });
+});
+
+describe("calendar viewport position persistence", () => {
+  beforeEach(() => { StubResizeObserver.instances = []; vi.stubGlobal("ResizeObserver", StubResizeObserver); });
+
+  it("writes a settled position into preferences only when the user scrolled", async () => {
+    const settled: Array<{ view: TimelineView; position: CalendarPosition }> = [];
+    render(<Harness view="week" onApi={() => undefined} onSettled={(view, position) => settled.push({ view, position })} />);
+    const scroller = document.querySelector<HTMLElement>(".calendar-viewport")!;
+    for (let index = 0; index < 8; index += 1) await nextFrame();
+    const layout = installLayout(scroller, weekSpecs(document));
+    // 进入视图的首次定位（优先级 6）是程序性滚动：它会写 scrollTop，也会产生 scroll 事件，
+    // 但那条路径只刷新内存位置，不得写偏好。
+    act(() => { fireResize(); });
+    await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(settled).toEqual([]);
+    expect(readCalendarPositions().week?.minute).toBeCloseTo(840, 3);
+
+    // 用户滚动落在别的位置上：闸门放行，同一个采样值写进偏好。
+    act(() => { scroller.scrollTop = 900; scroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(settled).toHaveLength(1);
+    expect(settled[0].view).toBe("week");
+    expect(settled[0].position.minute).toBeCloseTo((900 + 300 - 116) / 1152 * 1440, 3);
+    expect(readCalendarPositions().week?.minute).toBeCloseTo((900 + 300 - 116) / 1152 * 1440, 3);
+  });
+
+  it("does not write preferences when the three-day buffer shifts the axis", async () => {
+    const holder: { api: CalendarViewportApi | null } = { api: null };
+    const settled: CalendarPosition[] = [];
+    render(<Harness view="week" onApi={(value) => { holder.api = value; }} onSettled={(_view, position) => settled.push(position)} />);
+    const scroller = document.querySelector<HTMLElement>(".calendar-viewport")!;
+    for (let index = 0; index < 8; index += 1) await nextFrame();
+    installLayout(scroller, weekSpecs(document));
+    act(() => { fireResize(); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    settled.length = 0;
+
+    // 三日缓冲平移：应用自己写位置并上报，随后那次 scroll 不是用户滚动。
+    act(() => { scroller.scrollTop = 480; holder.api!.noteProgrammaticPosition(); scroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(settled).toEqual([]);
+    expect(readCalendarPositions().week?.minute).toBeCloseTo((480 + 300 - 116) / 1152 * 1440, 3);
+  });
+
+  it("does not write preferences when the zoom anchor compensation keeps the pointer's time in place", async () => {
+    const holder: { api: CalendarViewportApi | null } = { api: null };
+    const settled: CalendarPosition[] = [];
+    const onApi = (value: CalendarViewportApi) => { holder.api = value; };
+    const onSettled = (_view: TimelineView, position: CalendarPosition) => settled.push(position);
+    const view = render(<Harness view="week" scale={48} onApi={onApi} onSettled={onSettled} />);
+    const scroller = view.container.querySelector<HTMLElement>(".calendar-viewport")!;
+    for (let index = 0; index < 8; index += 1) await nextFrame();
+    const layout = installLayout(scroller, weekSpecs(view.container));
+    act(() => { fireResize(); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    settled.length = 0;
+
+    // 缩放锚点补偿（优先级 3）：比例变化时把指针下的时间拉回原处，是程序性滚动。
+    const before = layout.read();
+    act(() => {
+      holder.api!.captureZoomAnchor({
+        scroller, date: "2026-08-05", anchorRatio: 0.5, anchorMinute: null, clientY: 300, pointerOffset: 200, contentRatio: null,
+      });
+    });
+    view.rerender(<Harness view="week" scale={52} onApi={onApi} onSettled={onSettled} />);
+    expect(layout.read()).not.toBe(before);
+    act(() => { scroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(settled).toEqual([]);
+    expect(readCalendarPositions().week?.minute).toBeCloseTo((layout.read() + 300 - 116) / 1152 * 1440, 3);
+  });
+
+  it("seeds the in-memory position from preferences and replaces a stale one", () => {
+    const day = { date: "2026-08-05", minute: 600, viewportRatio: 0.5 };
+    const week = { date: "2026-08-06", minute: 300, viewportRatio: 0.25 };
+    seedCalendarPositions({ day, week });
+    expect(readCalendarPositions()).toEqual({ day, week });
+
+    // 协调恢复后必须换成恢复后的那一份，不能残留恢复前的位置。
+    seedCalendarPositions({ day: null, week });
+    expect(readCalendarPositions()).toEqual({ day: null, week });
+
+    // 旧设置／旧备份没有这个字段：回到默认值，不抛错，也不伪造一个位置。
+    seedCalendarPositions(undefined);
     expect(readCalendarPositions()).toEqual({ day: null, week: null });
   });
 });

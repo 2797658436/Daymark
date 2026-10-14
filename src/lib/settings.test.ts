@@ -71,11 +71,13 @@ describe("settings persistence", () => {
 
     const backend = new SlowFirstWriteBackend();
     const repository = new SettingsRepository(backend);
-    const first = repository.save({ ...DEFAULT_SETTINGS, appearance: "dark" });
-    const second = repository.save({ ...DEFAULT_SETTINGS, appearance: "light" });
+    const at = (minute: number) => ({ ...DEFAULT_SETTINGS, calendarPositions: { day: { date: "2026-08-05", minute, viewportRatio: 0.5 }, week: null } });
+    const first = repository.save({ ...at(600), appearance: "dark" });
+    const second = repository.save({ ...at(900), appearance: "light" });
     await Promise.all([first, second]);
 
-    expect(backend.value).toMatchObject({ appearance: "light" });
+    // 浏览位置与其它偏好走同一条顺序写入队列：慢的旧写入不能盖掉新的位置。
+    expect(backend.value).toMatchObject({ appearance: "light", calendarPositions: { day: { minute: 900 } } });
   });
 
   it("normalizes preferences returned from a coordinated native restore", () => {
@@ -206,5 +208,68 @@ describe("settings persistence", () => {
     expect(repository.normalize({ defaultTimeSlots: [{ id: "broken", label: "坏", start: "9:00", end: "09:00", weekdays: [] }] }).defaultTimeSlots)
       .toEqual(DEFAULT_SETTINGS.defaultTimeSlots);
     expect(repository.normalize({ defaultTimeSlots: [] }).defaultTimeSlots).toEqual([]);
+  });
+
+  it("accepts day and week browsing positions and falls back per view", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    const day = { date: "2026-08-05", minute: 720, viewportRatio: 0.5 };
+    const week = { date: "2026-08-10", minute: 1439.5, viewportRatio: 0 };
+
+    expect(repository.normalize(undefined).calendarPositions).toEqual({ day: null, week: null });
+    expect(repository.normalize({ calendarPositions: { day, week } }).calendarPositions).toEqual({ day, week });
+    // 未知字段忽略，其余字段照常保留。
+    expect(repository.normalize({ calendarPositions: { day: { ...day, extra: "ignored" }, week: null } }).calendarPositions)
+      .toEqual({ day, week: null });
+    // 一个视图坏了不影响另一个视图。
+    expect(repository.normalize({ calendarPositions: { day: { ...day, minute: 1441 }, week } }).calendarPositions)
+      .toEqual({ day: null, week });
+  });
+
+  it("rejects browsing positions whose fields are not real dates, minutes or ratios", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    const positions = (day: unknown) => repository.normalize({ calendarPositions: { day } }).calendarPositions.day;
+    const valid = { date: "2026-08-05", minute: 720, viewportRatio: 0.5 };
+
+    // 日期必须真实存在：只过正则不过日历的值（2 月 30 日、13 月、不补零）一律回退。
+    for (const date of ["2026-02-30", "2026-13-01", "2026-8-5", "2026-08-32", "", "today", 20260805]) {
+      expect(positions({ ...valid, date }), `日期 ${String(date)} 必须被拒绝`).toBeNull();
+    }
+    // 分钟必须 finite 且落在 0–1440（含端点），越界与 NaN／Infinity 都回退。
+    for (const minute of [-1, 1440.5, Number.NaN, Number.POSITIVE_INFINITY, "720", null]) {
+      expect(positions({ ...valid, minute }), `分钟 ${String(minute)} 必须被拒绝`).toBeNull();
+    }
+    // 比例必须 finite 且落在 0–1。
+    for (const viewportRatio of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY, "0.5", null]) {
+      expect(positions({ ...valid, viewportRatio }), `比例 ${String(viewportRatio)} 必须被拒绝`).toBeNull();
+    }
+    // 缺字段、整项不是对象时同样回退，不抛错。
+    for (const broken of [undefined, null, 42, "day", [], {}, { date: "2026-08-05" }]) {
+      expect(positions(broken), `${JSON.stringify(broken)} 必须回退为 null`).toBeNull();
+    }
+    // 端点值合法。
+    expect(positions({ date: "2026-08-05", minute: 0, viewportRatio: 0 })).toEqual({ date: "2026-08-05", minute: 0, viewportRatio: 0 });
+    expect(positions({ date: "2026-08-05", minute: 1440, viewportRatio: 1 })).toEqual({ date: "2026-08-05", minute: 1440, viewportRatio: 1 });
+  });
+
+  it("keeps the browsing positions identical through save and reload", async () => {
+    const backend = new MemoryBackend();
+    const day = { date: "2026-08-05", minute: 838.75, viewportRatio: 0.5 };
+    const week = { date: "2026-08-10", minute: 1140, viewportRatio: 0.25 };
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, calendarPositions: { day, week } });
+
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ calendarPositions: { day, week } });
+    // 非法值经一次保存也不得被写回成越界值。
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, calendarPositions: { day: { ...day, minute: 9000 }, week } });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ calendarPositions: { day: null, week } });
+  });
+
+  it("keeps the review period and anchor as normalized placeholders for the phase 4 review page", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    expect(repository.normalize(undefined)).toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
+    expect(repository.normalize({ reviewPeriod: "month", reviewAnchorDate: "2026-08-05" }))
+      .toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-08-05" });
+    // 未知周期与非法日期回退默认值；旧设置没有这两个字段时同样安全。
+    expect(repository.normalize({ reviewPeriod: "quarter", reviewAnchorDate: "2026-02-30" }))
+      .toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
   });
 });

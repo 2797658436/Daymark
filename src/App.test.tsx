@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { readCalendarPositions, resetCalendarPositions } from "./hooks/useCalendarViewport";
 import { EMPTY_WORKSPACE, type BackupInfo, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
-import { DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./lib/settings";
+import { DEFAULT_SETTINGS, SettingsRepository, type AppSettings, type SettingsBackend } from "./lib/settings";
 
 beforeEach(() => { Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 }); });
 
@@ -1663,6 +1663,17 @@ class ImmediateResizeObserver {
   disconnect() { /* no-op */ }
 }
 
+/** 由测试显式触发的 ResizeObserver：让「等可测量布局」这条路径可控。 */
+class TriggerableResizeObserver {
+  static instances: TriggerableResizeObserver[] = [];
+  constructor(private readonly callback: () => void) { TriggerableResizeObserver.instances.push(this); }
+  observe() { /* 由测试触发 */ }
+  disconnect() { TriggerableResizeObserver.instances = TriggerableResizeObserver.instances.filter((item) => item !== this); }
+  trigger() { this.callback(); }
+}
+
+function fireResize() { for (const instance of [...TriggerableResizeObserver.instances]) instance.trigger(); }
+
 describe("phase 4 P4-04 calendar viewport arbitration", () => {
   beforeEach(() => { resetCalendarPositions(); });
 
@@ -1688,17 +1699,97 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
     }
   });
 
-  it("keeps the browsing position in memory only and never writes it into preferences", async () => {
-    const user = userEvent.setup();
-    const backend = new MemorySettingsBackend();
-    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" } };
-    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
-    await screen.findByRole("button", { name: "日" });
-    await user.click(screen.getByRole("button", { name: "周" }));
-    await user.click(screen.getByRole("button", { name: "日" }));
-    const stored = backend.value as Record<string, unknown>;
-    expect(stored).not.toHaveProperty("calendarPositions");
-    expect(JSON.stringify(stored)).not.toContain("viewportRatio");
+  it("keeps the app's own programmatic positioning out of preferences", async () => {
+    TriggerableResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", TriggerableResizeObserver);
+    try {
+      const backend = new MemorySettingsBackend();
+      backend.value = {
+        ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day",
+        calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+      };
+      render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
+      const layout = stubDayAxisLayout(axis);
+      // 进入日视图的首次定位（非今天 → 该日首个默认时段 19:00）是一次程序性滚动。
+      act(() => { fireResize(); });
+      await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
+      act(() => { axis.dispatchEvent(new Event("scroll")); });
+      await new Promise((resolve) => setTimeout(resolve, 360));
+
+      // 内存位置会被程序性滚动刷新（它记录的就是视图实际所在的位置）……
+      expect(readCalendarPositions().day?.date).toBe("2026-08-05");
+      expect(readCalendarPositions().day?.minute).toBeCloseTo(1140, 3);
+      // ……但偏好里不出现任何浏览位置。
+      expect((backend.value as AppSettings).calendarPositions).toEqual({ day: null, week: null });
+    } finally {
+      vi.unstubAllGlobals();
+      TriggerableResizeObserver.instances = [];
+      resetCalendarPositions();
+    }
+  });
+
+  it("writes a user-scrolled browsing position into preferences and restores it on the next launch", async () => {
+    vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
+    try {
+      const backend = new MemorySettingsBackend();
+      backend.value = {
+        ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day",
+        calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+      };
+      const first = render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
+      stubDayAxisLayout(axis);
+      act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
+      await new Promise((resolve) => setTimeout(resolve, 360));
+
+      // 用户滚动停止 300ms 后的采样值经同一条顺序写入落到偏好里。
+      expect((backend.value as AppSettings).calendarPositions.day).toEqual({ date: "2026-08-05", minute: 720, viewportRatio: 0.5 });
+
+      // 模拟退出重开：内存清空，只有偏好留下。
+      first.unmount();
+      resetCalendarPositions();
+      render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      const restored = stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
+      await waitFor(() => expect(restored.read()).toBeCloseTo(1516, 0));
+    } finally {
+      vi.unstubAllGlobals();
+      resetCalendarPositions();
+    }
+  });
+
+  it("aligns the in-memory browsing position with a coordinated restore instead of the pre-restore value", async () => {
+    try {
+      const backend = new MemorySettingsBackend();
+      backend.value = {
+        ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day",
+        calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+      };
+      const first = render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
+      const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
+      act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
+      await new Promise((resolve) => setTimeout(resolve, 360));
+      expect(readCalendarPositions().day?.minute).toBe(720);
+      first.unmount();
+
+      // 协调恢复把 Tauri Store 里的偏好换成备份快照；不 reload 也要让内存跟着换，
+      // 不能残留恢复前的位置（App 载入时用偏好播种内存）。
+      backend.value = {
+        ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day",
+        calendarAnchors: { day: "2026-08-06", week: "2026-08-06", month: "2026-08-06" },
+        calendarPositions: { day: { date: "2026-08-06", minute: 300, viewportRatio: 0.25 }, week: null },
+      };
+      render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+      await screen.findByRole("button", { name: "日" });
+      await waitFor(() => expect(readCalendarPositions().day).toEqual({ date: "2026-08-06", minute: 300, viewportRatio: 0.25 }));
+    } finally {
+      resetCalendarPositions();
+    }
   });
 
   it("restores the day browsing position after a round trip through the week view", async () => {

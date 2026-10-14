@@ -10,7 +10,28 @@ export type CalendarZoomByView = Record<CalendarView, CalendarZoom>;
 export type CalendarScaleByView = Record<CalendarView, number>;
 export type CalendarDayMode = "defaultSlots" | "fullDay";
 export type StartupSummaryMode = "everyLaunch" | "daily" | "never";
+export type ReviewPeriod = "day" | "week" | "month";
 export interface DefaultTimeSlot { id: string; label: string; start: string; end: string; weekdays: number[] }
+
+/**
+ * 日／周时间轴的**逻辑**浏览位置（阶段 4 §5.1）。
+ *
+ * 不能存 `scrollTop`：日视图有日期头、折叠区间与三日缓冲，周视图有吸顶日期头与
+ * 全天区，同样的像素在不同视图里不是同一个时间。恢复时由 `calendarTimeline` 的
+ * 分钟／像素映射重算像素。
+ *
+ * 类型定义在设置层，因为它是 `AppSettings` 的字段、并和规范化同源；滚动仲裁入口
+ * （`src/hooks/useCalendarViewport.ts`）从这里取用并再导出，避免两处各写一份。
+ */
+export interface CalendarPosition {
+  /** 合法本地日期；`2026-02-30` 这类只过格式不过日历的值不合法。 */
+  date: string;
+  /** 0 <= minute <= 1440。 */
+  minute: number;
+  /** 该时刻在可见高度中的比例，0..1。 */
+  viewportRatio: number;
+}
+export interface CalendarPositions { day: CalendarPosition | null; week: CalendarPosition | null }
 
 export interface AppSettings {
   appearance: AppearanceMode;
@@ -21,6 +42,8 @@ export interface AppSettings {
   calendarAnchors: CalendarAnchors;
   calendarZoom: CalendarZoomByView;
   calendarScale: CalendarScaleByView;
+  /** 日／周各自的浏览位置；月视图不存时间轴坐标。 */
+  calendarPositions: CalendarPositions;
   calendarDayMode: CalendarDayMode;
   showActualRecords: boolean;
   showActualRecordsControl: boolean;
@@ -36,6 +59,12 @@ export interface AppSettings {
   reminderLeadMinutes: number;
   startupSummary: StartupSummaryMode;
   lastStartupSummaryLocalDate: string | null;
+  /**
+   * 回顾周期与锚点。字段与规范化在 P4-05 就位，消费者是 P4-08 的日／周／月回顾页
+   * ——当前“7 天回顾”页面仍按最近七日固定计算，不读取这两项。
+   */
+  reviewPeriod: ReviewPeriod;
+  reviewAnchorDate: string | null;
   defaultTimeSlots: DefaultTimeSlot[];
 }
 
@@ -48,6 +77,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   calendarAnchors: { day: null, week: null, month: null },
   calendarZoom: { day: "standard", week: "standard", month: "standard" },
   calendarScale: { day: 72, week: 72, month: 120 },
+  calendarPositions: { day: null, week: null },
   calendarDayMode: "fullDay",
   showActualRecords: false,
   showActualRecordsControl: true,
@@ -63,6 +93,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reminderLeadMinutes: 10,
   startupSummary: "never",
   lastStartupSummaryLocalDate: null,
+  reviewPeriod: "week",
+  reviewAnchorDate: null,
   defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
 };
 
@@ -145,6 +177,7 @@ function normalizeSettings(value: unknown): AppSettings {
     calendarAnchors: normalizeCalendarAnchors(candidate.calendarAnchors),
     calendarZoom,
     calendarScale: normalizeCalendarScale(candidate.calendarScale, calendarZoom),
+    calendarPositions: normalizeCalendarPositions(candidate.calendarPositions),
     calendarDayMode: isOneOf(candidate.calendarDayMode, ["defaultSlots", "fullDay"] as const) ? candidate.calendarDayMode : DEFAULT_SETTINGS.calendarDayMode,
     showActualRecords: typeof candidate.showActualRecords === "boolean" ? candidate.showActualRecords : DEFAULT_SETTINGS.showActualRecords,
     showActualRecordsControl: typeof candidate.showActualRecordsControl === "boolean" ? candidate.showActualRecordsControl : DEFAULT_SETTINGS.showActualRecordsControl,
@@ -160,8 +193,34 @@ function normalizeSettings(value: unknown): AppSettings {
     reminderLeadMinutes: typeof candidate.reminderLeadMinutes === "number" && candidate.reminderLeadMinutes >= 0 && candidate.reminderLeadMinutes <= 120 ? candidate.reminderLeadMinutes : DEFAULT_SETTINGS.reminderLeadMinutes,
     startupSummary: isOneOf(candidate.startupSummary, ["everyLaunch", "daily", "never"]) ? candidate.startupSummary : DEFAULT_SETTINGS.startupSummary,
     lastStartupSummaryLocalDate: typeof candidate.lastStartupSummaryLocalDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(candidate.lastStartupSummaryLocalDate) ? candidate.lastStartupSummaryLocalDate : null,
+    reviewPeriod: isOneOf(candidate.reviewPeriod, ["day", "week", "month"] as const) ? candidate.reviewPeriod : DEFAULT_SETTINGS.reviewPeriod,
+    reviewAnchorDate: isLocalDate(candidate.reviewAnchorDate) ? candidate.reviewAnchorDate : null,
     defaultTimeSlots: normalizeTimeSlots(candidate.defaultTimeSlots),
   };
+}
+
+/**
+ * 日／周浏览位置的规范化（规格 §5.1／§9）。
+ *
+ * 三个字段必须同时合法：日期是**真实有效**的本地日期（`2026-02-30` 只过格式不过
+ * 日历），`minute` 是 0–1440 的有限数，`viewportRatio` 是 0–1 的有限数。任一项
+ * 不合法就整项回退 `null`（该项没有可用的浏览位置），未知字段忽略 —— 不猜、不
+ * 伪造一个位置，也不因为一个视图坏了就丢掉另一个视图。
+ */
+function normalizeCalendarPositions(value: unknown): CalendarPositions {
+  const candidate = value && typeof value === "object" ? value as Partial<CalendarPositions> : {};
+  return { day: normalizeCalendarPosition(candidate.day), week: normalizeCalendarPosition(candidate.week) };
+}
+
+function normalizeCalendarPosition(value: unknown): CalendarPosition | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<CalendarPosition>;
+  if (!isLocalDate(candidate.date)) return null;
+  const minute = candidate.minute;
+  if (typeof minute !== "number" || !Number.isFinite(minute) || minute < 0 || minute > 1440) return null;
+  const viewportRatio = candidate.viewportRatio;
+  if (typeof viewportRatio !== "number" || !Number.isFinite(viewportRatio) || viewportRatio < 0 || viewportRatio > 1) return null;
+  return { date: candidate.date, minute, viewportRatio };
 }
 
 function normalizeCalendarAnchors(value: unknown): CalendarAnchors {

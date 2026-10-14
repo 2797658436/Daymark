@@ -648,6 +648,87 @@ test("phase 4 M9 keeps the logical browsing position across day and week switche
   await expect.poll(() => calendarViewport.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+/**
+ * 阶段 4 P4-05 / AC05：日与周各自的浏览位置**跨启动**恢复（P4-04 只交付了内存态），
+ * 月视图不存时间轴坐标、重开后仍进入置顶。
+ *
+ * 阈值沿用规格 §5.3：恢复逻辑时间误差 ≤1 分钟或 2 CSS px，取较宽松的可测量者 ——
+ * 这里在 48px/小时下换算成像素断言。
+ */
+test("phase 4 M9 restores each timeline view's browsing position after a restart", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date("2026-08-05T14:00:00"));
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "detailed" },
+      calendarScale: { day: 48, week: 48, month: 104 },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [
+        { id: "m9-morning", projectId: null, title: "M9 上午安排", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "m9-evening", projectId: null, title: "M9 晚间安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "m9-session-am", taskId: "m9-morning", localDate: date, endLocalDate: date, startLocal: "09:00", endLocal: "10:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+        { id: "m9-session-pm", taskId: "m9-evening", localDate: date, endLocalDate: date, startLocal: "20:00", endLocal: "21:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+      ],
+    }));
+  }, anchor);
+  await page.reload();
+
+  const centreMinute = (container: string, track: string) => page.evaluate(({ container: containerSelector, track: trackSelector }) => {
+    const scroller = document.querySelector<HTMLElement>(containerSelector);
+    const element = document.querySelector<HTMLElement>(trackSelector);
+    if (!scroller || !element) return Number.NaN;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const trackRect = element.getBoundingClientRect();
+    if (trackRect.height <= 0) return Number.NaN;
+    return (scrollerRect.top + scroller.clientHeight / 2 - trackRect.top) / trackRect.height * 1440;
+  }, { container, track });
+  /** 偏好里已经落定的浏览位置；写入是异步的（滚动停止 300ms 后），所以要轮询。 */
+  const storedMinute = (view: "day" | "week") => page.evaluate((target) => {
+    const raw = localStorage.getItem("daymark.phase0.preferences");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { calendarPositions?: Record<string, { minute: number } | null> };
+    return parsed.calendarPositions?.[target]?.minute ?? null;
+  }, view);
+  const toPixels = (minutes: number) => minutes / 60 * 48;
+
+  // 日视图：用户滚动 → 落定写入偏好 → 重开回到同一位置。
+  const dayAxis = page.getByRole("region", { name: "连续日时间轴" });
+  await waitForScrollSettled(dayAxis);
+  await dayAxis.evaluate((element) => { element.scrollTop += 240; });
+  await expect.poll(() => storedMinute("day")).not.toBeNull();
+  const dayBefore = await centreMinute(".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${anchor}"] .day-track`);
+
+  await page.reload();
+  await waitForScrollSettled(page.getByRole("region", { name: "连续日时间轴" }));
+  const dayAfter = await centreMinute(".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${anchor}"] .day-track`);
+  expect(Math.abs(toPixels(dayAfter - dayBefore))).toBeLessThanOrEqual(2);
+
+  // 周视图：各自记各自的，重开同样回到各自位置。
+  await page.getByRole("button", { name: "周", exact: true }).click();
+  const calendarViewport = page.getByRole("region", { name: "日历时间网格" });
+  await waitForScrollSettled(calendarViewport);
+  await calendarViewport.evaluate((element) => { element.scrollTop += 240; });
+  await expect.poll(() => storedMinute("week")).not.toBeNull();
+  const weekBefore = await centreMinute(".calendar-viewport", `.calendar-day[data-day-date="${anchor}"] .day-track`);
+
+  await page.reload();
+  await waitForScrollSettled(page.getByRole("region", { name: "日历时间网格" }));
+  const weekAfter = await centreMinute(".calendar-viewport", `.calendar-day[data-day-date="${anchor}"] .day-track`);
+  expect(Math.abs(toPixels(weekAfter - weekBefore))).toBeLessThanOrEqual(2);
+
+  // 月视图不存时间轴坐标：重开后仍然置顶。
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await calendarViewport.evaluate((element) => { element.scrollTop = 200; });
+  await page.reload();
+  await expect.poll(() => page.getByRole("region", { name: "日历时间网格" }).evaluate((element) => element.scrollTop)).toBe(0);
+});
+
 function localDate(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
