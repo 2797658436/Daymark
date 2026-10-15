@@ -47,6 +47,7 @@ Daymark 当前可交付能力已完成 **阶段 3 M1–M7：完整日历体验�
 - 阶段 4 P4-04：日／周共用一个滚动仲裁入口（`src/hooks/useCalendarViewport.ts`），按「拖拽 → 明确显露 → 缩放锚点 → 三日缓冲平移 → 进入视图恢复 → 首次定位」的优先级只让一个请求落地；视图／日期变更递增 generation，过期的 animation frame 与 ResizeObserver 回调一律 no-op。浏览位置以逻辑坐标 `{date, minute, viewportRatio}` 保存，像素一律由 `calendarTimeline` 的分钟／像素映射重算；采样取视口中心，中心命中折叠条时取该条时间区间中点，恢复不展开折叠。参见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md)。
 - 阶段 4 P4-05：日／周浏览位置落进 `calendarPositions` 偏好（默认两项皆 `null`），用户滚动停止 300ms 后的采样值经既有顺序写入队列持久化，跨启动由偏好播种回内存；程序性滚动（恢复记忆、三日缓冲平移、进入视图定位、缩放锚点补偿）只刷新内存、不写偏好；非法值按项回退 `null`，旧设置／旧备份缺字段用默认值，恢复备份后内存与恢复后的偏好对齐。同时按规格 §9 补了 `reviewPeriod`／`reviewAnchorDate` 的默认值与规范化（无 UI，消费者是 P4-08）；未加 `PageId = "deadlines"`（属 P4-06）。参见 [`docs/reports/phase-4-p4-05-implementation.md`](reports/phase-4-p4-05-implementation.md)。
 - 阶段 4 P4-06：新增「截止事项」页（M10），把任务截止、项目截止与里程碑集中成一份只读投影（`src/lib/deadlines.ts` 的 `buildDeadlineItems`）＋ 类型／项目／状态／关键字筛选 ＋ 已逾期／今天／未来七天／以后四个本地日期分组；不建截止事项表、不加 SQLite 字段。任务行复用既有编辑气泡与预选任务的排程入口，项目与里程碑只做定位（冻结目标另有「续排」），安排一律先出草案再确认。筛选／焦点项／滚动位置只放 App 层内存（同会话跨页返回有效、重启不恢复、不写 Store）。共享稳定索引与「待回顾」等事实选择器收进 `src/lib/workspaceSelectors.ts`（`isPendingReview`、项目加权进度、里程碑达成规则），供月历摘要、今日页与 P4-07 的回顾引擎共用；`PageId` 的合法值收敛为 `settings.ts` 的 `PAGE_IDS` 单一出处。参见 [`docs/reports/phase-4-p4-06-implementation.md`](reports/phase-4-p4-06-implementation.md)。
+- 阶段 4 P4-07：`src/lib/review.ts` 重写为**周期统计引擎**（M11 的纯函数层）—— `ReviewPeriod`／`ReviewQuery`／`buildReview(workspace, query, now)` 与 `buildReviewFromIndex`，日＝本地自然日、周＝周一至周日、月＝自然月（不是最近 30 天），`now` 显式注入、引擎内不读系统时钟，`projectId` 过滤。九项口径逐行落地：净进度变化（逐条 `toProgress - fromProgress`，含下调，单位百分点、可负、不是完成率）、曾完成任务数（`toProgress = 100` 按 taskId 去重，与当前完成度分开）、有进度变化任务数、已记录实际投入（已结束记录与各日本地窗口按 UTC 毫秒求交、跨日拆分、毫秒精度保留到汇总结束、并行记录标注「执行记录累计」）、进行中的执行（无 `actualEndUtc` 单独列出）、待回顾（复用 `workspaceSelectors` 的唯一判断，不写 `missed`）、明确未推进／跳过／取消安排（读显式状态，关联发生项与 session 去重）、待续（当前 active 且周期内有未完成推进或未推进类事实，只给 ID 不复制任务）。`buildSevenDayReview` 保留为兼容入口并改为同一引擎之上的薄适配。参见 [`docs/reports/phase-4-p4-07-implementation.md`](reports/phase-4-p4-07-implementation.md)。
 
 当前已知边界：
 
@@ -54,7 +55,8 @@ Daymark 当前可交付能力已完成 **阶段 3 M1–M7：完整日历体验�
 - 提醒由运行中的前端每 30 秒检查今日计划并调用桌面通知；应用必须仍在托盘进程中。Windows 通知插件本身没有任务级点击回调；原生 `AppState` 会暂存最近成功提醒的时段及发送时刻，30 分钟内首次托盘恢复直接进入对应日历日期、临时显露并高亮该时段，随后消费该目标。其他原生入口可发送 `daymark-open-session` 事件复用同一路由；目标不存在时回退今日页。
 - 连续日视图当前使用三日缓冲和边界平移，不做无限日期 DOM；日／周时间轴的连续比例限制在每小时 28–192px，月视图使用紧凑／标准／详细三档行高（52–160px）。缩放合法区间与档位预设同源于 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET`（`settings.ts`），滚轮钳制也读同一处，不再各自写字面量。
 - 日／周各自的浏览位置以逻辑坐标 `{date, minute, viewportRatio}` 保存：切页仍在，并随偏好跨启动恢复（阶段 4 P4-05 起 `calendarPositions` 只由用户滚动写入；恢复记忆、三日缓冲平移、进入视图定位与缩放锚点补偿这些程序性滚动不写偏好）。旧设置／旧备份缺少该字段时回退 `null`，由首次定位重新落位。月视图不存时间轴坐标，沿用日期锚点并在进入时置顶；窗口尺寸变化以时间保持为准，但日视图「全天／默认时段」切换只改内容高度、不改视口尺寸，因此不重新落位。
-- 阶段 3 M1–M6 已完成，M7 四段（M7.1 核心数据 / M7.2 项目编辑 / M7.3 日历标记 / M7.4 历史与风险）亦已全部完成。M7 以项目截止日期、项目里程碑与到期结果快照为第一等核心事实（schema v6→v7）；日历复用 M6 标记接缝呈现项目截止旗帜与里程碑菱形。Windows 通知插件仍不提供任务级点击回调，M4 通过提醒后的托盘恢复、应用内今日页入口和 `daymark-open-session` 事件完成目标路由。阶段 4 P4-06 起独立截止事项页（M10）已交付；完整日／周／月回顾、复杂重复规则、AI 规划和高级布局自定义仍属后续阶段。
+- 阶段 3 M1–M6 已完成，M7 四段（M7.1 核心数据 / M7.2 项目编辑 / M7.3 日历标记 / M7.4 历史与风险）亦已全部完成。M7 以项目截止日期、项目里程碑与到期结果快照为第一等核心事实（schema v6→v7）；日历复用 M6 标记接缝呈现项目截止旗帜与里程碑菱形。Windows 通知插件仍不提供任务级点击回调，M4 通过提醒后的托盘恢复、应用内今日页入口和 `daymark-open-session` 事件完成目标路由。阶段 4 P4-06 起独立截止事项页（M10）已交付，P4-07 起日／周／月回顾的**统计引擎**（M11 的纯函数层）已交付；周期选择器、图表、下钻与 `reviewPeriod`／`reviewAnchorDate` 的界面接线属 P4-08，复杂重复规则、AI 规划和高级布局自定义仍属后续阶段。
+- 回顾引擎只产出数据，没有页面：`buildReview` 能接受任意 `period` + `anchorDate`，但当前没有任何 UI 读设置里的 `reviewPeriod`／`reviewAnchorDate`，「7 天回顾」页仍按最近七日固定计算（经 `buildSevenDayReview` 兼容入口走同一引擎）。进度事件按查看设备的本地时区分桶，引擎在 `notes` 里写明当前时区；当前模型没有每次进度事件的本地时区快照，因此不承诺跨设备查看时日分桶完全不变。
 - 截止事项页只显示纵向列表，不常驻任务池；关键字只匹配标题；项目的截止项在同一日期内按标题排序（`Project` 没有 `sortOrder` 字段）。月历标记与月摘要的「7 天内截止」紧迫度仍由 `calendarSummary.deadlineUrgency` 用固定 24 小时差判断（既有 M6 行为，只影响文案；截止页自己的分组用本地日历运算），两者的口径统一属 P4-09 的收口项。
 - 阶段 3 已完成正式验收，详见 [`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)：规格 0003 的 M1–M6 与规格 0004 的 M7.1–M7.4 全部验收标准满足，Vitest 123 / Rust 36 / Playwright 16 全通过。
 - 自动排程的"单次投入时长"是优先尝试的目标长度而非不可拆分的硬约束；所有任务都可被部分安排，部分安排只生成一个执行时段、不自动补排剩余时长（2026-08-10 对规格 0002 AC4 的澄清，与 CONTEXT.md 领域语言一致）。
@@ -162,7 +164,7 @@ flowchart LR
 | [`src/lib/calendarTimeline.ts`](../src/lib/calendarTimeline.ts) | 日视图默认时段合并、非默认区间补集、当前窗口与临时展开合成，以及折叠时间轴的分钟／像素双向映射；只负责前端布局，不创建领域事实。 |
 | [`src/lib/calendarSummary.ts`](../src/lib/calendarSummary.ts) | M6 任务截止紧迫度、单日截止／完成／推进／未推进摘要及月格三行截断，以及 M7.3 项目截止／里程碑日历标记聚合（`calendarDayMarkers`）的纯读取接缝；只读投影，不创建领域事实。 |
 | [`src/lib/workspaceSelectors.ts`](../src/lib/workspaceSelectors.ts) | 阶段 4 P4-06：工作区**稳定索引**（任务／项目／执行时段／执行记录／里程碑／到期结果按 ID 的 Map，外加 `recordsBySessionId`、`tasksByProjectId`、`milestonesByProjectId`）与**共享事实选择器** —— 「待回顾」的唯一判断（`isPendingReview`／`isPendingReviewIn`／`pendingReviewSessions`）、项目加权进度（`projectProgress`／`projectTaskCounts`）、里程碑达成规则（`orderedMilestoneTasks`／`milestoneReached`／`milestoneReachedNow`／`milestoneSummary`）。只读、无副作用、不读隐式系统时间（`now` 由调用方注入）。 |
-| [`src/lib/deadlines.ts`](../src/lib/deadlines.ts) | 阶段 4 P4-06／M10：截止事项的**纯投影**（`buildDeadlineItems`／`buildDeadlineItemsFromIndex`）、里程碑状态（`deadlineStateOf`，冻结结果优先）、本地日期分组（`deadlineGroupOf`／`groupDeadlineItems`）与排序，以及本地日历运算（`addLocalDays`／`localDaysBetween`，不除以固定 24 小时）。不建截止事项表、不新增 SQLite 字段。 |
+| [`src/lib/deadlines.ts`](../src/lib/deadlines.ts) | 阶段 4 P4-06／M10：截止事项的**纯投影**（`buildDeadlineItems`／`buildDeadlineItemsFromIndex`）、里程碑状态（`deadlineStateOf`，冻结结果优先）、本地日期分组（`deadlineGroupOf`／`groupDeadlineItems`）与排序，以及本地日历运算（`addLocalDays`／`localDaysBetween`／`localDateOf`／`isLocalDate`，不除以固定 24 小时；`review.ts` 与设置层共用同一份）。不建截止事项表、不新增 SQLite 字段。 |
 | [`src/lib/native.ts`](../src/lib/native.ts) | `NativeApi` 类型边界、Tauri IPC 适配、文件对话框和浏览器 `localStorage` 预览实现。 |
 | [`src/lib/settings.ts`](../src/lib/settings.ts) | 显示、页面、日历（含日／周浏览位置）、提醒、启动摘要、回顾周期与默认时段设置的默认值、规范化与顺序写入；`PAGE_IDS` 是合法页面 ID 的**唯一出处**（`PageId` 由它派生，`lastPage` 白名单直接读它），`CalendarPosition`／`CalendarPositions` 类型的唯一出处；Tauri Store 与浏览器后端。 |
 | [`src/lib/courseImport.ts`](../src/lib/courseImport.ts) | 把常见分集文本与末尾时长解析为可编辑、可取消选择的有序任务草稿。 |
@@ -185,12 +187,14 @@ flowchart LR
 | [`src/lib/workspaceSelectors.test.ts`](../src/lib/workspaceSelectors.test.ts) | 阶段 4 P4-06：索引（含「同一快照修订」语义）、待回顾的四种排除条件、项目加权进度与任务计数、里程碑三种达成规则与索引版本。 |
 | [`src/lib/deadlines.test.ts`](../src/lib/deadlines.test.ts) | 阶段 4 P4-06／AC08：分组边界（含「未来七天」两端与跨夏令时日期样本）、本地日历加减、排序四级、任务过滤（无截止日期／习惯内部任务／状态开关）、项目自有截止日期与空项目、里程碑冻结优先与默认隐藏、筛选辅助函数。 |
 | [`src/components/deadlines/deadlines-page.test.tsx`](../src/components/deadlines/deadlines-page.test.tsx) | 阶段 4 P4-06／AC08：行内容（进度／「当前任务 N/N 已完成」／冻结结果）、两种空状态、关键字与类型筛选、暂停任务无排程入口、当前达成项切换、行级动作意图、焦点恢复与失效提示、滚动位置记录。 |
+| [`src/lib/review.test.ts`](../src/lib/review.test.ts) | 阶段 4 P4-07／AC11～AC13（纯函数层）：周一周界（周一／周日／周中锚点）、自然月与闰年、跨月跨年、跨午夜与跨月拆分、毫秒精度保留到汇总、并行记录的「执行记录累计」、进行中执行单列、净进度变化含下调与净零、重复完成只计一次、有／无事件时的进度起止、待回顾走共享选择器、未推进不重复计、发生项与 session 去重、取消安排与跳过分开、待续集合、项目过滤、日／周／月汇总可核对、7 天兼容入口逐日等价，以及两条源码护栏（待回顾只有一份判断、引擎不读系统时钟）。 |
+| [`src/lib/review.timezone.test.ts`](../src/lib/review.timezone.test.ts) | 阶段 4 P4-07／AC11 的夏令时样本：在 `America/New_York`（`process.env.TZ` 进程内设置，`afterAll` 还原）下验证 23 小时的本地日窗口，以及春季跳时窗口内记录的真实经过时长；先断言当天确为 23 小时，避免时区未生效时空跑。 |
 | [`src/lib/nativeBuildConfig.test.ts`](../src/lib/nativeBuildConfig.test.ts) | 原生构建配置护栏：`src-tauri/Cargo.toml` 必须保留 `[build-dependencies]` 的 `indexmap`（带 `std`）。刻意放在前端测试里 —— 那一行被删掉时原生测试根本编译不出来，Rust 侧守不住。 |
 | [`src-tauri/src/lib.rs`](../src-tauri/src/lib.rs) | Tauri 组装、托盘与关闭行为、桌面通知及 30 分钟内的提醒目标恢复事件、`AppState`、Command、后台串行执行、写后备份及 SQLite／Store 协调恢复。 |
 | [`src-tauri/src/database.rs`](../src-tauri/src/database.rs) | SQLite v7 连接、迁移、工作区查询、任务／项目／里程碑／到期结果／排程／执行／进度／习惯／时间块／挽救事实事务写入和时间校验。 |
 | [`src/lib/scheduling.ts`](../src/lib/scheduling.ts) | 自动排程 Lite 的确定性候选排序、空档扣除、最小时长与固定习惯时间计算。 |
 | [`src/lib/recurrence.ts`](../src/lib/recurrence.ts) | 基础重复规则的本地日期发生项计算。 |
-| [`src/lib/review.ts`](../src/lib/review.ts) | 最近 7 个本地日期的事实汇总，不生成评分或连续天数。 |
+| [`src/lib/review.ts`](../src/lib/review.ts) | 阶段 4 P4-07／M11 的**周期统计引擎**（纯函数、只读投影）：`ReviewPeriod`／`ReviewQuery`／`buildReview`／`buildReviewFromIndex`／`reviewRange` 与 `ReviewResult`（`days`／`progress`／`actual`／`plan`／`pendingReview`／`notAdvanced`／`carryoverTaskIds`／`tasks`／`milestones`／`notes`），以及显示辅助 `formatPercentPoints`／`formatRecordedMs`／`formatTaskProgressRange`。日＝本地自然日、周＝周一至周日、月＝自然月；日期运算只走 `deadlines.ts` 的 `addLocalDays`，实际投入按 UTC 毫秒与各日本地窗口求交并跨日拆分，毫秒精度保留到汇总结束；`now` 显式注入，引擎内不读系统时钟；「待回顾」只读 `workspaceSelectors` 的唯一判断。`buildSevenDayReview` 是同一引擎之上的**兼容入口**（薄适配，移除调用者属 P4-08）。不生成评分或连续天数，不写任何领域事实。 |
 | [`src/lib/bilibili.ts`](../src/lib/bilibili.ts) | 从普通 B 站链接或文本中提取并规范化 BV 号。 |
 | [`src-tauri/src/backup.rs`](../src-tauri/src/backup.rs) | SQLite Online Backup、滚动保留、偏好嵌入、检查、预览、Windows 原子替换、恢复和回滚。 |
 | [`src-tauri/src/models.rs`](../src-tauri/src/models.rs) | Rust 核心数据结构和 camelCase 序列化边界。 |
@@ -232,6 +236,29 @@ flowchart LR
 - 同一时刻最多开始一条新的未结束执行记录；v3 升级保留已有并行历史事实，但 v4 写事务会拒绝继续新增。
 - 已经关联实际执行记录的计划时段不能再被移动或删除。
 - 进度事件的 `from_progress` 必须等于数据库中的当前完成度；更新到 100 会把任务设为 `completed`，从 100 下调会重新设为 `active`。
+
+### 回顾统计口径（阶段 4 P4-07，规格 §7.2）
+
+`src/lib/review.ts` 的 `buildReview(workspace, query, now)` 是日／周／月回顾的**唯一**统计入口。周期按本地日历定义：日＝一个本地自然日，周＝周一至周日，月＝自然月（**不是**最近 30 天）。`now` 由调用方注入，引擎内不读系统时钟。`projectId` 非空时只统计该项目的任务与其时段／记录。
+
+| 指标 | 计算规则 | 呈现规则 |
+| --- | --- | --- |
+| 净进度变化 `progress.netDelta` | 周期内事件逐条求 `toProgress - fromProgress`，**包含下调** | 单位百分点、可负；跨任务合计**不是**完成率（`formatPercentPoints` 的输出不含 `%`） |
+| 曾完成任务数 `progress.completedTaskIds` | 周期内至少一次 `toProgress = 100`，按 taskId 去重 | 与当前 `progress` 分开；重复完成不重复计数 |
+| 有进度变化任务数 `progress.changedTaskIds` | 周期内存在事件，按 taskId 去重 | 净变化为零仍可有变更明细 |
+| 已记录实际投入 `actual.recordedMs` | 已结束记录与周期各日本地时间窗口的交集时长；按 UTC 毫秒求交、日界换算成 UTC；跨日分别计入 | 毫秒精度保留到汇总结束再换算显示分钟；并行记录标注「执行记录累计」，不称唯一墙钟时间 |
+| 进行中的执行 `actual.runningRecords` | 没有 `actualEndUtc` 的记录 | 单独列出，不混入已确认投入 |
+| 待回顾 `pendingReview` | `scheduled` 已结束、任务未完成、无执行记录 | 派生状态，不写 `missed`；判断来自 `workspaceSelectors` 的 `isPendingReview`，不得另写一份 |
+| 明确未推进／跳过 `notAdvanced` | 读 session 的 `missed`／`skipped`／`cancelled` 与习惯发生项的 `skipped` | 关联发生项与 session 去重；「取消安排」（`cancelled`）与「跳过」（`skipped`）分别说明；已经产生实际执行记录的 `missed` 时段按投入计入，不重复记为未推进 |
+| 待续 `carryoverTaskIds` | 当前 `active`，且周期内有未完成推进或待回顾／未推进／跳过事实 | 按任务去重；只给 ID 与明细，不复制任务 |
+
+贯穿全篇的规则：
+
+- **去重按 ID，不按标题**；单任务进度起止只在事件证据支持时显示（周期内第一条 `fromProgress` 与最后一条 `toProgress`），无事件显示「本周期无进度记录，当前 N%」，**不从当前值反推历史**。
+- **无实际记录显示「未记录」**，有计划仍显示计划，不伪造 0% 执行率。
+- **UTC 事件按查看设备本地时区分桶**，`notes` 里写明当前时区；计划按已保存的 `localDate` 展示；旧计划的未知 UTC 偏移保持未知。
+- **排序用发生时间与稳定 ID**；同一时刻无法证明先后的事件保留明细，不假造精确先后。
+- 引擎是**只读投影**：不新增表字段、不改写任何历史事实；冻结的里程碑结果优先于当前达成。
 
 ## 7. SQLite 与迁移规则
 
@@ -286,7 +313,7 @@ flowchart LR
 - `checkInGraceMinutes`、`rescuePromptsEnabled`: 挽救提示的宽限期与开关；仅在签到开启时生效
 - `remindersEnabled` 与 `reminderLeadMinutes`: 执行提醒及 0–120 分钟提前量
 - `startupSummary`: `everyLaunch | daily | never`，并以 `lastStartupSummaryLocalDate` 记录每天首次提醒
-- `reviewPeriod`: `day | week | month`，默认 `week`；`reviewAnchorDate`: 本地日期或 `null`，默认 `null`。这两项在 P4-05 只落了默认值与规范化（无界面入口、无消费者），消费者是 P4-08 的日／周／月回顾页；当前「7 天回顾」页面仍按最近七日固定计算，**不读取**它们
+- `reviewPeriod`: `day | week | month`，默认 `week`；`reviewAnchorDate`: 本地日期或 `null`，默认 `null`。这两项在 P4-05 只落了默认值与规范化，界面入口与读取属 P4-08；当前「7 天回顾」页面仍按最近七日固定计算，**不读取**它们（P4-07 的回顾引擎已经能接受 `ReviewQuery.period`，但没有任何 UI 把设置值接进去）
 - `defaultTimeSlots`: 默认时段数组；设置页可编辑零个或多个时段的名称、起止时间与适用星期，并可添加或删除；空数组是有效的用户选择
 
 `SettingsRepository` 隔离存储后端并负责默认值、类型／范围规范化和顺序写入。快速连续修改必须排队，因为异步的早期慢写入不能在较新的值之后完成并覆盖它。
@@ -359,7 +386,9 @@ flowchart TD
 
 ## 11. 测试体系
 
-当前测试库存为 Vitest **232** 个（21 个文件）、Playwright **33** 个、Rust **38** 个，`npm run check` 四步全绿（2026-10-15 实测：build 通过、Vitest 232/21、Playwright 33、Rust 38）。原生层的两处环境坑已收口并留了护栏：① `src-tauri/Cargo.toml` 的 `[build-dependencies]` 里那行 `indexmap = { version = "1.9", features = ["std"] }` **不是未使用的依赖**（`indexmap 1.9.3` 的 `build.rs` 用 autocfg 探测 `std`，探测失败会让 `schemars` 以 E0107 编译失败），由 `src/lib/nativeBuildConfig.test.ts` 守住；② `src-tauri/target/debug/incremental` 陈旧时会触发 rustc 1.97.1 的 `encoder.rs "no entry found for key"` ICE（也可能只表现为 `error copying object file … 拒绝访问 (os error 5)` 的告警），删掉该目录（或 `CARGO_INCREMENTAL=0`）即可。完整诊断见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6.4。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期；P4-03 补充了输入法组合期 Enter／Escape 契约、导入连点单次提交与失败保留草稿、以及取消后按模式保留导入草稿三组用例；P4-04 补充了 `useCalendarViewport` 的 14 条仲裁／采样用例、3 条 App 组件用例、1 条原生构建配置护栏与 1 条 AC05 E2E；P4-05 补充了 4 条设置规范化／恒等用例、4 条写入闸门与播种用例、2 条 App 跨启动／恢复对齐用例与 1 条 AC05 跨重启恢复 E2E（见 [`docs/reports/phase-4-p4-05-implementation.md`](reports/phase-4-p4-05-implementation.md) §6）；P4-06 补充了 18 条截止投影用例、10 条共享索引／选择器用例、9 条截止页组件用例、1 条 `PageId` 白名单用例、3 条 App 用例（导航逐项可达并可跨重启恢复、筛选与焦点同会话保留、安排必须预览确认）与 2 条 AC10 E2E（见 [`docs/reports/phase-4-p4-06-implementation.md`](reports/phase-4-p4-06-implementation.md) §6）。
+当前测试库存为 Vitest **266** 个（22 个文件）、Playwright **33** 个、Rust **38** 个，`npm run check` 四步全绿（2026-10-15 实测：build 通过、Vitest 266/22、Playwright 33、Rust 38）。原生层的两处环境坑已收口并留了护栏：① `src-tauri/Cargo.toml` 的 `[build-dependencies]` 里那行 `indexmap = { version = "1.9", features = ["std"] }` **不是未使用的依赖**（`indexmap 1.9.3` 的 `build.rs` 用 autocfg 探测 `std`，探测失败会让 `schemars` 以 E0107 编译失败），由 `src/lib/nativeBuildConfig.test.ts` 守住；② `src-tauri/target/debug/incremental` 陈旧时会触发 rustc 1.97.1 的 `encoder.rs "no entry found for key"` ICE（也可能只表现为 `error copying object file … 拒绝访问 (os error 5)` 的告警），删掉该目录（或 `CARGO_INCREMENTAL=0`）即可。完整诊断见 [`docs/reports/phase-4-p4-04-implementation.md`](reports/phase-4-p4-04-implementation.md) §6.4。2026-09-06 阶段 3 收尾验收（[`docs/reports/phase-3-acceptance.md`](reports/phase-3-acceptance.md)）在 M1–M6 回归上覆盖 M7.1 里程碑 CRUD 与关系校验、M7.3 项目截止／里程碑日历标记聚合、M7.4 本地自然日冻结、历史不可改写、顺序任务与加权进度语义、累计目标续排、项目／里程碑排程约束及 v7 备份拒绝；阶段 2 的数据库与桌面能力回归保持通过。阶段 4 P4-02 落地时补充了冻结边界与缩放预设两条回归，并订正了测试夹具中的硬编码日期；P4-03 补充了输入法组合期 Enter／Escape 契约、导入连点单次提交与失败保留草稿、以及取消后按模式保留导入草稿三组用例；P4-04 补充了 `useCalendarViewport` 的 14 条仲裁／采样用例、3 条 App 组件用例、1 条原生构建配置护栏与 1 条 AC05 E2E；P4-05 补充了 4 条设置规范化／恒等用例、4 条写入闸门与播种用例、2 条 App 跨启动／恢复对齐用例与 1 条 AC05 跨重启恢复 E2E（见 [`docs/reports/phase-4-p4-05-implementation.md`](reports/phase-4-p4-05-implementation.md) §6）；P4-06 补充了 18 条截止投影用例、10 条共享索引／选择器用例、9 条截止页组件用例、1 条 `PageId` 白名单用例、3 条 App 用例（导航逐项可达并可跨重启恢复、筛选与焦点同会话保留、安排必须预览确认）与 2 条 AC10 E2E（见 [`docs/reports/phase-4-p4-06-implementation.md`](reports/phase-4-p4-06-implementation.md) §6）；P4-07 把 `review.test.ts` 从 4 条重写为 36 条（周期边界、跨日拆分、九项口径、项目过滤、日月周核对、兼容入口逐日等价、两条源码护栏），并新增 `review.timezone.test.ts` 2 条夏令时样本（见 [`docs/reports/phase-4-p4-07-implementation.md`](reports/phase-4-p4-07-implementation.md) §6）。
+
+**夏令时样本的运行方式**：本机 node（v22.22.2，Windows）**忽略 `TZ` 环境变量**（`TZ=… node -e` 时 `process.env.TZ` 仍是 `undefined`，`Intl` 仍是 `Asia/Shanghai`），因此 `review.timezone.test.ts` 在 `beforeAll` 里进程内设置 `process.env.TZ = "America/New_York"`、`afterAll` 还原，并先断言那一天确为 23 小时以防时区未生效时空跑。Vitest 默认按文件隔离进程，改动不外溢。
 
 已知测试侧历史问题（均已修复，留作回归背景）：`e2e/phase1.spec.ts` 的 M3／M4 缩放用例曾有 `108px` 滚动时序竞态；2026-09-20 定位为两个成因 —— 挂载后的自动定位覆盖先发生的滚动，以及 `onWheel` 被 React 注册为 passive 使 `preventDefault()` 无效、浏览器默认滚动抢在锚点测量之前。现分别以「自动定位在收到容器 scroll 时让位」和「原生非 passive wheel 监听」修复，M3 ×30、M4 ×15 全通过（详见 [`docs/reports/phase-4-p4-01-baseline.md`](reports/phase-4-p4-01-baseline.md) §3.5）。Vite 开发服务器首个 E2E 用例承担整段冷编译（实测 30–37s），`playwright.config.ts` 因此把整体超时设为 60s（只放宽超时，不放宽断言）。
 
@@ -367,7 +396,7 @@ flowchart TD
 | --- | --- |
 | Rust `database.rs` | 首次建库、旧库升级、事务回滚、计划／实际／进度分离、跨午夜、UTC 校验、新时段偏移、单一活动执行、计划时段移动／取消、结束执行＋进度原子更新，以及 M7 项目截止／里程碑 CRUD 与关系校验、本地自然日到期冻结幂等、顺序任务与加权进度语义、冻结历史不可修改／删除。 |
 | Rust `backup.rs` | 七份保留、同日刷新、可迁移偏好、干净安装恢复、恢复前备份、无效结构拒绝、协调回滚，以及 v6／v7 版本感知的必需表缺失拒绝。 |
-| Vitest | 设置规范化／排序（含任务池宽度、零个／多个默认时段、日视图模式、吸附关闭、日历三视图锚点／连续比例／实际记录开关、P4-05 的日／周浏览位置合法值与保存重载恒等）、课程解析、自动排程、重复规则、7 天回顾、B 站解析、今日壳、任务池、挽救动作、精确时间编辑、拖拽负载影子副本与类型判定、时间换算与吸附、落点覆盖的收敛判定，以及日历三视图、连续日边界、当前状态、实际叠加、滚轮缩放、卡片信息分层、折叠布局映射、任务截止紧迫度、月摘要、全天溢出、周／月键盘导航与目标显露、跨列落点在目标列渲染、P4-04 的滚动仲裁（记忆恢复、等待可测量、用户滚动作废、拖拽延后、程序化写入不作废、尺寸未变不重排、generation 递增、月视图不存坐标）与 P4-05 的写入闸门／播种（只有用户滚动写偏好，三日缓冲平移与缩放锚点补偿不写）；M7 的项目截止编辑、里程碑 CRUD 与达成态、项目截止／里程碑日历标记、到期结果展示、累计目标续排、冻结历史不可改写与项目／里程碑排程约束；P4-06 的截止投影（分组边界含「未来七天」两端、本地日历加减、排序四级、任务过滤与习惯内部任务排除、项目自有截止与「当前任务 N/N 已完成」、里程碑冻结优先与默认隐藏）、共享索引与选择器（待回顾判断、加权进度、三种里程碑规则）、截止页呈现（两种空状态、筛选、暂停任务无排程入口、行级动作意图、焦点恢复与失效提示、滚动记录）、`PAGE_IDS` 白名单与导航入口逐项可达并可跨重启恢复，以及截止页安排必须预览确认。 |
+| Vitest | 设置规范化／排序（含任务池宽度、零个／多个默认时段、日视图模式、吸附关闭、日历三视图锚点／连续比例／实际记录开关、P4-05 的日／周浏览位置合法值与保存重载恒等）、课程解析、自动排程、重复规则、7 天回顾、B 站解析、今日壳、任务池、挽救动作、精确时间编辑、拖拽负载影子副本与类型判定、时间换算与吸附、落点覆盖的收敛判定，以及日历三视图、连续日边界、当前状态、实际叠加、滚轮缩放、卡片信息分层、折叠布局映射、任务截止紧迫度、月摘要、全天溢出、周／月键盘导航与目标显露、跨列落点在目标列渲染、P4-04 的滚动仲裁（记忆恢复、等待可测量、用户滚动作废、拖拽延后、程序化写入不作废、尺寸未变不重排、generation 递增、月视图不存坐标）与 P4-05 的写入闸门／播种（只有用户滚动写偏好，三日缓冲平移与缩放锚点补偿不写）；M7 的项目截止编辑、里程碑 CRUD 与达成态、项目截止／里程碑日历标记、到期结果展示、累计目标续排、冻结历史不可改写与项目／里程碑排程约束；P4-06 的截止投影（分组边界含「未来七天」两端、本地日历加减、排序四级、任务过滤与习惯内部任务排除、项目自有截止与「当前任务 N/N 已完成」、里程碑冻结优先与默认隐藏）、共享索引与选择器（待回顾判断、加权进度、三种里程碑规则）、截止页呈现（两种空状态、筛选、暂停任务无排程入口、行级动作意图、焦点恢复与失效提示、滚动记录）、`PAGE_IDS` 白名单与导航入口逐项可达并可跨重启恢复，以及截止页安排必须预览确认；P4-07 的周期统计引擎（周一周界／自然月与闰年／跨月跨年、跨午夜与跨月拆分、毫秒精度保留到汇总、并行记录的「执行记录累计」、进行中执行单列、净进度变化含下调与净零、重复完成只计一次、无事件时不从当前值反推历史、待回顾走共享选择器、未推进不重复计、发生项与 session 去重、取消安排与跳过分开、待续集合、项目过滤、日／周／月汇总互相核对、7 天兼容入口逐日等价、两条源码护栏）与夏令时本地日窗口（`review.timezone.test.ts`）。 |
 | axe-core | jsdom 语义检查，以及 Playwright 中浅／深色真实浏览器自动无障碍检查。 |
 | Playwright | 快速创建重载无重复、拖拽安排与 Ctrl+Z、时段移动／取消、课程导入、阶段 2 排程／时间块／习惯持久化、执行结束重载、浅／深色 axe、200% 缩放、窄窗布局与日视图任务池调宽持久化、**真实指针拖拽下拖拽源保持可命中**、**落点虚线框不矮于卡片且换格有过渡**、待回顾气泡只在明确手势后打开，以及阶段 3 视图状态、连续日边界、M2 叠加、M3 缩放事实、M4 折叠边界、M5 插入原子提交与空白框选、M6 月摘要／详情浮层／全天吸顶／键盘导航、阶段 4 P4-04 的日↔周切换十次不漂移与月视图进入置顶、P4-05 的日／周浏览位置跨重启恢复（重载前后视口中心时间 0 分钟误差）、P4-06 的截止页跨页返回保留筛选／焦点／滚动（整页重载后回到默认）与「安排必须预览确认」。 |
 | 生产前端构建 | TypeScript `--noEmit` 与 Vite production bundle。 |
@@ -396,6 +425,7 @@ npm run tauri build
 | 修改设置 | `AppSettings`／默认值／规范化（含 `calendarPositions`、`PAGE_IDS` 与回顾周期／锚点）、Store 后端、`App` 控件、备份偏好快照与原生协调恢复、设置测试和重载 E2E；改浏览位置时同时看 `useCalendarViewport` 的写入闸门与 `seedCalendarPositions`。 |
 | 新增或改名导航页面 | `src/lib/settings.ts` 的 `PAGE_IDS`（`PageId` 与 `lastPage` 白名单同源于它）、`src/App.tsx` 的导航 `pages` 表、`settings.test.ts` 的白名单用例与 `App.test.tsx` 的「导航入口逐项可达并可跨重启恢复」用例；改完重新检查最小窗口高度与 200% 缩放下入口可达（`.sidebar nav` 自身可滚动）。 |
 | 修改截止事项视图 | `src/lib/deadlines.ts` 的投影／分组／排序／本地日期运算、`src/lib/workspaceSelectors.ts` 的共享索引与选择器（待回顾判断、加权进度、里程碑规则只能有这一份）、`src/components/deadlines/` 的页面与行级动作、`App.tsx` 的 `deadlinesView`（筛选与焦点项，App 层内存）与 `deadlinesScrollTop`（ref）、`ProjectsPage` 的 `focus` 一次性定位／续排，以及纯函数／组件用例与 AC10 E2E。**不要**为它新增 SQLite 表或字段，也不要把筛选／焦点／滚动写进 Store。 |
+| 修改回顾统计口径 | `src/lib/review.ts` 的周期计算（`reviewRange`）、九项口径与明细、`buildSevenDayReview` 兼容适配；「待回顾」判断只能来自 `src/lib/workspaceSelectors.ts`（不得在 `review.ts` 里另写一份，源码护栏会抓），里程碑达成只走 `milestoneReached`／`milestoneSummary`，本地日历运算只走 `deadlines.ts` 的 `addLocalDays`／`isLocalDate`。改口径时同步 `src/lib/review.test.ts`（含两条源码护栏）、需要夏令时样本时看 `src/lib/review.timezone.test.ts`，并重跑 `npm test`。**不要**在引擎里读系统时钟（`now` 必须由调用方注入），也不要用固定 86_400_000 毫秒推算日界或月份。 |
 | 修改主题 | 所有语义变量的浅／深色值、系统跟随、减少动态、100% 与 200% 布局、两种模式的 axe。 |
 | 修改模态框 | 初始焦点、Tab／Shift+Tab、Esc、遮罩、`inert`、关闭后焦点恢复、忙碌阶段是否允许取消、模态内错误。 |
 | 修改日历滚动／浏览位置 | `src/hooks/useCalendarViewport.ts` 的优先级表、generation、`markProgrammaticSettle` 写入闸门与 `seedCalendarPositions`、`CalendarPage` 的接线、`ContinuousDayView` 的程序化定位上报、`calendarTimeline` 的分钟／像素映射（不得另写一套）、折叠分段的 `data-collapsed`、`settings.ts` 的 `calendarPositions` 默认值与规范化，以及 P4-04／P4-05 的仲裁与写入用例和 AC05 E2E。改缩放范围时同时检查 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET` 与滚轮钳制。 |
