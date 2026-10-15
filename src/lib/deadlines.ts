@@ -202,6 +202,19 @@ export function deadlineStateLabel(state: DeadlineState): string {
   return state === "currentlyReached" ? "当前已达成" : state === "frozenUnmet" ? "到期未达成" : "进行中";
 }
 
+/**
+ * 是否是**真实有效**的本地日期：`2026-02-30` 只过格式不过日历，必须拒绝。
+ *
+ * 与 `settings.ts` 的规范化同一条判据（按 UTC 日历字段回读比对），放在这里是为了
+ * 让只读投影（`deadlines.ts`／`review.ts`）共用一份，而不是各写一份正则。
+ */
+export function isLocalDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
 /** 本地日历加法：按 UTC 日历字段做整数加减，跨月跨年与夏令时都安全。 */
 export function addLocalDays(date: string, amount: number): string {
   const [year, month, day] = date.split("-").map(Number);
