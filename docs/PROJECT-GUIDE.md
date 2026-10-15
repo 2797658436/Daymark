@@ -384,7 +384,7 @@ npm run check
 npm run tauri build
 ```
 
-`npm run test:e2e` 由 [`scripts/run-e2e.mjs`](../scripts/run-e2e.mjs) 管理 Vite 生命周期。`npm run tauri build` 会先运行配置中的前端生产构建并生成 NSIS 包。
+`npm run test:e2e` 由 [`scripts/run-e2e.mjs`](../scripts/run-e2e.mjs) 管理 Vite 生命周期，并在启动前把上一次留下的 `test-results/` 残留用**同卷 rename** 挪进 `_quarantine/`（沙箱的 safe-delete 有「单轮 50 条」上限，逐条删除会被拒绝，见 §12）。Playwright 默认**不录 trace**，需要排查失败时用 `PW_TRACE=1` 打开 —— trace 的 screencast 会逐帧写 jpeg，一次全量运行产出约 2,000 个文件，正是上面那条上限的触发源。`npm run tauri build` 会先运行配置中的前端生产构建并生成 NSIS 包。
 
 ## 12. 常见修改入口
 
@@ -400,7 +400,7 @@ npm run tauri build
 | 修改模态框 | 初始焦点、Tab／Shift+Tab、Esc、遮罩、`inert`、关闭后焦点恢复、忙碌阶段是否允许取消、模态内错误。 |
 | 修改日历滚动／浏览位置 | `src/hooks/useCalendarViewport.ts` 的优先级表、generation、`markProgrammaticSettle` 写入闸门与 `seedCalendarPositions`、`CalendarPage` 的接线、`ContinuousDayView` 的程序化定位上报、`calendarTimeline` 的分钟／像素映射（不得另写一套）、折叠分段的 `data-collapsed`、`settings.ts` 的 `calendarPositions` 默认值与规范化，以及 P4-04／P4-05 的仲裁与写入用例和 AC05 E2E。改缩放范围时同时检查 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET` 与滚轮钳制。 |
 | 修改 Tauri Command | 把磁盘／SQLite 工作放入 `run_data_operation()`；不要阻塞事件线程，并判断是否需要与其他破坏性操作串行化。 |
-| 修改测试基础设施 | `package.json`、Vitest／Playwright 配置、`run-e2e.mjs`、README 命令和本文测试清单。 |
+| 修改测试基础设施 | `package.json`、Vitest／Playwright 配置、`run-e2e.mjs`、README 命令和本文测试清单。改 Playwright 的 `trace`／`outputDir` 时注意本机沙箱的批量删除上限（单轮 50 条）与 `_quarantine` 约定：大体积产物会让下次启动清空 `test-results/` 时被拒绝。 |
 | 修改原生构建配置 | `src-tauri/Cargo.toml`／`Cargo.lock`、`src/lib/nativeBuildConfig.test.ts` 护栏、本文 §11 的测试数量与环境说明。**不要删掉 `[build-dependencies]` 的 `indexmap`（带 `std`）** —— 删了原生层会以 E0107 编译失败，原因见 §11。`npm run test:native` 用裸 `cargo test` 即可，不需要套 `scripts/with-msvc-env.sh`。 |
 
 需要迁移测试：schema、字段语义、默认值、历史事实处理变化。需要恢复测试：备份格式、验证、临时文件、替换、Store 协调或回滚变化。需要 E2E：跨页面持久化、关键键盘路径、缩放／主题或用户可见错误变化。
