@@ -27,3 +27,5 @@ Never delete build or dependency leftovers in place, and never `rm -rf` a direct
 Move anything you intend to discard into `_quarantine/<YYYY-MM-DD>_<short-description>/` instead — a same-volume rename never touches the Recycle Bin. Only regenerable content belongs there (`node_modules/`, `dist/`, `src-tauri/target/`, `test-results/`, `output/`, caches); never `src/`, `docs/`, `.git/`, `.workbuddy-ai/`, or the user's uncommitted changes.
 
 Agents move, they do not discard: after the batch is verified, the user deletes that one folder in Explorer. Keep at most one undiscarded batch. See `_quarantine/README.md`.
+
+Use the `ops-batch` skill for these moves rather than hand-written `mv` or `rm` commands: it plans first with no side effects, refuses personal directories, protected paths, overwrites, symlink traversal and cross-volume moves, and writes a `MANIFEST.md` into the batch folder for the user to read.
