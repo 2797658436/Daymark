@@ -2,7 +2,15 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 
 export type AppearanceMode = "system" | "light" | "dark";
 export type MotionMode = "system" | "reduce" | "full";
-export type PageId = "today" | "calendar" | "projects" | "review" | "data" | "appearance";
+/**
+ * 合法页面 ID 的**唯一出处**。
+ *
+ * `PageId` 由它派生，规范化里的 `lastPage` 白名单也直接读它：两处一旦分叉，就会出现
+ * 「类型检查通过、运行期被静默回退到默认页」的故障（规格 §6.2 点名的三处同步点之一）。
+ * 第三处是 `App.tsx` 的导航 `pages` 表，由组件测试逐项覆盖。
+ */
+export const PAGE_IDS = ["today", "calendar", "deadlines", "projects", "review", "data", "appearance"] as const;
+export type PageId = (typeof PAGE_IDS)[number];
 export type CalendarView = "day" | "week" | "month";
 export type CalendarAnchors = Record<CalendarView, string | null>;
 export type CalendarZoom = "compact" | "standard" | "detailed";
@@ -172,7 +180,7 @@ function normalizeSettings(value: unknown): AppSettings {
     appearance: isOneOf(candidate.appearance, ["system", "light", "dark"]) ? candidate.appearance : DEFAULT_SETTINGS.appearance,
     motion: isOneOf(candidate.motion, ["system", "reduce", "full"]) ? candidate.motion : DEFAULT_SETTINGS.motion,
     scale: typeof candidate.scale === "number" && candidate.scale >= 100 && candidate.scale <= 200 ? candidate.scale : DEFAULT_SETTINGS.scale,
-    lastPage: candidate.lastPage === ("overview" as PageId) ? "today" : isOneOf(candidate.lastPage, ["today", "calendar", "projects", "review", "data", "appearance"]) ? candidate.lastPage : DEFAULT_SETTINGS.lastPage,
+    lastPage: candidate.lastPage === ("overview" as PageId) ? "today" : isOneOf(candidate.lastPage, PAGE_IDS) ? candidate.lastPage : DEFAULT_SETTINGS.lastPage,
     calendarView: isOneOf(candidate.calendarView, ["day", "week", "month"]) ? candidate.calendarView : DEFAULT_SETTINGS.calendarView,
     calendarAnchors: normalizeCalendarAnchors(candidate.calendarAnchors),
     calendarZoom,

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { readCalendarPositions, resetCalendarPositions } from "./hooks/useCalendarViewport";
 import { EMPTY_WORKSPACE, type BackupInfo, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
-import { DEFAULT_SETTINGS, SettingsRepository, type AppSettings, type SettingsBackend } from "./lib/settings";
+import { DEFAULT_SETTINGS, PAGE_IDS, SettingsRepository, type AppSettings, type PageId, type SettingsBackend } from "./lib/settings";
 
 beforeEach(() => { Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 }); });
 
@@ -1819,6 +1819,136 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
     } finally {
       vi.unstubAllGlobals();
       resetCalendarPositions();
+    }
+  });
+});
+
+/**
+ * 阶段 4 P4-06 / M10：截止事项页、导航入口与 PageId 三处一致。
+ *
+ * 三处合法值来源：`settings.ts` 的 `PageId`（由 `PAGE_IDS` 派生）、`normalizeSettings`
+ * 的 `lastPage` 白名单（直接读 `PAGE_IDS`）、以及 `App.tsx` 的导航表。前两处由
+ * `settings.test.ts` 覆盖，这里逐项证明**导航表**也完整：入口点得到、落库不被静默
+ * 回退、重启后仍停在原页。
+ */
+describe("phase 4 P4-06 deadline view", () => {
+  const NAVIGATION: Array<[PageId, string, string]> = [
+    ["today", "今日", "今天从下一步开始"],
+    ["calendar", "日历", "日历"],
+    ["deadlines", "截止事项", "截止事项"],
+    ["projects", "项目", "项目"],
+    ["review", "7 天回顾", "最近 7 天回顾"],
+    ["data", "数据", "数据与安全"],
+    ["appearance", "设置", "设置"],
+  ];
+
+  function deadlineScenario(): WorkspaceSnapshot {
+    return {
+      ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "p-1", title: "学习项目", deadlineLocal: "2026-08-20" }],
+      projectMilestones: [{ id: "m-1", projectId: "p-1", title: "第一阶段", targetLocalDate: "2026-08-04", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 2, targetProgress: null }],
+      milestoneOutcomes: [{ id: "o-1", milestoneId: "m-1", projectId: "p-1", title: "第一阶段", targetLocalDate: "2026-08-04", reached: false, resultText: "完成 0/2，未达成", frozenAtUtc: "2026-08-05T00:00:00Z" }],
+      tasks: [
+        { id: "t-alpha", projectId: null, title: "Alpha 任务", progress: 0, status: "active", deadlineLocal: "2026-08-05", estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task" },
+        { id: "t-beta", projectId: "p-1", title: "Beta 任务", progress: 0, status: "active", deadlineLocal: "2026-08-06", estimatedMinutes: 60, priority: "normal", sortOrder: 1, kind: "task" },
+      ],
+    };
+  }
+
+  function openDeadlines(backend: MemorySettingsBackend, native = createNativeApi(deadlineScenario())) {
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "deadlines" };
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    return native;
+  }
+
+  const deadlineRows = () => Array.from(document.querySelectorAll("[data-deadline-key]")).map((row) => row.getAttribute("data-deadline-key"));
+
+  it("keeps every navigation entry reachable, legal and restorable", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    const native = createNativeApi();
+    const first = render(<App settings={new SettingsRepository(backend)} native={native} />);
+    try {
+      // 导航表必须覆盖每一个合法页面 ID，否则会出现点不到或点了被回退的入口。
+      expect(NAVIGATION.map(([id]) => id)).toEqual([...PAGE_IDS]);
+      const navigation = await screen.findByRole("navigation", { name: "主导航" });
+      for (const [id, label, heading] of NAVIGATION) {
+        await user.click(within(navigation).getByRole("button", { name: label }));
+        expect(await screen.findByRole("heading", { name: heading, level: 1 })).toBeVisible();
+        expect(backend.value).toMatchObject({ lastPage: id });
+      }
+      first.unmount();
+      // 重启后停在最后访问的页面；这里换成新增的截止页再验一次。
+      await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, lastPage: "deadlines" });
+      render(<App settings={new SettingsRepository(backend)} native={native} />);
+      expect(await screen.findByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the deadline filter and focus across a same-session round trip but not across a restart", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    const native = createNativeApi(deadlineScenario());
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "deadlines" };
+    const first = render(<App settings={new SettingsRepository(backend)} native={native} />);
+    try {
+      await screen.findByRole("heading", { name: "截止事项", level: 1 });
+      // 排序是日期升序 → 类型（任务／项目／里程碑）→ sortOrder → 稳定 ID。
+      expect(deadlineRows()).toEqual(["milestone:m-1", "task:t-alpha", "task:t-beta", "project:p-1"]);
+
+      // 关掉「任务」类型：这是本轮要跨页保留的筛选。
+      await user.click(screen.getByRole("button", { name: "任务" }));
+      expect(deadlineRows()).toEqual(["milestone:m-1", "project:p-1"]);
+
+      await user.click(screen.getByRole("button", { name: /^定位项目/ }));
+      expect(await screen.findByRole("heading", { name: "项目", level: 1 })).toBeVisible();
+
+      await user.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "截止事项" }));
+      await screen.findByRole("heading", { name: "截止事项", level: 1 });
+      expect(screen.getByRole("button", { name: "任务" })).toHaveAttribute("aria-pressed", "false");
+      expect(deadlineRows()).toEqual(["milestone:m-1", "project:p-1"]);
+      expect(document.activeElement).toBe(document.querySelector('[data-deadline-key="project:p-1"]'));
+
+      // 重启不恢复：筛选与焦点只活在 App 层内存里。
+      first.unmount();
+      render(<App settings={new SettingsRepository(backend)} native={native} />);
+      await screen.findByRole("heading", { name: "截止事项", level: 1 });
+      expect(screen.getByRole("button", { name: "任务" })).toHaveAttribute("aria-pressed", "true");
+      expect(deadlineRows()).toEqual(["milestone:m-1", "task:t-alpha", "task:t-beta", "project:p-1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("previews the schedule draft from the deadline row before writing any session", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    const native = openDeadlines(backend);
+    try {
+      await screen.findByRole("heading", { name: "截止事项", level: 1 });
+      await user.click(screen.getByRole("button", { name: /^安排任务 Alpha 任务/ }));
+
+      const candidates = await screen.findByRole("dialog", { name: "自动排程 Lite" });
+      // 预选只影响候选勾选，不会写任何执行时段。
+      expect(vi.mocked(native.applyScheduleDraft)).not.toHaveBeenCalled();
+      await user.click(within(candidates).getByRole("button", { name: "生成排程草案" }));
+
+      const preview = await screen.findByRole("dialog", { name: "确认排程草案" });
+      expect(vi.mocked(native.applyScheduleDraft)).not.toHaveBeenCalled();
+      await user.click(within(preview).getByRole("button", { name: /^应用 \d+ 个时段$/ }));
+      await waitFor(() => expect(vi.mocked(native.applyScheduleDraft)).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(native.applyScheduleDraft).mock.calls[0][0]).toHaveLength(1);
+      expect(vi.mocked(native.applyScheduleDraft).mock.calls[0][0][0]).toMatchObject({ taskId: "t-alpha" });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

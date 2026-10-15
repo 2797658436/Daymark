@@ -15,11 +15,14 @@ import { DRAG_TARGET_MIN_PX, snapDelta, snapMinutesFor, snapTo } from "./lib/tim
 import { placementSettled, setPendingPlacement, usePendingPlacement } from "./lib/pendingPlacement";
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
+import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
 import { extractBvid } from "./lib/bilibili";
 import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
 import { buildSevenDayReview } from "./lib/review";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
+import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
+import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
 import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
@@ -36,10 +39,13 @@ type SaveState = "saved" | "saving" | "unsaved";
 type UndoOperation = { label: string; run: () => Promise<WorkspaceSnapshot> };
 interface AppProps { settings?: SettingsRepository; native?: NativeApi }
 interface CalendarDropIntent { date: string; startMinute: number; taskId: string; sessionId: string; mode: CalendarDropMode; targetSessionId: string }
+/** 从截止事项页跳到项目页时要定位（或续排）的目标。 */
+interface ProjectFocusRequest { projectId: string; milestoneId: string | null; action: "locate" | "continue" }
 
 const pages: Array<{ id: PageId; label: string; icon: typeof Home }> = [
   { id: "today", label: "今日", icon: Home },
   { id: "calendar", label: "日历", icon: CalendarDays },
+  { id: "deadlines", label: "截止事项", icon: Flag },
   { id: "projects", label: "项目", icon: FolderKanban },
   { id: "review", label: "7 天回顾", icon: ChartNoAxesColumnIncreasing },
   { id: "data", label: "数据", icon: Database },
@@ -69,6 +75,17 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const [schedulingTaskId, setSchedulingTaskId] = useState<string | null>(null);
   const [schedulingOpen, setSchedulingOpen] = useState(false);
   const [calendarFocusSessionId, setCalendarFocusSessionId] = useState<string | null>(null);
+  // 截止事项页的会话状态（规格 §6.2）：筛选与焦点项只放 App 层内存 —— 同一会话内跨页
+  // 返回仍然有效、应用重启后不恢复，也不写 Tauri Store、不与搜索文本一并保存。
+  // 滚动位置用 ref 跟手记录，避免每滚一像素都重渲染整个应用壳。
+  const [deadlinesView, setDeadlinesView] = useState<{ filter: DeadlineFilter; focusKey: string | null }>({ filter: DEFAULT_DEADLINE_FILTER, focusKey: null });
+  const deadlinesScrollTop = useRef(0);
+  const [deadlineEditingTask, setDeadlineEditingTask] = useState<{ taskId: string; anchorElement: HTMLElement | null } | null>(null);
+  const [deadlineTaskEditorBusy, setDeadlineTaskEditorBusy] = useState(false);
+  const [projectFocus, setProjectFocus] = useState<ProjectFocusRequest | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  // 稳定索引在快照变更时重建一次（规格 §8）：列表渲染不再逐行扫描全量数组。
+  const workspaceIndex = useMemo(() => createWorkspaceIndex(workspace), [workspace]);
   const workspaceRef = useRef(workspace); const preferencesRef = useRef(preferences);
   workspaceRef.current = workspace; preferencesRef.current = preferences;
   const saveRevision = useRef(0);
@@ -376,14 +393,21 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         <div className="sidebar-foot"><span className={`save-dot ${saveState}`} />{saveState === "saved" ? "已保存到本机" : saveState === "saving" ? "正在保存" : "未保存"}</div>
       </aside>
 
-      <main id="main-content" className={`workspace-main ${page === "calendar" ? "calendar-workspace" : ""}`}>
+      <main id="main-content" ref={mainRef} className={`workspace-main ${page === "calendar" ? "calendar-workspace" : ""}`}>
         {saveError && <div className="error-banner" role="alert"><CircleAlert size={18} />未保存：{saveError}<Button variant="secondary" onClick={() => void retryAction.current?.()}>重试保存</Button></div>}
         {loadError && <div className="error-banner" role="alert"><CircleAlert size={18} />读取失败：{loadError}<Button variant="secondary" onClick={() => void reload()}>重试</Button></div>}
         {undoStack.length > 0 && <button className="undo-toast" onClick={() => void undo()}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
-        {page === "today" && <TodayPage workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} />}
-        {page === "calendar" && <CalendarPage workspace={workspace} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
-        {page === "projects" && <ProjectsPage workspace={workspace} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
+        {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} />}
+        {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
+        {page === "deadlines" && <DeadlinesPage index={workspaceIndex} filter={deadlinesView.filter} onFilterChange={(filter) => setDeadlinesView((current) => ({ ...current, filter }))}
+          focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
+          scrollRef={mainRef} scrollTop={deadlinesScrollTop}
+          onEditTask={(task, anchorElement) => setDeadlineEditingTask({ taskId: task.id, anchorElement })}
+          onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
+          onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
+          onContinueMilestone={(milestone) => { setProjectFocus({ projectId: milestone.projectId, milestoneId: milestone.id, action: "continue" }); updatePreferences({ lastPage: "projects" }); }} />}
+        {page === "projects" && <ProjectsPage workspace={workspace} focus={projectFocus} onFocusHandled={() => setProjectFocus(null)} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
           onUpdateProject={async (project) => { await commit(() => native.updateProject(project)); }}
           onCreateMilestone={async (milestone) => { await commit(() => native.createProjectMilestone(milestone)); }}
           onUpdateMilestone={async (milestone) => { await commit(() => native.updateProjectMilestone(milestone)); }}
@@ -415,6 +439,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           setFinishing(null);
         }} />}
       {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
+      {/* 截止事项页的任务编辑：复用与任务池完全相同的编辑气泡与编辑会话，不复制表单。 */}
+      {deadlineEditingTask && (() => { const task = workspaceIndex.tasksById.get(deadlineEditingTask.taskId); return task ? <FloatingPanel label={`编辑任务 ${task.title}`} anchorElement={deadlineEditingTask.anchorElement} busy={deadlineTaskEditorBusy} onClose={() => setDeadlineEditingTask(null)}><div className="task-editor-fields">
+        <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setDeadlineEditingTask(null); }} onCancel={() => setDeadlineEditingTask(null)} onPhase={setDeadlineTaskEditorBusy} />
+      </div></FloatingPanel> : null; })()}
     </div>
   );
 }
@@ -423,7 +451,9 @@ function PageHeader({ eyebrow, title, actions }: { eyebrow: string; title: strin
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div><div className="header-actions">{actions}</div></header>;
 }
 
-function TodayPage({ workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview }: {
+function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview }: {
+  /** 共享稳定索引；「待回顾」判断与任务查找都走同一处，不另写一份。 */
+  index: WorkspaceIndex;
   workspace: WorkspaceSnapshot; preferences: AppSettings; running: ExecutionRecord | null;
   onStart: (session: ExecutionSession) => Promise<void>; onFinish: (record: ExecutionRecord) => void;
   onProgress: (task: Task, value: number) => Promise<void>; onGoCalendar: (session?: ExecutionSession) => void;
@@ -433,7 +463,7 @@ function TodayPage({ workspace, preferences, running, onStart, onFinish, onProgr
   const now = useCurrentTime();
   const today = toLocalDate(now);
   const sessions = workspace.executionSessions.filter((item) => item.localDate <= today && item.endLocalDate >= today && item.status === "scheduled").sort(compareSessions);
-  const missed = workspace.executionSessions.filter((item) => item.localDate <= today && (item.endLocalDate ?? item.localDate) === today && (item.status === "missed" || isPendingReview(item, workspace.tasks.find((task) => task.id === item.taskId), workspace.executionRecords, now))).sort(compareSessions);
+  const missed = workspace.executionSessions.filter((item) => item.localDate <= today && (item.endLocalDate ?? item.localDate) === today && (item.status === "missed" || isPendingReviewIn(index, item, now))).sort(compareSessions);
   const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
   const current = sessions.find((session) => sessionContains(session, now))
     ?? sessions.find((session) => localSessionStart(session) > now.getTime());
@@ -458,7 +488,7 @@ function TodayPage({ workspace, preferences, running, onStart, onFinish, onProgr
     <div className="today-grid">
       <section className="surface-card"><div className="section-heading"><h2>今日时间线</h2><span>{sessions.length} 个执行时段</span></div>
         {sessions.length ? <div className="timeline-list">{sessions.map((session) => {
-          const task = workspace.tasks.find((item) => item.id === session.taskId); if (!task) return null;
+          const task = index.tasksById.get(session.taskId); if (!task) return null;
           return <article key={session.id} className={running?.sessionId === session.id ? "timeline-item current" : "timeline-item"}>
             <time>{session.startLocal}<small>{session.endLocal}</small></time><div><strong>{task.title}</strong><ProgressControl task={task} onCommit={onProgress} /></div>
             <button className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>{preferences.checkInEnabled && !running && <button className="icon-action" aria-label={`开始 ${task.title}`} onClick={() => void onStart(session)}><Play size={16} /></button>}
@@ -584,8 +614,8 @@ function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sess
   </article>;
 }
 
-function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
-  workspace: WorkspaceSnapshot; preferences: AppSettings; focusSessionId: string | null; onPreferences: (patch: Partial<AppSettings>) => void;
+function CalendarPage({ workspace, index, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
+  workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; focusSessionId: string | null; onPreferences: (patch: Partial<AppSettings>) => void;
   /** 用户滚动落定后的日／周浏览位置（只有用户滚动会到这里，见 `useCalendarViewport`）。 */
   onCalendarPosition: (view: TimelineView, position: CalendarPosition) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
@@ -723,9 +753,9 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
     <div className="calendar-toolbar"><span aria-label="当前日历日期" aria-live="polite">{preferences.calendarView === "day" ? formatLongDate(anchor) : preferences.calendarView === "week" ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}` : formatMonth(anchor)}</span><div>{preferences.calendarView === "day" && <div className="segmented day-display-mode" role="group" aria-label="日视图显示模式">{([['defaultSlots', '默认时段'], ['fullDay', '全天']] as const).map(([value, label]) => <button key={value} aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}<div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([['compact', '紧凑'], ['standard', '标准'], ['detailed', '详细']] as const).map(([value, label]) => <button key={value} aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>{preferences.calendarView !== "month" && <>{preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} />显示实际记录</label>}<Button onClick={() => setBlockForm((value) => !value)}><Clock3 size={16} />时间块</Button><button className={`magnet-control ${preferences.snapMinutes === "off" ? "" : "active"}`} aria-label={preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`} aria-pressed={preferences.snapMinutes !== "off"} title="拖拽时按 Alt 临时反转吸附" onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} /></button></>}</div></div>
     <div className="time-block-form-slot">{blockForm && <FloatingPanel label="添加时间块" busy={blockBusy} onClose={() => setBlockForm(false)}><TimeBlockEditor defaultDate={anchor} onCancel={() => setBlockForm(false)} onCreate={async (block) => { await onCreateBlock(block); setBlockForm(false); }} onPhase={setBlockBusy} /></FloatingPanel>}</div>
     <div ref={viewportRef} className={`calendar-viewport ${preferences.calendarView}-viewport`} role="region" aria-label="日历时间网格">
-      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
+      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
         <CalendarTimeAxis showHeader={false} />
-        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} preferences={preferences} now={now} hideHeader selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
+        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} index={index} preferences={preferences} now={now} hideHeader selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
         {weekGhost && weekGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${weekGhost.leftPx}px`, top: `${weekGhost.topPx}px`, width: `${weekGhost.widthPx}px`, height: `${weekGhost.heightPx}px` }}><span>{weekGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
       </div></div>{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div>}
     </div>
@@ -735,8 +765,8 @@ function CalendarPage({ workspace, preferences, focusSessionId, onPreferences, o
   </section>;
 }
 
-function ContinuousDayView({ anchor, workspace, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
-  anchor: string; workspace: WorkspaceSnapshot; preferences: AppSettings; now: Date; focusSessionId: string | null; onAnchorChange: (date: string) => void;
+function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
+  anchor: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date; focusSessionId: string | null; onAnchorChange: (date: string) => void;
   /** 三日缓冲的定位写入（优先级 4）：告知滚动仲裁入口，别当成用户滚动。 */
   onProgrammaticPosition: () => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
@@ -775,7 +805,7 @@ function ContinuousDayView({ anchor, workspace, preferences, now, focusSessionId
   return <div ref={axisRef} className="continuous-day-axis" role="region" aria-label="连续日时间轴" onScroll={onScroll}>
     {[addDays(anchor, -1), anchor, addDays(anchor, 1)].map((date) => <section key={date} className="continuous-day-panel" data-calendar-date={date} aria-label={formatLongDate(date)}>
       <div className="continuous-day-separator"><span>{formatLongDate(date)}</span></div>
-      <DayCalendarGrid date={date} workspace={workspace} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={(g) => setDayGhost(g)} />
+      <DayCalendarGrid date={date} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={(g) => setDayGhost(g)} />
     </section>)}
     {dayGhost && dayGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${dayGhost.leftPx}px`, top: `${dayGhost.topPx}px`, width: `${dayGhost.widthPx}px`, height: `${dayGhost.heightPx}px` }}><span>{dayGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
   </div>;
@@ -789,8 +819,8 @@ function continuousPanelStarts(axis: HTMLElement, panels: HTMLElement[], fallbac
     : [0, fallback, fallback * 2];
 }
 
-function DayCalendarGrid({ date, workspace, preferences, now, focusSessionId, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
-  date: string; workspace: WorkspaceSnapshot; preferences: AppSettings; now: Date; focusSessionId: string | null;
+function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessionId, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
+  date: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date; focusSessionId: string | null;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
@@ -830,7 +860,7 @@ function DayCalendarGrid({ date, workspace, preferences, now, focusSessionId, on
   const retainDragExpansion = () => { if (!dragExpandedGapKey) return; setExpandedGapKeys((current) => new Set(current).add(dragExpandedGapKey)); setDragExpandedGapKey(null); };
   // 目标时段的显露（优先级 2）由 CalendarPage 的滚动仲裁统一处理，
   // 这里只负责把聚焦时段并入折叠时间轴的临时显露范围。
-  return <div className="calendar-grid day" style={activeTimeline ? { height: `${52 + activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onGapDragEnter={beginGapHover} onGapDragLeave={leaveGapHover} onClearDragExpansion={clearDragExpansion} onRetainDragExpansion={retainDragExpansion} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={onDragGhost} /></div>;
+  return <div className="calendar-grid day" style={activeTimeline ? { height: `${52 + activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} index={index} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onGapDragEnter={beginGapHover} onGapDragLeave={leaveGapHover} onClearDragExpansion={clearDragExpansion} onRetainDragExpansion={retainDragExpansion} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={onDragGhost} /></div>;
 }
 
 function CalendarTimeAxis({ timeline, showHeader = true }: { timeline?: CalendarTimeline; showHeader?: boolean }) {
@@ -890,8 +920,8 @@ function CalendarDateDetails({ date, workspace, taskId, projectId, onOpenDay }: 
   return <aside className="calendar-date-details" aria-label={`${date} ${formatLongDate(date)}详情`}><header><div><span className="eyebrow">已选日期</span><h2>{formatLongDate(date)}</h2></div><Button onClick={onOpenDay}>打开日视图</Button></header>{task ? <section className="calendar-task-detail"><span className="eyebrow">截止任务</span><h3>{task.title}</h3><p>{workspace.projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"} · 当前进度 {task.progress}%</p><span className="deadline-chip">截止 {date}</span></section> : project ? <section className="calendar-project-detail"><span className="eyebrow">项目</span><h3>{project.title}</h3>{project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={date} /> : <p>没有设置项目截止日期。</p>}<div className="calendar-project-milestones">{workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder).map((milestone) => <article key={milestone.id} className={milestone.targetLocalDate === date ? "on-date" : ""}><Diamond size={14} aria-hidden="true" /><div><strong>{milestone.title}</strong><span>{milestone.targetLocalDate === date ? "今天到期" : `${formatShortDate(milestone.targetLocalDate)} 到期`} · {milestoneSummary(milestone, workspace.tasks.filter((item) => item.projectId === project.id))}</span></div></article>)}{workspace.projectMilestones.some((milestone) => milestone.projectId === project.id) || <p className="empty-inline">该项目还没有里程碑。</p>}</div></section> : <><section><h3>重要事实</h3>{summary.deadlines.map((item) => <article key={item.id}><Flag size={14} /><div><strong>{item.title}</strong><span>任务截止 · {item.progress}%</span></div></article>)}{summary.projectDeadlines.map((item) => <article key={`project-${item.id}`}><Flag size={14} /><div><strong>{item.title}</strong><span>项目截止</span></div></article>)}{summary.milestones.map((item) => <article key={`milestone-${item.id}`}><Diamond size={14} /><div><strong>{item.title}</strong><span>里程碑到期</span></div></article>)}{summary.completedTasks.map((item) => <article key={`done-${item.id}`}><Check size={14} /><div><strong>{item.title}</strong><span>当天曾完成 · 当前 {item.progress}%</span></div></article>)}{summary.progressedTasks.map((item) => <article key={`progress-${item.id}`}><ArrowUp size={14} /><div><strong>{item.title}</strong><span>当天有进度变化</span></div></article>)}{summary.missedTasks.map((item) => <article key={`missed-${item.id}`}><Ban size={14} /><div><strong>{item.title}</strong><span>本次未推进</span></div></article>)}{summary.deadlines.length + summary.projectDeadlines.length + summary.milestones.length + summary.completedTasks.length + summary.progressedTasks.length + summary.missedTasks.length === 0 && <p className="empty-inline">当天没有截止、完成或推进事实。</p>}</section><section><h3>当天安排</h3>{sessions.map((session) => <article key={session.id}><Clock3 size={14} /><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.startLocal}–{session.endLocal}</span></div></article>)}{blocks.map((block) => <article key={block.id}><Clock3 size={14} /><div><strong>{block.title}</strong><span>{block.startLocal}–{block.endLocal} · 时间块</span></div></article>)}{sessions.length + blocks.length === 0 && <p className="empty-inline">当天没有执行时段或时间块。</p>}</section></>}</aside>;
 }
 
-function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, hideHeader = false, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
-  date: string; workspace: WorkspaceSnapshot; preferences: AppSettings; now: Date;
+function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, hideHeader = false, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
+  date: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date;
   timeline?: CalendarTimeline; expandedGapKeys?: ReadonlySet<string>; dragExpandedGapKey?: string | null; focusSessionId?: string | null; onToggleGap?: (key: string) => void; onGapDragEnter?: (key: string) => void; onGapDragLeave?: () => void; onClearDragExpansion?: () => void; onRetainDragExpansion?: () => void;
   hideHeader?: boolean; selected?: boolean; weekGridTabIndex?: number; weekGridMinute?: number; onWeekGridFocus?: () => void; onWeekGridNavigate?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
@@ -1052,7 +1082,7 @@ function CalendarDay({ date, workspace, preferences, now, timeline, expandedGapK
         if (!task || !baseStyle || layout?.hidden) return null;
         const style = layout ? { ...baseStyle, left: `calc(${layout.left}% + 4px)`, right: "auto", width: `calc(${layout.width}% - 8px)` } : baseStyle;
         const isDraggingSource = dragSourceId === session.id;
-        return <CalendarSession key={session.id} style={style} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} records={workspace.executionRecords} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
+        return <CalendarSession key={session.id} style={style} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} sessionRecords={index.recordsBySessionId.get(shown.id) ?? []} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
       })}
       {expandedConcurrency && (() => {
         const groupSessions = sessions.filter((session) => concurrency.get(session.id)?.groupId === expandedConcurrency);
@@ -1210,9 +1240,9 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   </>;
 }
 
-function CalendarSession({ style, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, records, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
+function CalendarSession({ style, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
   style?: CSSProperties; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
-  session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; records: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
+  session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; /** 只传该时段自己的执行记录，避免每行扫描全量历史。 */ sessionRecords: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
   onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
   overlay?: ReactNode;
@@ -1222,7 +1252,7 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
   const [resize, setResize] = useState<number | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const current = sessionContains(session, now);
-  const pendingReview = isPendingReview(session, task, records, now);
+  const pendingReview = isPendingReview(session, task, sessionRecords, now);
   const confirmedNoProgress = session.status === "missed";
   const elapsed = current ? Math.round((now.getTime() - localSessionStart(session)) / Math.max(1, localSessionEnd(session) - localSessionStart(session)) * 100) : 0;
   const availableHeight = sessionDuration(session) / 60 * hourHeight;
@@ -1448,7 +1478,9 @@ const EMPTY_PROJECT_IMPORT: ProjectImportDraft = {
   source: "", drafts: [], biliSource: "", bilibili: null, biliSelected: [],
 };
 
-function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onFetchBilibili, onCreateTask, onArrange }: {
+function ProjectsPage({ workspace, focus, onFocusHandled, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onFetchBilibili, onCreateTask, onArrange }: {
+  /** 来自截止事项页的定位／续排请求；处理完立即回调清空，只生效一次。 */
+  focus: ProjectFocusRequest | null; onFocusHandled: () => void;
   onCreateTask: (task: Task) => Promise<void>; onArrange: (task: Task) => void;
   workspace: WorkspaceSnapshot; onCreate: (project: Project, tasks: Task[]) => Promise<void>;
   onUpdateProject: (project: Project) => Promise<void>;
@@ -1499,6 +1531,20 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [milestoneDraft, setMilestoneDraft] = useState<{ projectId: string; editing: ProjectMilestone | null; continuing: boolean } | null>(null);
   const [milestoneBusy, setMilestoneBusy] = useState(false);
+  /**
+   * 截止事项页的行级动作只定位到这里的既有入口，不复制项目编辑器：
+   * 项目 → 滚动到项目卡；里程碑 → 滚动到具体目标行；冻结目标 → 顺带打开「续排」表单。
+   */
+  useEffect(() => {
+    if (!focus) return;
+    const milestone = focus.milestoneId ? workspace.projectMilestones.find((item) => item.id === focus.milestoneId) ?? null : null;
+    if (focus.action === "continue" && milestone) setMilestoneDraft({ projectId: focus.projectId, editing: continueMilestoneDraft(milestone, today), continuing: true });
+    const target = document.getElementById(focus.milestoneId ? `milestone-${focus.milestoneId}` : `project-${focus.projectId}`);
+    // jsdom 没有 scrollIntoView；真实浏览器里这一跳就是「定位」的全部动作。
+    if (target) requestAnimationFrame(() => target.scrollIntoView?.({ block: "center" }));
+    onFocusHandled();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
   return <section className="page-stack" aria-labelledby="projects-title"><PageHeader eyebrow="把长期结果拆成可行动的任务" title="项目" actions={<><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />新建项目</Button><Button onClick={() => patchImport({ mode: "course" })}><Upload size={17} />导入文本课程</Button><Button onClick={() => patchImport({ mode: "bilibili" })}><Upload size={17} />B 站链接 Beta</Button></>} />
     {importDraft.mode !== "none" && <FloatingPanel label="创建项目" wide={importDraft.mode !== "project"} busy={importBusy || importFetching} onClose={() => patchImport({ mode: "none" })}><form aria-busy={importBusy} className="project-form" onSubmit={(event) => { event.preventDefault(); void projectImport.save(); }}><div className="section-heading"><h2>{importDraft.mode === "course" ? "导入课程分集" : importDraft.mode === "bilibili" ? "读取 B 站公开视频" : "创建普通项目"}</h2><button className="icon-action" type="button" disabled={importBusy} aria-label="关闭" onClick={() => patchImport({ mode: "none" })}><X /></button></div><label>项目标题<input autoFocus={importDraft.mode !== "bilibili"} value={importTitle} onChange={(event) => patchImport({ titles: { ...importDraft.titles, [importDraft.mode]: event.target.value } })} /></label>
       {importDraft.mode === "project" && <label>项目截止日期（可选）<input type="date" value={importDraft.deadline} onChange={(event) => patchImport({ deadline: event.target.value })} /></label>}
@@ -1512,7 +1558,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
       const tasks = workspace.tasks.filter((task) => task.projectId === project.id);
       const weighted = projectProgress(tasks);
       const milestones = workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder);
-      return <article key={project.id} className="surface-card project-card"><div className="project-title"><div><span className="eyebrow">{tasks.length} 个任务</span><h2>{project.title}</h2></div><div className="project-title-side"><strong>{weighted}%</strong><button className="icon-action" aria-label={`编辑项目 ${project.title}`} onClick={() => setEditingProjectId((id) => id === project.id ? null : project.id)}><Pencil size={15} /></button></div></div>
+      return <article key={project.id} id={`project-${project.id}`} className="surface-card project-card"><div className="project-title"><div><span className="eyebrow">{tasks.length} 个任务</span><h2>{project.title}</h2></div><div className="project-title-side"><strong>{weighted}%</strong><button className="icon-action" aria-label={`编辑项目 ${project.title}`} onClick={() => setEditingProjectId((id) => id === project.id ? null : project.id)}><Pencil size={15} /></button></div></div>
         {project.deadlineLocal && <ProjectDeadlineChip deadline={project.deadlineLocal} today={today} />}
         <div className="progress-track"><span style={{ width: `${weighted}%` }} /></div>
         {editingProjectId === project.id && <ProjectEditor project={project} onSave={async (next) => { await onUpdateProject(next); setEditingProjectId(null); }} onClose={() => setEditingProjectId(null)} />}
@@ -1522,7 +1568,7 @@ function ProjectsPage({ workspace, onCreate, onUpdateProject, onCreateMilestone,
             const outcome = workspace.milestoneOutcomes.find((item) => item.milestoneId === milestone.id);
             const status = outcome ? { className: "milestone-status missed", label: "未达成" } : reached ? { className: "milestone-status reached", label: "已达成" } : { className: "milestone-status", label: "进行中" };
             const detail = outcome ? `${outcome.resultText} · ${formatShortDate(outcome.targetLocalDate)} 到期` : milestoneSummary(milestone, tasks);
-            return <div key={milestone.id} className="milestone-row"><div><strong>{milestone.title}</strong><span>{detail}</span></div><span className={status.className}>{status.label}</span>{outcome ? <button className="icon-action" aria-label={`续排里程碑 ${milestone.title}`} title="将剩余目标纳入后续计划" onClick={() => setMilestoneDraft({ projectId: project.id, editing: continueMilestoneDraft(milestone, today), continuing: true })}><RotateCcw size={14} /></button> : <><button className="icon-action" aria-label={`编辑里程碑 ${milestone.title}`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button className="icon-action" aria-label={`删除里程碑 ${milestone.title}`} onClick={() => void onDeleteMilestone(milestone)}><X size={14} /></button></>}</div>;
+            return <div key={milestone.id} id={`milestone-${milestone.id}`} className="milestone-row"><div><strong>{milestone.title}</strong><span>{detail}</span></div><span className={status.className}>{status.label}</span>{outcome ? <button className="icon-action" aria-label={`续排里程碑 ${milestone.title}`} title="将剩余目标纳入后续计划" onClick={() => setMilestoneDraft({ projectId: project.id, editing: continueMilestoneDraft(milestone, today), continuing: true })}><RotateCcw size={14} /></button> : <><button className="icon-action" aria-label={`编辑里程碑 ${milestone.title}`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button className="icon-action" aria-label={`删除里程碑 ${milestone.title}`} onClick={() => void onDeleteMilestone(milestone)}><X size={14} /></button></>}</div>;
           })}
           {milestones.length === 0 && <p className="milestone-empty">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
         </div>
@@ -1619,28 +1665,6 @@ function continueMilestoneDraft(milestone: ProjectMilestone, today: string): Pro
   if (milestone.criterionKind === "orderedTask") return { ...base, criterionKind: "orderedTask", targetTaskId: milestone.targetTaskId, targetCount: null, targetProgress: null };
   if (milestone.criterionKind === "taskCount") return { ...base, criterionKind: "taskCount", targetTaskId: null, targetCount: milestone.targetCount, targetProgress: null };
   return { ...base, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress: milestone.targetProgress };
-}
-
-function milestoneSummary(milestone: ProjectMilestone, tasks: Task[]) {
-  const task = milestone.targetTaskId ? tasks.find((item) => item.id === milestone.targetTaskId) : null;
-  const goal = milestone.criterionKind === "orderedTask" ? `按顺序完成至「${task?.title ?? "任务已不在项目中"}」`
-    : milestone.criterionKind === "taskCount" ? `完成 ${milestone.targetCount} 个项目任务`
-    : `项目加权进度达到 ${milestone.targetProgress}%`;
-  return `${goal} · ${formatShortDate(milestone.targetLocalDate)} 前`;
-}
-
-function milestoneReached(milestone: ProjectMilestone, tasks: Task[], weighted: number) {
-  const completed = (task: Task) => task.status === "completed" || task.progress >= 100;
-  if (milestone.criterionKind === "orderedTask") { const ordered = orderedMilestoneTasks(milestone, tasks); return ordered.length > 0 && ordered.every(completed); }
-  if (milestone.criterionKind === "taskCount") return tasks.filter(completed).length >= milestone.targetCount;
-  return weighted >= milestone.targetProgress;
-}
-
-function orderedMilestoneTasks(milestone: ProjectMilestone, tasks: Task[]) {
-  if (milestone.criterionKind !== "orderedTask") return [];
-  const ordered = [...tasks].sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
-  const targetIndex = ordered.findIndex((task) => task.id === milestone.targetTaskId);
-  return targetIndex < 0 ? [] : ordered.slice(0, targetIndex + 1);
 }
 
 function AutoScheduleDialog({ workspace, preferences, onClose, onApply, initialTaskId }: { initialTaskId?: string | null; workspace: WorkspaceSnapshot; preferences: AppSettings; onClose: () => void; onApply: (sessions: ExecutionSession[], occurrences: HabitOccurrence[]) => Promise<void> }) {
@@ -1818,7 +1842,6 @@ function closestZoom(view: AppSettings["calendarView"], scale: number): AppSetti
     Math.abs(calendarScaleForZoom(view, candidate) - scale) < Math.abs(calendarScaleForZoom(view, closest) - scale) ? candidate : closest);
 }
 function sessionContains(session: ExecutionSession, now: Date) { const value = now.getTime(); return localSessionStart(session) <= value && value < localSessionEnd(session); }
-function sessionEnded(session: ExecutionSession, now: Date) { return localSessionEnd(session) <= now.getTime(); }
 function localSessionStart(session: ExecutionSession) { return sessionLocalInstant(session.localDate, session.startLocal, session.utcOffsetMinutes); }
 function localSessionEnd(session: ExecutionSession) { return sessionLocalInstant(session.endLocalDate, session.endLocal, session.utcOffsetMinutes); }
 function sessionLocalInstant(date: string, time: string, utcOffsetMinutes: number | null) {
@@ -1860,14 +1883,9 @@ function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN",
 function formatMonth(date: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(`${date}T12:00:00`)); }
 function formatClock(iso: string) { return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
 function taskTitle(workspace: WorkspaceSnapshot, taskId: string) { return workspace.tasks.find((task) => task.id === taskId)?.title ?? "未知任务"; }
-function projectProgress(tasks: Task[]) { const weighted = tasks.reduce((sum, task) => sum + task.progress * (task.estimatedMinutes ?? 60), 0); const total = tasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 60), 0); return total ? Math.round(weighted / total) : 0; }
 function isEditable(target: EventTarget | null) { return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)); }
 function applyDisplayPreferences(settings: AppSettings, systemDark: boolean, systemReduced: boolean) { const root = document.documentElement; root.dataset.theme = settings.appearance === "system" ? (systemDark ? "dark" : "light") : settings.appearance; root.dataset.motion = settings.motion === "system" ? (systemReduced ? "reduce" : "full") : settings.motion; root.dataset.scale = settings.scale >= 150 ? "large" : "normal"; root.style.fontSize = `${settings.scale}%`; }
 function readError(error: unknown) { return error instanceof Error ? error.message : String(error); }
-
-function isPendingReview(session: ExecutionSession, task: Task | undefined, records: ExecutionRecord[], now: Date) {
-  return session.status === "scheduled" && sessionEnded(session, now) && !!task && task.status !== "completed" && task.progress < 100 && !records.some((record) => record.sessionId === session.id);
-}
 
 function formatDuration(minutes: number) { return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`; }
 

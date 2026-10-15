@@ -67,7 +67,8 @@ input[type="range"] { accent-color: var(--accent); padding: 0; }
 .sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 12px 7px; z-index: 3; }
 .brand { display: grid; justify-items: center; gap: 4px; font-size: .75rem; margin-bottom: 20px; }
 .brand-mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: white; display: grid; place-items: center; font: 600 1.125rem Georgia, serif; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-strong) 36%, transparent); }
-.sidebar nav { width: 100%; display: grid; gap: 4px; }
+/* 入口变多（阶段 4 起 7 项）后导航自身可滚动：最小窗口与 200% 缩放下不能隐藏关键入口。 */
+.sidebar nav { width: 100%; display: grid; gap: 4px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .nav-item { border: 0; background: transparent; min-height: 52px; border-radius: 10px; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: .75rem; transition: background .12s ease, color .12s ease; }
 .nav-item:hover { background: var(--panel-strong); color: var(--text); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
@@ -532,3 +533,26 @@ html[data-scale=large] .sidebar-foot { font-size: 11px; }
 .slot-summary span { color: var(--muted); font-size: .8rem; }
 .floating-panel > form { display: grid; gap: 12px; }
 .floating-panel h2, .floating-panel .section-heading, .floating-panel header { position: sticky; top: -16px; background: var(--panel); z-index: 2; }
+
+/* 截止事项（阶段 4 P4-06 / M10）：集中列表 + 筛选 + 行级入口。 */
+.deadline-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
+.deadline-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .78rem; }
+.deadline-status-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.deadline-status-filter label { display: flex; align-items: center; gap: 6px; min-height: 32px; color: var(--muted); font-size: .78rem; }
+.deadline-notice { display: flex; align-items: center; gap: 7px; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted); font-size: .8rem; }
+.deadline-group { display: grid; gap: 8px; }
+.deadline-rows { display: grid; gap: 8px; }
+.deadline-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
+.deadline-row.focused { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus), var(--shadow-low); }
+.deadline-row:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.deadline-row-main { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.deadline-kind { display: inline-flex; align-items: center; gap: 4px; padding: .18rem .55rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.deadline-kind.task { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.deadline-kind.project { color: var(--accent-strong); background: var(--accent-soft); border-color: transparent; }
+.deadline-title { min-width: 0; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deadline-date { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.deadline-detail { min-width: 0; color: var(--muted); font-size: .74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deadline-state { padding: .18rem .55rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.deadline-state.frozenUnmet { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
+.deadline-state.currentlyReached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }
+.deadline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

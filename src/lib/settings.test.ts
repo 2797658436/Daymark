@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CALENDAR_SCALE_RANGE, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./settings";
+import { CALENDAR_SCALE_RANGE, PAGE_IDS, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./settings";
 
 class MemoryBackend implements SettingsBackend {
   value: unknown;
@@ -271,5 +271,21 @@ describe("settings persistence", () => {
     // 未知周期与非法日期回退默认值；旧设置没有这两个字段时同样安全。
     expect(repository.normalize({ reviewPeriod: "quarter", reviewAnchorDate: "2026-02-30" }))
       .toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
+  });
+
+  /**
+   * 阶段 4 P4-06 / 规格 §6.2：`PageId` 的合法值有三处来源 —— 类型联合、`lastPage` 的
+   * 规范化白名单、`App.tsx` 的导航表。类型与白名单同源于 `PAGE_IDS`，这里逐项证明
+   * 白名单真的接受每一个合法页面：只改类型不改白名单会让运行期静默回退到默认页。
+   * 第三处（导航表）由 `App.test.tsx` 的「每个入口都可达且跨重启恢复」覆盖。
+   */
+  it("accepts every declared page id as lastPage and still migrates the legacy overview alias", async () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    for (const page of PAGE_IDS) {
+      expect(repository.normalize({ ...DEFAULT_SETTINGS, lastPage: page })).toMatchObject({ lastPage: page });
+    }
+    expect(PAGE_IDS).toContain("deadlines");
+    expect(repository.normalize({ ...DEFAULT_SETTINGS, lastPage: "overview" })).toMatchObject({ lastPage: "today" });
+    expect(repository.normalize({ ...DEFAULT_SETTINGS, lastPage: "missing" })).toMatchObject({ lastPage: "today" });
   });
 });

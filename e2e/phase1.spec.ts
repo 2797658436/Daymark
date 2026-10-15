@@ -732,3 +732,116 @@ test("phase 4 M9 restores each timeline view's browsing position after a restart
 function localDate(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
+
+/**
+ * 阶段 4 P4-06 / AC10：截止事项页的跨页返回与「安排必须预览确认」。
+ *
+ * 筛选、焦点项与滚动位置只活在 App 层内存里：同一会话内跨页返回仍然有效，整页
+ * 重载（应用重启）后回到默认筛选。这里用固定的本地日期 2026-08-05 让四个分组都
+ * 有内容，并且内容高度超过 760px 视口，滚动位置才有意义。
+ */
+const DEADLINE_TODAY = "2026-08-05";
+
+function deadlineWorkspace() {
+  const dated = (id: string, day: string, sortOrder: number) => ({
+    id, projectId: null, title: `截止任务 ${id.slice(-2)}`, progress: 0, status: "active",
+    deadlineLocal: day, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder, kind: "task",
+  });
+  return {
+    projects: [{ id: "p-1", title: "学习项目", deadlineLocal: "2026-08-20" }],
+    tasks: [
+      dated("t-01", "2026-08-01", 0), dated("t-02", "2026-08-02", 1), dated("t-03", DEADLINE_TODAY, 2),
+      dated("t-04", DEADLINE_TODAY, 3), dated("t-05", DEADLINE_TODAY, 4), dated("t-06", "2026-08-06", 5),
+      dated("t-07", "2026-08-07", 6), dated("t-08", "2026-08-08", 7), dated("t-09", "2026-08-11", 8),
+      dated("t-10", "2026-08-12", 9), dated("t-11", "2026-08-20", 10), dated("t-12", "2026-09-01", 11),
+      { id: "t-done", projectId: "p-1", title: "项目内已完成任务", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 60, priority: "normal", sortOrder: 12, kind: "task" },
+    ],
+    projectMilestones: [
+      { id: "m-frozen", projectId: "p-1", title: "冻结的里程碑", targetLocalDate: "2026-08-03", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 2, targetProgress: null },
+      { id: "m-reached", projectId: "p-1", title: "阶段检查点", targetLocalDate: "2026-08-06", sortOrder: 1, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null },
+    ],
+    milestoneOutcomes: [{ id: "o-1", milestoneId: "m-frozen", projectId: "p-1", title: "冻结的里程碑", targetLocalDate: "2026-08-03", reached: false, resultText: "完成 0/2，未达成", frozenAtUtc: "2026-08-04T00:00:00Z" }],
+    executionSessions: [], executionRecords: [], progressEvents: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+  };
+}
+
+async function seedDeadlines(page: import("@playwright/test").Page) {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({ lastPage: "deadlines" }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, deadlineWorkspace());
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
+}
+
+const sidebar = (page: import("@playwright/test").Page) => page.getByRole("navigation", { name: "主导航" });
+
+test("phase 4 M10 keeps the deadline filter, focus and scroll across a round trip but not across a restart", async ({ page }) => {
+  await seedDeadlines(page);
+  const main = page.locator("#main-content");
+  const rows = page.locator("[data-deadline-key]");
+
+  // 四个分组都按本地日期切分：已逾期 / 今天 / 未来七天（含 today+7）/ 以后。
+  await expect(page.locator('[data-deadline-group="overdue"] .deadline-title')).toHaveCount(3);
+  await expect(page.locator('[data-deadline-group="today"] .deadline-title')).toHaveCount(3);
+  await expect(page.locator('[data-deadline-group="nextSevenDays"] .deadline-title')).toHaveCount(5);
+  await expect(page.locator('[data-deadline-group="later"] .deadline-title')).toHaveCount(3);
+  // 当前达成项默认隐藏，冻结未达成项保留原结果。
+  await expect(page.locator(".deadline-state.currentlyReached")).toHaveCount(0);
+  await expect(page.locator(".deadline-state.frozenUnmet")).toHaveCount(1);
+  await expect(page.getByText("完成 0/2，未达成")).toBeVisible();
+
+  // 非默认筛选：把当前已达成的里程碑显示出来。
+  await page.getByLabel("显示当前已达成的里程碑").check();
+  await expect(page.getByText("阶段检查点")).toBeVisible();
+  await expect(page.locator(".deadline-state.currentlyReached")).toHaveCount(1);
+  await expect(rows).toHaveCount(15);
+
+  await main.evaluate((element) => { element.scrollTop = 320; });
+  await page.getByRole("button", { name: "编辑任务 截止任务 06" }).click();
+  await expect(page.getByRole("dialog", { name: "编辑任务 截止任务 06" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const before = await main.evaluate((element) => element.scrollTop);
+  expect(before).toBeGreaterThan(0);
+
+  // 跨页离开再回来：目标页更短，位置被浏览器夹到 0，回来必须由内存恢复。
+  await sidebar(page).getByRole("button", { name: "项目" }).click();
+  await expect(page.getByRole("heading", { name: "项目", level: 1 })).toBeVisible();
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
+
+  await sidebar(page).getByRole("button", { name: "截止事项" }).click();
+  await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("显示当前已达成的里程碑")).toBeChecked();
+  await expect(rows).toHaveCount(15);
+  expect(Math.abs(await main.evaluate((element) => element.scrollTop) - before)).toBeLessThanOrEqual(2);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-deadline-key]")?.getAttribute("data-deadline-key") ?? null)).toBe("task:t-06");
+
+  // 重启（整页重载）后不恢复：筛选与焦点回到默认。
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
+  await expect(page.getByLabel("显示当前已达成的里程碑")).not.toBeChecked();
+  await expect(rows).toHaveCount(14);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
+});
+
+test("phase 4 M10 previews the deadline schedule draft before writing any session", async ({ page }) => {
+  await seedDeadlines(page);
+  const sessionCount = () => page.evaluate(() => {
+    const raw = localStorage.getItem("daymark.phase1.workspace");
+    return raw ? (JSON.parse(raw) as { executionSessions: unknown[] }).executionSessions.length : -1;
+  });
+  expect(await sessionCount()).toBe(0);
+
+  await page.getByRole("button", { name: "安排任务 截止任务 03" }).click();
+  await expect(page.getByRole("dialog", { name: "自动排程 Lite" })).toBeVisible();
+  await page.getByRole("button", { name: "生成排程草案" }).click();
+
+  // 草案只是预览：确认之前不写入任何执行时段。
+  await expect(page.getByRole("dialog", { name: "确认排程草案" })).toBeVisible();
+  expect(await sessionCount()).toBe(0);
+
+  await page.getByRole("button", { name: /^应用 \d+ 个时段$/ }).click();
+  await expect.poll(sessionCount).toBeGreaterThan(0);
+});
