@@ -1,3 +1,4 @@
+import { localDaysBetween } from "./deadlines";
 import type { ExecutionSession, Project, ProjectMilestone, Task, WorkspaceSnapshot } from "./native";
 
 export type CalendarSummaryKind = "scheduled" | "deadline" | "projectDeadline" | "milestone" | "completed" | "progressed" | "missed";
@@ -116,8 +117,10 @@ function uniqueTasks(tasks: Array<Task | undefined>) {
 export function deadlineUrgency(deadline: string, today = browserLocalDate(new Date())): DeadlineUrgency {
   if (deadline < today) return "overdue";
   if (deadline === today) return "today";
-  const milliseconds = new Date(`${deadline}T12:00:00`).getTime() - new Date(`${today}T12:00:00`).getTime();
-  return milliseconds <= 7 * 86_400_000 ? "soon" : "later";
+  // 按**日历日**判定，不按毫秒差：秋季夏令时回拨那一周的本地日是 25 小时，用
+  // `7 * 86_400_000` 会把「正好 7 个日历日之后」算成 8 天、错标成「未来截止」。
+  // 与截止事项页共用同一份本地日历运算（`deadlines.ts`）。
+  return localDaysBetween(today, deadline) <= 7 ? "soon" : "later";
 }
 
 export function deadlineUrgencyLabel(urgency: DeadlineUrgency) {
