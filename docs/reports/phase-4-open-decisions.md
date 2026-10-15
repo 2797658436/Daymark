@@ -23,6 +23,23 @@
 
 ---
 
+## 0.5 决议（2026-10-15）
+
+用户确认「按评估执行」，六条全部落定：
+
+| 编号 | 决议 | 落地 |
+| --- | --- | --- |
+| **D1** 截止页常驻任务池 | **不加** | 无代码改动（`hasTaskPool` 仍不含 `deadlines`）。截止页保持「集中查看 + 行级安排」。 |
+| **D2** 关键字匹配项目名 | **不加** | 补一条钉住口径的用例：`deadlines.test.ts` 的「matches keywords against the title only, never the owning project's name」。 |
+| **D3** 同一天项目排序 | **保持按标题** | 补一条「输入顺序无关」断言：`deadlines.test.ts` 的「produces the same order no matter how the workspace arrays are ordered」——把任务／项目／里程碑数组全部颠倒，输出必须逐字节相同。 |
+| **D4** `deadlineUrgency` 改日历运算 | **改** | `calendarSummary.ts` 改用 `deadlines.ts` 的 `localDaysBetween`；新增 `src/lib/calendarSummary.timezone.test.ts`（切到 America/New_York，先自检目标日 25 小时再断言）。 |
+| **D5** 「回到现在」写浏览偏好 | **保持写** | 补 E2E：`e2e/phase1.spec.ts` 的「phase 4 M9 records 'back to now' as the remembered browsing position」——手动滚走记 186 分钟，点「回到现在」后记 841 分钟（= 14:00）。 |
+| **D6** 导航入口位置 | **保持** | 无代码改动。 |
+
+**D5 的测试为什么放在 E2E**：jsdom 没有布局，`scrollIntoView` 是空实现，`revealNow()` 在组件测试里根本不会滚动，所以钩子层测不出来。另外日视图有「三日缓冲」，手动滚到顶端会被应用自己重新居中（实测 `scrollTop` 由 0 变 1246），那次定位是程序性的、本来就不该写偏好 —— 所以这条用例用**周视图**（无缓冲）。
+
+---
+
 ## 1. 需要拍板的
 
 ### D1 截止页是否常驻任务池（P4-06 §9.1）
