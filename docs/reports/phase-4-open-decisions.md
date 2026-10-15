@@ -92,12 +92,14 @@ return milliseconds <= 7 * 86_400_000 ? "soon" : "later";
 
 **这是真 bug，不只是口径不统一**：两个本地正午之间的毫秒差在夏令时切换周**不等于** `N × 24h`。秋季回拨（多出 1 小时）时，「正好 7 个日历日之后」的截止日会算成 `608,400,000 > 604,800,000` → 被判成 `later`（「未来截止」），而它应该是 `soon`（「7 天内截止」）。只影响日历标记的文案与样式，不影响任何事实。
 
-**怎么测 —— 先说一个本机实测结论**：**DST 在这台机器上无法用运行时复现**。实测 `TZ=America/New_York`（含 `env` 与 `export` 两种写法）后，Node 里 `process.env.TZ` 仍是 `undefined`、`Intl.DateTimeFormat().resolvedOptions().timeZone` 仍是 `Asia/Shanghai`、`getTimezoneOffset()` 恒为 `-480` —— 环境变量被沙箱剥掉了。所以「写一条跨 DST 的 Vitest 用例」在这里**做不到**。
+**怎么测 —— 先纠正一个我一开始弄错的结论**：**DST 在本机是可以运行时复现的**。`TZ=America/New_York node ...` 这种**环境变量前缀无效**（沙箱把 TZ 剥掉，`process.env.TZ` 仍是 `undefined`、时区恒为 `Asia/Shanghai`），但在 **Node 进程内部**赋值立刻生效：`node -e "process.env.TZ='America/New_York'; ..."` → `getTimezoneOffset()` 从 240 变 300。
 
-可行的测法两步：
+实测证据：`2026-10-25` 到 `2026-11-01`（北美夏令时结束那天，本地日 25 小时）正好 7 个日历日，却算得 `608,400,000 > 604,800,000` → 判成 `later`（应为 `soon`）。
 
-1. **把日差抽成纯日历函数**（例如 `localDaysBetween(from, to)`，用日历字段／`Date.UTC` 整数运算），单测它；`deadlineUrgency` 改用它。DST 正确性由此**由构造保证**，不依赖运行环境。
-2. **加一条结构性护栏**：读 `src/lib/calendarSummary.ts` 源文本，断言不再出现 `86_400_000`／`* 24 * 60 * 60 * 1000` 这类固定毫秒日长。仓库已有先例 —— `src/lib/nativeBuildConfig.test.ts` 就是读 `Cargo.toml` 守一个「看起来没用其实必需」的配置。
+测法两步（照 `src/lib/review.timezone.test.ts` 的既有做法）：
+
+1. **一条 Vitest 用例**：`beforeAll` 里 `process.env.TZ = "America/New_York"`、`afterAll` 还原（Vitest 默认按文件隔离进程，不外溢），断言边界日判成 `soon`；并先断言目标日确实是 25 小时，防止时区没生效时空跑。
+2. **把日差抽成纯日历函数**（`localDaysBetween`），`deadlineUrgency` 改用它；再加一条**结构性护栏**读源文本，断言不再出现 `86_400_000` 这类固定毫秒日长（照 `nativeBuildConfig.test.ts` 的先例）。
 
 **建议：改。** 成本极低，消除一处与截止页新口径的分叉；同时把「本机无 DST、无法运行时证伪」写进报告，与 P4-06 报告 §7 的既有已知局限保持一致。
 
@@ -159,5 +161,5 @@ npm run test:native
 
 ## 4. 附：两条与「怎么测」直接相关的本机实测事实
 
-1. **`TZ` 在本沙箱被剥掉**，Node 恒为 `Asia/Shanghai` → **DST 相关行为无法在本机运行时复现**。凡是「只在夏令时切换周才错」的逻辑，本机只能靠**构造性保证 + 结构性护栏**守住，不能靠跑用例证伪。D4 即属此类。
+1. **`TZ` 只在「进程内部赋值」时生效**：`TZ=... node` 这种 shell 前缀会被沙箱剥掉（`process.env.TZ` 为 `undefined`、时区恒为 `Asia/Shanghai`），但在 Node/Vitest 里 `process.env.TZ = "..."` 立刻生效。所以 **DST 相关行为在本机是可以运行时证伪的** —— 用 `beforeAll` 切时区即可，`src/lib/review.timezone.test.ts` 已经是这个做法。对 D4 这类缺陷，运行时用例 + 结构性护栏两者都建议有。
 2. **Playwright 默认不录 trace**（`PW_TRACE=1` 才录），`run-e2e.mjs` 启动前会把 `test-results/` 残留用 rename 挪进 `_quarantine/`。原因是沙箱 safe-delete 有「单轮 50 条」上限，trace 的 screencast 逐帧 jpeg 会让一次运行产出约 2,000 个文件、把下一次启动堵死。改测试基础设施时别把这两道去掉。
