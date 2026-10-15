@@ -135,7 +135,10 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
 test("running execution ends with a manual progress summary and remains after reload", async ({ page }) => {
   const now = new Date();
   const today = localDate(now);
-  const start = new Date(now.getTime() - 60_000).toISOString();
+  // 起点夹到「今天 00:00」以内：运行中的记录会渲染到 now，跨午夜时同样会在两个日期列
+  // 各出现一次（`key` 是 `${record.id}:${date}`），午夜后一分钟内跑会命中 strict violation。
+  const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+  const start = new Date(Math.max(now.getTime() - 60_000, dayStart.getTime())).toISOString();
   await page.evaluate(({ today, start }) => {
     localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
       appearance: "system", motion: "system", scale: 100, lastPage: "today", calendarView: "week",
@@ -225,11 +228,18 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   await page.getByRole("button", { name: "创建任务" }).click();
   await page.getByRole("button", { name: "日历", exact: true }).click();
   const period = page.getByLabel("当前日历日期");
+  // 翻页后**不能立刻读 textContent**：React 还没重渲染时读到的是旧标签，拿它去断言之后
+  // 会随机失败（实测 3 次里抖 1 次）。先等标签真的变了再捕获。
+  const beforeWeek = await period.textContent();
   await page.getByRole("button", { name: "下一段日期" }).click();
+  await expect.poll(() => period.textContent()).not.toBe(beforeWeek);
   const futureWeek = await period.textContent();
   await page.getByRole("button", { name: "紧凑" }).click();
   await page.getByRole("button", { name: "月", exact: true }).click();
+  await expect(page.getByRole("button", { name: "月", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const beforeMonth = await period.textContent();
   await page.getByRole("button", { name: "下一段日期" }).click();
+  await expect.poll(() => period.textContent()).not.toBe(beforeMonth);
   const futureMonth = await period.textContent();
   await page.getByRole("button", { name: "详细" }).click();
 
@@ -268,6 +278,10 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
   await page.evaluate(() => {
     const now = new Date();
     const today = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    // 实际记录固定放在**今天上午的固定时刻**，而不是「相对 now 的最近 20 分钟」：
+    // 跨午夜的记录会在两个日期列里各渲染一次（`key` 是 `${record.id}:${date}`，这是
+    // 正确行为），于是午夜后 20 分钟内跑这条用例会命中 strict mode violation。
+    const at = (hour: number, minute: number) => { const date = new Date(); date.setHours(hour, minute, 0, 0); return date.toISOString(); };
     localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
       lastPage: "calendar", calendarView: "week", calendarAnchors: { day: today, week: today, month: today },
       calendarZoom: { day: "standard", week: "standard", month: "standard" }, showActualRecords: true,
@@ -282,7 +296,7 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
         { id: "session-m2", taskId: "task-m2", localDate: today, endLocalDate: today, startLocal: "00:00", endLocal: "23:59", timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" },
         { id: "session-review", taskId: "task-review", localDate: today, endLocalDate: today, startLocal: "00:00", endLocal: "00:01", timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" },
       ],
-      executionRecords: [{ id: "record-m2", sessionId: "session-m2", taskId: "task-m2", actualStartUtc: new Date(now.getTime() - 20 * 60_000).toISOString(), actualEndUtc: new Date(now.getTime() - 5 * 60_000).toISOString(), note: "" }],
+      executionRecords: [{ id: "record-m2", sessionId: "session-m2", taskId: "task-m2", actualStartUtc: at(9, 0), actualEndUtc: at(9, 15), note: "" }],
     }));
   });
   await page.reload();

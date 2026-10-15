@@ -1773,7 +1773,8 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       stubDayAxisLayout(axis);
       act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
-      await new Promise((resolve) => setTimeout(resolve, 360));
+      // 固定等 360ms 在机器忙时会读到还没落库的偏好；等条件成立再断言，断言值不变。
+      await waitFor(() => expect((backend.value as AppSettings).calendarPositions.day).not.toBeNull());
 
       // 用户滚动停止 300ms 后的采样值经同一条顺序写入落到偏好里。
       expect((backend.value as AppSettings).calendarPositions.day).toEqual({ date: "2026-08-05", minute: 720, viewportRatio: 0.5 });
@@ -1803,7 +1804,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
-      await new Promise((resolve) => setTimeout(resolve, 360));
+      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull());
       expect(readCalendarPositions().day?.minute).toBe(720);
       first.unmount();
 
@@ -1836,7 +1837,9 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       const layout = stubDayAxisLayout(axis);
       act(() => { axis.scrollTop = 500; axis.dispatchEvent(new Event("scroll")); });
-      await new Promise((resolve) => setTimeout(resolve, 360));
+      // 落定防抖 300ms + 采样是异步的：固定等 360ms 在机器忙时还没跑完，`day` 仍是 null，
+      // 重负载下会随机红（单独跑与重跑都过）。等条件成立再读，断言值不变。
+      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull());
       const remembered = readCalendarPositions().day;
       expect(remembered?.minute).toBeCloseTo((500 + 300 - 40) / 1152 * 1440, 3);
 
