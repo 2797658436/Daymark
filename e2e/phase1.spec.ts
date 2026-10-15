@@ -845,3 +845,47 @@ test("phase 4 M10 previews the deadline schedule draft before writing any sessio
   await page.getByRole("button", { name: /^应用 \d+ 个时段$/ }).click();
   await expect.poll(sessionCount).toBeGreaterThan(0);
 });
+
+/**
+ * D5 口径（`docs/reports/phase-4-decisions-walkthrough.md`）：「回到现在」是用户**明确请求**
+ * 的落点，落定后写进浏览偏好 —— 下次打开仍停在「现在」，而不是上次手动滚到的地方。
+ * 优先级 6 的首次自动定位刻意不同（只刷新内存位置、不写偏好），两者不能"统一"掉。
+ *
+ * 只能在真实浏览器里测：jsdom 没有布局、`scrollIntoView` 是空实现，revealNow 不会真的滚动。
+ */
+test("phase 4 M9 records 'back to now' as the remembered browsing position", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date("2026-08-05T14:00:00"));
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "detailed" },
+      calendarScale: { day: 48, week: 48, month: 104 },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [{ id: "d5-task", projectId: null, title: "D5 安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "d5-session", taskId: "d5-task", localDate: date, endLocalDate: date, startLocal: "09:00", endLocal: "10:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" }],
+    }));
+  }, anchor);
+  await page.reload();
+
+  /** 偏好里已经落定的周视图浏览位置；写入是异步的（滚动停止后采样），所以要轮询。 */
+  const storedWeekMinute = () => page.evaluate(() => {
+    const raw = localStorage.getItem("daymark.phase0.preferences");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { calendarPositions?: { week?: { minute: number } | null } };
+    return parsed.calendarPositions?.week?.minute ?? null;
+  });
+
+  // 先手动滚到时间轴顶端，让「回到现在」出现。周视图没有三日缓冲，滚动不会被应用自己改写。
+  const viewport = page.locator(".calendar-viewport");
+  await viewport.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+  await expect(page.getByRole("button", { name: "回到现在" })).toBeVisible();
+  await expect.poll(storedWeekMinute, { timeout: 5_000 }).toBeLessThan(700);
+
+  // 点「回到现在」→ 视口中心落在 14:00（840 分钟），并把这次落定写进偏好。
+  await page.getByRole("button", { name: "回到现在" }).click();
+  await expect.poll(storedWeekMinute, { timeout: 5_000 }).toBeGreaterThan(800);
+});

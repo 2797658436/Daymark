@@ -94,6 +94,26 @@ describe("deadline sorting", () => {
     }), TODAY);
     expect(items.map((item) => item.title)).toEqual(["A 项目", "B 项目"]);
   });
+
+  it("produces the same order no matter how the workspace arrays are ordered", () => {
+    // 「确定性全序」的真正判据：顺序只能由数据决定，不能由输入数组的排列决定。
+    // 项目没有 sortOrder，所以它的那一级用标题收尾；这条用例保证没有哪一级偷偷依赖了输入顺序。
+    const tasks = [
+      task("t-a", { deadlineLocal: TODAY, sortOrder: 1 }),
+      task("t-b", { deadlineLocal: TODAY, sortOrder: 1 }),
+      task("t-c", { deadlineLocal: addLocalDays(TODAY, 2), sortOrder: 0 }),
+    ];
+    const projects = [project("p-2", { title: "B 项目", deadlineLocal: TODAY }), project("p-1", { title: "A 项目", deadlineLocal: TODAY })];
+    const projectMilestones = [milestone("m-2", "p-1", { sortOrder: 1 }), milestone("m-1", "p-1", { sortOrder: 0 })];
+
+    const forward = buildDeadlineItems(workspace({ tasks, projects, projectMilestones }), TODAY).map((item) => item.key);
+    const reversed = buildDeadlineItems(workspace({
+      tasks: [...tasks].reverse(), projects: [...projects].reverse(), projectMilestones: [...projectMilestones].reverse(),
+    }), TODAY).map((item) => item.key);
+
+    expect(reversed).toEqual(forward);
+    expect(forward).toEqual(["task:t-a", "task:t-b", "project:p-1", "project:p-2", "milestone:m-1", "milestone:m-2", "task:t-c"]);
+  });
 });
 
 describe("deadline task rules", () => {
@@ -134,6 +154,18 @@ describe("deadline task rules", () => {
     const searched = buildDeadlineItems(snapshot, TODAY, withFilter({ query: "alpha" }));
     expect(searched.map((item) => item.sourceId)).toEqual(["in-project", "alpha-2"]);
     expect(searched[0]).toEqual({ key: "task:in-project", kind: "task", sourceId: "in-project", projectId: "p-1", date: TODAY, title: "Alpha 一", state: "open" });
+  });
+
+  it("matches keywords against the title only, never the owning project's name", () => {
+    // 刻意的产品口径（D2）：搜「Rust」不会因为项目名命中而带出该项目下标题不含关键字的
+    // 任务 —— 想按项目看就用「项目」下拉筛选。
+    const snapshot = workspace({
+      projects: [project("p-rust", { title: "Rust 入门" })],
+      tasks: [task("t-1", { projectId: "p-rust", title: "起步", deadlineLocal: TODAY })],
+    });
+    expect(buildDeadlineItems(snapshot, TODAY).map((item) => item.sourceId)).toEqual(["t-1"]);
+    expect(buildDeadlineItems(snapshot, TODAY, withFilter({ query: "Rust" }))).toEqual([]);
+    expect(buildDeadlineItems(snapshot, TODAY, withFilter({ projectId: "p-rust" })).map((item) => item.sourceId)).toEqual(["t-1"]);
   });
 
   it("keeps task items keyed by kind and source id and resolves them against the index", () => {
