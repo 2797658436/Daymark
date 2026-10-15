@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEADLINE_GROUP_ORDER, DEFAULT_DEADLINE_FILTER, addLocalDays, buildDeadlineItems, buildDeadlineItemsFromIndex, deadlineGroupOf,
+  DEADLINE_GROUP_ORDER, DEFAULT_DEADLINE_FILTER, addLocalDays, addLocalMonths, buildDeadlineItems, buildDeadlineItemsFromIndex, deadlineGroupOf,
   deadlineItemSourceExists, groupDeadlineItems, isDefaultDeadlineFilter, localDaysBetween, type DeadlineFilter,
 } from "./deadlines";
 import { createWorkspaceIndex, projectTaskCounts } from "./workspaceSelectors";
@@ -55,6 +55,21 @@ describe("deadline grouping", () => {
     expect(localDaysBetween("2026-03-07", "2026-03-14")).toBe(7);
     expect(localDaysBetween("2026-03-14", "2026-03-07")).toBe(-7);
     expect(localDaysBetween("2026-02-28", "2026-03-01")).toBe(1);
+  });
+
+  it("adds whole calendar months without overflowing into the next one", () => {
+    // 回顾页翻月用它：1 月 31 日 +1 个月必须是 2 月末，而不是 3 月 3 日。
+    expect(addLocalMonths("2026-01-31", 1)).toBe("2026-02-28");
+    expect(addLocalMonths("2028-01-31", 1)).toBe("2028-02-29");
+    expect(addLocalMonths("2026-03-07", -1)).toBe("2026-02-07");
+    expect(addLocalMonths("2026-03-07", 1)).toBe("2026-04-07");
+    expect(addLocalMonths("2026-12-15", 1)).toBe("2027-01-15");
+    expect(addLocalMonths("2026-01-15", -1)).toBe("2025-12-15");
+    expect(addLocalMonths("2026-03-31", -1)).toBe("2026-02-28");
+    // 不受月末收敛影响的日期，前后各一个月的往返必须恒等。
+    for (const date of ["2026-03-07", "2026-12-31", "2028-02-29"]) {
+      expect(addLocalMonths(addLocalMonths(date, 1), -1), `${date} 往返`).toBe(date);
+    }
   });
 
   it("groups only the buckets that actually hold items, in the fixed order", () => {

@@ -227,6 +227,23 @@ export function localDaysBetween(from: string, to: string): number {
   return Math.round((utcMidnight(to) - utcMidnight(from)) / 86_400_000);
 }
 
+/**
+ * 本地日历**月**加减：先归到目标月的 1 日再按整数月偏移，日号超过目标月长度时收敛到
+ * 月末（`2026-01-31` +1 → `2026-02-28`）。
+ *
+ * 回顾页翻月用它，而不是 `setMonth()`：后者在 1 月 31 日 +1 个月时会先溢出到 3 月 3 日
+ * 再回退，得到的是「最近 30 天」式的月份，而不是自然月。与 `addLocalDays` 同源，
+ * 只做日历字段的整数运算。
+ */
+export function addLocalMonths(date: string, amount: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1 + amount, 1));
+  const targetYear = shifted.getUTCFullYear();
+  const targetMonth = shifted.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  return `${targetYear}-${pad(targetMonth)}-${pad(Math.min(day, lastDay))}`;
+}
+
 export function localDateOf(value: Date): string {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
 }

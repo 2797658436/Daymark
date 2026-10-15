@@ -465,19 +465,68 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-time-block[data-landed="true"] { transition: none; }
 @container (max-height: 26px) { .calendar-time-block { padding-block: 2px; align-content: center; } .calendar-time-block time { display: none; } }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
-.review-outcomes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
-.review-outcomes > section { display: grid; gap: 8px; }
-.review-outcomes h2, .review-outcomes p { margin: 0; }
+/* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
+.review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
+.review-outcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 14px; align-items: start; }
+.review-outcome-block { display: grid; gap: 6px; }
+.review-outcome-block h3, .review-not-advanced h3, .review-drilldown h3 { margin: 0; font-size: .82rem; color: var(--muted-strong); }
+.review-outcome-block p { margin: 0; }
 .review-task-list { display: flex; flex-wrap: wrap; gap: 5px; }
-.review-task-list span { padding: 4px 9px; border-radius: 999px; background: var(--panel-strong); color: var(--muted); font-size: .76rem; border: 1px solid var(--line-soft); }
-.review-days { display: grid; gap: 0; }
-.review-days article { display: grid; grid-template-columns: 76px minmax(80px, 1fr) minmax(260px, 2fr); gap: 14px; align-items: center; min-height: 50px; padding: 6px 0; border-top: 1px solid var(--line-soft); transition: background .12s ease; }
-.review-days article:hover { background: var(--panel-strong); margin-inline: -8px; padding-inline: 8px; border-top-color: transparent; border-radius: 8px; }
-.review-days time { display: grid; font-weight: 600; }
-.review-days time small { color: var(--muted); font-weight: 400; }
-.review-days p { margin: 0; color: var(--muted); font-size: .78rem; }
-.review-bar { height: 8px; overflow: hidden; border-radius: 999px; background: var(--panel-strong); box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
-.review-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 80%, var(--accent-strong))); transition: width .25s ease; }
+.review-task-chip { padding: 4px 9px; border-radius: 999px; background: var(--panel-strong); color: var(--text); border: 1px solid var(--line-soft); font-size: .76rem; }
+.review-task-chip:hover { border-color: var(--line-strong); }
+.review-inline-link { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; text-align: left; }
+.review-inline-link:hover { text-decoration: underline; }
+.review-muted { margin: 0; color: var(--muted); font-size: .78rem; }
+.review-notice { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted); font-size: .8rem; }
+.review-tag { padding: .14rem .5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.review-not-advanced { display: grid; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
+
+/* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
+.review-chart-figure { display: grid; gap: 8px; margin: 0; }
+.review-chart-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.review-chart-caption strong { font-size: .88rem; }
+.review-chart-caption span { color: var(--muted); font-size: .74rem; }
+.review-chart { display: grid; gap: 4px; }
+.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 132px; padding-inline: 2px; }
+.review-chart-zero { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
+.review-chart-column { position: relative; flex: 1 1 0; min-width: 0; }
+.review-chart-bar { position: absolute; left: 14%; right: 14%; border-radius: 4px 4px 0 0; background: var(--accent); }
+/* 下调用中性色 + 边框：它是事实，不是「更差的热度」，所以不做深浅色阶。 */
+.review-chart-bar.down { background: var(--muted-strong); border-radius: 0 0 4px 4px; }
+.review-chart-bar.flat { background: var(--line-strong); border-radius: 0; }
+.review-chart-ticks { display: flex; gap: 3px; padding-inline: 2px; }
+.review-chart-ticks span { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: center; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.review-chart-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.review-chart-table th, .review-chart-table td { padding: 5px 8px; border-top: 1px solid var(--line-soft); text-align: left; font-weight: 400; }
+.review-chart-table thead th { color: var(--muted); font-size: .72rem; border-top: 0; }
+.review-chart-table tbody th { color: var(--muted-strong); white-space: nowrap; }
+.review-chart-table td { font-variant-numeric: tabular-nums; }
+.review-chart-date { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; }
+.review-chart-date:hover { text-decoration: underline; }
+.review-chart-empty { margin: 0; color: var(--muted); font-size: .8rem; }
+.review-chart-note { margin: 0; color: var(--muted); font-size: .74rem; }
+
+/* ③ 任务／项目明细：行会换行，窄窗口与 200% 缩放下不横向溢出。 */
+.review-detail-rows { display: grid; gap: 8px; }
+.review-detail-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
+.review-detail-main { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.review-detail-title { font-size: .86rem; }
+.review-detail-range, .review-detail-metric { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.review-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* 页面内明细区：非模态，Tab 可进出；打开时聚焦容器，所以焦点环要可见。 */
+.review-drilldown { display: grid; gap: 10px; border-color: var(--line); }
+.review-drilldown:focus { outline: 2px solid var(--focus); outline-offset: 2px; }
+.review-detail-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 8px 16px; margin: 0; }
+.review-detail-facts > div { display: grid; gap: 2px; }
+.review-detail-facts dt { color: var(--muted); font-size: .72rem; }
+.review-detail-facts dd { margin: 0; font-size: .82rem; }
+.review-detail-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.review-detail-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--line-soft); font-size: .78rem; }
+.review-detail-list li:first-child { border-top: 0; }
+.review-detail-list time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.review-notes ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--muted); font-size: .78rem; }
 .import-source { color: var(--muted); font-size: .8rem; }
 
 @media (max-width: 1199px) {
@@ -501,7 +550,6 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
   .time-block-form { grid-template-columns: 1fr 1fr; }
   .rescue-card { align-items: flex-start; flex-direction: column; }
   .rescue-actions { justify-content: flex-start; }
-  .review-days article { grid-template-columns: 68px 1fr; }.review-days p { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 :root[data-motion="reduce"] *, :root[data-motion="reduce"] *::before, :root[data-motion="reduce"] *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }

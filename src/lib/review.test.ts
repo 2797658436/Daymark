@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { EMPTY_WORKSPACE, type ExecutionRecord, type ExecutionSession, type HabitOccurrence, type ProgressEvent, type RecurringHabit, type Task, type WorkspaceSnapshot } from "./native";
-import { buildReview, buildReviewFromIndex, buildSevenDayReview, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, reviewRange, type ReviewResult } from "./review";
+import { buildReview, buildReviewFromIndex, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, reviewRange, type ReviewResult } from "./review";
 import { createWorkspaceIndex, pendingReviewSessions } from "./workspaceSelectors";
 
 /**
@@ -482,8 +482,8 @@ describe("day, week and month aggregation", () => {
   });
 });
 
-describe("seven-day compatibility entry", () => {
-  it("summarizes progress, actual input and missed facts without a score", () => {
+describe("period facts for the review page", () => {
+  it("summarizes progress, actual input and skipped facts without a score", () => {
     const snapshot = workspace({
       tasks: [
         task("done", { progress: 100, status: "completed", estimatedMinutes: 30, sortOrder: 0 }),
@@ -496,12 +496,13 @@ describe("seven-day compatibility entry", () => {
       executionSessions: [session("s1", { taskId: "carry", localDate: "2026-08-02", endLocalDate: "2026-08-02", startLocal: "19:00", endLocal: "20:00", status: "missed" })],
       executionRecords: [record("r1", { sessionId: null, taskId: "done", actualStartUtc: "2026-08-01T03:30:00.000Z", actualEndUtc: "2026-08-01T04:00:00.000Z" })],
     });
-    const review = buildSevenDayReview(snapshot, "2026-08-02", localNow("2026-08-02", "21:00"));
-    expect(review.completedTaskIds).toEqual(["done"]);
-    expect(review.progressedTaskIds).toEqual(["done", "carry"]);
+    const review = buildReview(snapshot, { period: "week", anchorDate: "2026-08-02", projectId: null }, localNow("2026-08-02", "21:00"));
+    expect(review.progress.completedTaskIds).toEqual(["done"]);
+    expect(review.progress.changedTaskIds).toEqual(["done", "carry"]);
     expect(review.carryoverTaskIds).toEqual(["carry"]);
-    expect(review.days.find((day) => day.date === "2026-08-01")).toMatchObject({ progressDelta: 40, actualMinutes: 30 });
-    expect(review.days.find((day) => day.date === "2026-08-02")).toMatchObject({ progressDelta: 20, missedCount: 1 });
+    expect(dayOf(review, "2026-08-01")).toMatchObject({ progressDelta: 40, recordedMinutes: 30 });
+    expect(dayOf(review, "2026-08-02")).toMatchObject({ progressDelta: 20, notAdvancedCount: 1 });
+    // 回顾是事实汇总：没有评分，也不计算连续天数。
     expect(review).not.toHaveProperty("score");
   });
 
@@ -513,18 +514,19 @@ describe("seven-day compatibility entry", () => {
       executionRecords: [record("record", { sessionId: "recovered", taskId: "habit-task", actualStartUtc: "2026-08-02T12:00:00.000Z", actualEndUtc: "2026-08-02T12:10:00.000Z", note: "recovered" })],
       habitOccurrences: [occurrence("skip", { habitId: "habit", localDate: "2026-08-02", sessionId: null })],
     });
-    const review = buildSevenDayReview(snapshot, "2026-08-02", localNow("2026-08-02", "21:00"));
-    expect(review.days.at(-1)).toMatchObject({ missedCount: 0, skippedCount: 1, actualMinutes: 10 });
+    const review = buildReview(snapshot, { period: "day", anchorDate: "2026-08-02", projectId: null }, localNow("2026-08-02", "21:00"));
+    expect(dayOf(review, "2026-08-02")).toMatchObject({ notAdvancedCount: 0, skippedCount: 1, recordedMinutes: 10 });
     expect(review.carryoverTaskIds).toEqual(["habit-task"]);
   });
 
   it("stays empty when there are no facts at all", () => {
-    const review = buildSevenDayReview(structuredClone(EMPTY_WORKSPACE), "2026-08-02", localNow("2026-08-02", "21:00"));
+    const review = buildReview(structuredClone(EMPTY_WORKSPACE), { period: "week", anchorDate: "2026-08-02", projectId: null }, localNow("2026-08-02", "21:00"));
     expect(review.days).toHaveLength(7);
-    expect(review.days.every((day) => day.actualMinutes === 0 && day.progressDelta === 0 && day.missedCount === 0 && day.skippedCount === 0)).toBe(true);
-    expect(review.completedTaskIds).toEqual([]);
-    expect(review.progressedTaskIds).toEqual([]);
+    expect(review.days.every((day) => day.recordedMinutes === 0 && day.progressDelta === 0 && day.notAdvancedCount === 0 && day.skippedCount === 0 && day.events.length === 0 && day.records.length === 0)).toBe(true);
+    expect(review.progress.completedTaskIds).toEqual([]);
+    expect(review.progress.changedTaskIds).toEqual([]);
     expect(review.carryoverTaskIds).toEqual([]);
+    expect(review.tasks).toEqual([]);
   });
 
   it("does not count media minutes or scheduled sessions without execution as actual input", () => {
@@ -535,31 +537,66 @@ describe("seven-day compatibility entry", () => {
       ],
       executionSessions: [session("s1", { taskId: "planned", localDate: "2026-08-02", endLocalDate: "2026-08-02", startLocal: "19:00", endLocal: "19:30" })],
     });
-    const review = buildSevenDayReview(snapshot, "2026-08-02", localNow("2026-08-02", "21:00"));
-    expect(review.days.reduce((sum, day) => sum + day.actualMinutes, 0)).toBe(0);
-    expect(review.days.find((day) => day.date === "2026-08-02")).toMatchObject({ missedCount: 0, skippedCount: 0 });
+    const review = buildReview(snapshot, { period: "day", anchorDate: "2026-08-02", projectId: null }, localNow("2026-08-02", "21:00"));
+    expect(review.actual.recordedMinutes).toBe(0);
+    expect(dayOf(review, "2026-08-02")).toMatchObject({ notAdvancedCount: 0, skippedCount: 0, runningCount: 0 });
   });
+});
 
-  it("is a thin adapter over the same engine: its seven days equal seven single-day reviews", () => {
+describe("drill-down detail", () => {
+  it("buckets each day's events and records without changing the day totals", () => {
     const snapshot = workspace({
       tasks: [task("t-1", { progress: 30 })],
       progressEvents: [
-        event("p-1", { fromProgress: 0, toProgress: 10, occurredAtUtc: localToUtc("2026-03-05", "09:00") }),
+        event("p-1", { fromProgress: 0, toProgress: 10, occurredAtUtc: localToUtc("2026-03-06", "09:00") }),
         event("p-2", { fromProgress: 10, toProgress: 30, occurredAtUtc: localToUtc("2026-03-07", "09:00") }),
       ],
-      executionSessions: [session("s-1", { localDate: "2026-03-06", endLocalDate: "2026-03-06" }), session("s-2", { localDate: "2026-03-07", endLocalDate: "2026-03-07", status: "skipped" })],
       executionRecords: [record("r-1", { actualStartUtc: localToUtc("2026-03-07", "23:50"), actualEndUtc: localToUtc("2026-03-08", "00:20") })],
     });
-    const now = localNow("2026-03-10", "12:00");
-    const seven = buildSevenDayReview(snapshot, "2026-03-08", now);
-    for (const day of seven.days) {
-      const single = buildReview(snapshot, { period: "day", anchorDate: day.date, projectId: null }, now);
-      expect({ date: day.date, progressDelta: day.progressDelta, actualMinutes: day.actualMinutes, missedCount: day.missedCount, skippedCount: day.skippedCount })
-        .toEqual({ date: day.date, progressDelta: single.progress.netDelta, actualMinutes: single.actual.recordedMinutes, missedCount: single.notAdvanced.missedSessions.length, skippedCount: single.notAdvanced.skippedSessions.length + single.notAdvanced.cancelledSessions.length + single.notAdvanced.skippedOccurrences.length });
-    }
-    // 刻意行为变化：跨午夜记录不再整段记在起始日。
-    expect(seven.days.find((day) => day.date === "2026-03-07")?.actualMinutes).toBe(10);
-    expect(seven.days.find((day) => day.date === "2026-03-08")?.actualMinutes).toBe(20);
+    const review = buildReview(snapshot, { period: "week", anchorDate: "2026-03-08", projectId: null }, NOON);
+    // 事件只出现在它发生的那一天：页面不必自己再分桶一次。
+    expect(dayOf(review, "2026-03-06").events.map((item) => item.id)).toEqual(["p-1"]);
+    expect(dayOf(review, "2026-03-07").events.map((item) => item.id)).toEqual(["p-2"]);
+    // 跨午夜的记录同时属于两天，但投入仍按交集毫秒切分。
+    expect(dayOf(review, "2026-03-07").records.map((item) => item.id)).toEqual(["r-1"]);
+    expect(dayOf(review, "2026-03-08").records.map((item) => item.id)).toEqual(["r-1"]);
+    expect(dayOf(review, "2026-03-07").recordedMinutes).toBe(10);
+    expect(dayOf(review, "2026-03-08").recordedMinutes).toBe(20);
+    // 汇总与明细可互相核对。
+    const seventh = dayOf(review, "2026-03-07");
+    expect(seventh.events.reduce((sum, item) => sum + item.toProgress - item.fromProgress, 0)).toBe(seventh.progressDelta);
+  });
+
+  it("keeps plan, finished records and running executions separate in the task detail", () => {
+    const snapshot = workspace({
+      tasks: [task("t-1")],
+      executionSessions: [session("s-1", { taskId: "t-1" })],
+      executionRecords: [
+        record("r-finished", { sessionId: "s-1", taskId: "t-1", actualStartUtc: localToUtc("2026-03-07", "09:00"), actualEndUtc: localToUtc("2026-03-07", "09:30") }),
+        record("r-running", { sessionId: null, taskId: "t-1", actualStartUtc: localToUtc("2026-03-07", "20:00"), actualEndUtc: null }),
+      ],
+    });
+    const detail = buildReview(snapshot, { period: "day", anchorDate: "2026-03-07", projectId: null }, NOON).tasks[0];
+    expect(detail.sessions.map((item) => item.id)).toEqual(["s-1"]);
+    expect(detail.records.map((item) => item.id)).toEqual(["r-finished"]);
+    expect(detail.runningRecords.map((item) => item.id)).toEqual(["r-running"]);
+    expect(detail.runningCount).toBe(1);
+    // 进行中的执行不进入已记录投入；计划时段也不因为出现了执行记录被改写。
+    expect(detail.recordedMs).toBe(30 * 60_000);
+    expect(detail.sessions[0].status).toBe("scheduled");
+  });
+
+  it("says which branch put a task into carryover", () => {
+    const snapshot = workspace({
+      tasks: [task("advanced", { progress: 50 }), task("reviewed", { progress: 20 })],
+      progressEvents: [event("p-1", { taskId: "advanced", fromProgress: 10, toProgress: 50, occurredAtUtc: localToUtc("2026-03-07", "08:00") })],
+      executionSessions: [session("s-1", { taskId: "reviewed" })],
+    });
+    const review = buildReview(snapshot, { period: "day", anchorDate: "2026-03-07", projectId: null }, NOON);
+    expect(review.tasks.find((item) => item.taskId === "advanced")?.carryoverReasons).toEqual(["incompleteAdvance"]);
+    expect(review.tasks.find((item) => item.taskId === "reviewed")?.carryoverReasons).toEqual(["pendingReview"]);
+    // 不在待续的任务没有原因可报。
+    expect(review.tasks.every((item) => item.carryover || item.carryoverReasons.length === 0)).toBe(true);
   });
 });
 

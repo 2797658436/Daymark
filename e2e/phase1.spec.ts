@@ -128,8 +128,8 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
 
   await page.reload();
   await expect(page.getByText("拉伸", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "7 天回顾" }).click();
-  await expect(page.getByRole("heading", { name: "最近 7 天回顾" })).toBeVisible();
+  await page.getByRole("button", { name: "回顾", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "本周回顾" })).toBeVisible();
 });
 
 test("running execution ends with a manual progress summary and remains after reload", async ({ page }) => {
@@ -888,4 +888,162 @@ test("phase 4 M9 records 'back to now' as the remembered browsing position", asy
   // 点「回到现在」→ 视口中心落在 14:00（840 分钟），并把这次落定写进偏好。
   await page.getByRole("button", { name: "回到现在" }).click();
   await expect.poll(storedWeekMinute, { timeout: 5_000 }).toBeGreaterThan(800);
+});
+
+/**
+ * 阶段 4 P4-08 / AC13：日／周／月回顾的汇总与明细可核对，当前进度不冒充历史，
+ * 周期与锚点作为**偏好**跨重启保留（`reviewPeriod`／`reviewAnchorDate`）。
+ *
+ * 固定时钟 2026-08-05（周三，所在周为 08-03–08-09），事实全部由本地墙钟构造。
+ */
+function reviewWorkspace() {
+  const at = (date: string, time: string) => new Date(`${date}T${time}:00`).toISOString();
+  const filler = Array.from({ length: 12 }, (_, index) => ({
+    id: `m11-fill-${String(index).padStart(2, "0")}`, projectId: null, title: `明细任务 ${index + 1}`, progress: 0, status: "active",
+    deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: index + 2, kind: "task",
+  }));
+  return {
+    projects: [{ id: "rp-1", title: "回顾项目", deadlineLocal: null }],
+    tasks: [
+      // 有事件：周期内 40 → 60，当前也是 60。
+      { id: "m11-alpha", projectId: "rp-1", title: "Alpha 任务", progress: 60, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task" },
+      // 下调：50 → 20，当前 20。
+      { id: "m11-beta", projectId: null, title: "Beta 任务", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 1, kind: "task" },
+      // 只有计划、没有事件：当前进度 45 不得被当成周期历史。
+      { ...filler[0], progress: 45 },
+      ...filler.slice(1),
+    ],
+    progressEvents: [
+      { id: "m11-e1", taskId: "m11-alpha", fromProgress: 40, toProgress: 60, occurredAtUtc: at("2026-08-04", "09:00") },
+      { id: "m11-e2", taskId: "m11-beta", fromProgress: 50, toProgress: 20, occurredAtUtc: at("2026-08-05", "10:00") },
+    ],
+    executionRecords: [
+      { id: "m11-r1", sessionId: null, taskId: "m11-alpha", actualStartUtc: at("2026-08-04", "20:00"), actualEndUtc: at("2026-08-04", "21:00"), note: "第一段" },
+    ],
+    executionSessions: [
+      { id: "m11-s1", taskId: "m11-fill-00", localDate: "2026-08-06", endLocalDate: "2026-08-06", startLocal: "19:00", endLocal: "20:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+    ],
+    projectMilestones: [], milestoneOutcomes: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+  };
+}
+
+async function seedReview(page: import("@playwright/test").Page) {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({ lastPage: "review" }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, reviewWorkspace());
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+}
+
+/** 某张图的等价数值表里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。 */
+function chartCell(page: import("@playwright/test").Page, figure: number, date: string) {
+  return page.locator(".review-chart-figure").nth(figure).locator(`[data-chart-row="${date}"] td`);
+}
+
+test("phase 4 M11 keeps day, week and month summaries checkable against their detail and remembers the choice", async ({ page }) => {
+  await seedReview(page);
+  const storedReview = () => page.evaluate(() => {
+    const raw = localStorage.getItem("daymark.phase0.preferences");
+    return raw ? JSON.parse(raw) as { reviewPeriod?: string; reviewAnchorDate?: string | null } : null;
+  });
+
+  // 默认停在当前周（锚点为 null 时按当前周期计算）。
+  await expect(page.getByText("实际投入 60 分钟")).toBeVisible();
+  await expect(page.getByText("净进度 -10 百分点")).toBeVisible();
+
+  // ① 汇总能被 ② 的等价数值表核对：投入只算分钟，进度按百分点且含下调。
+  await expect(chartCell(page, 0, "2026-08-04")).toHaveText("60 分钟");
+  await expect(chartCell(page, 0, "2026-08-05")).toHaveText("未记录");
+  await expect(chartCell(page, 1, "2026-08-04")).toHaveText("+20 百分点");
+  await expect(chartCell(page, 1, "2026-08-05")).toHaveText("-30 百分点");
+  // 净负进度：零基线不在底部，并且有文字说明，不用正向热度暗示。
+  await expect(page.locator(".review-chart-figure").nth(1).locator(".review-chart-zero")).toHaveAttribute("style", /top: 40%/);
+  await expect(page.getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
+
+  // ③ 明细与 ② 一致；没有事件的时段任务显示「本周期无进度记录，当前 N%」，不冒充历史。
+  const alphaRow = page.locator('[data-review-task="m11-alpha"]');
+  await expect(alphaRow).toContainText("40% → 60%");
+  await expect(alphaRow).toContainText("净变化 +20 百分点");
+  await expect(alphaRow).toContainText("投入 60 分钟");
+  await expect(page.locator('[data-review-task="m11-fill-00"]')).toContainText("本周期无进度记录，当前 45%");
+
+  // 日视图：就是那一天。
+  await page.getByRole("button", { name: "日", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "8月5日回顾", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "day" });
+
+  // 月视图：自然月，日期概览覆盖整月。
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  await expect(page.locator(".review-chart-figure").first().locator("[data-chart-row]")).toHaveCount(31);
+
+  // 翻页写锚点，重启后仍然是同一个月。
+  await page.getByRole("button", { name: "上一周期" }).click();
+  await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-05" });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "月", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  // 「回到当前周期」把锚点交回给时钟。
+  await page.getByRole("button", { name: "回到当前周期" }).click();
+  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewAnchorDate: null });
+});
+
+test("phase 4 M11 opens the in-page detail, keeps the summary scroll and gives the focus back", async ({ page }) => {
+  await seedReview(page);
+  const main = page.locator("#main-content");
+  // 月视图的数值表足够长，滚动位置才有意义。
+  await page.getByRole("button", { name: "月", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+
+  await main.evaluate((element) => { element.scrollTop = 420; });
+  const trigger = page.getByRole("button", { name: "查看 8月4日 的明细" }).first();
+  await trigger.click();
+  const detail = page.locator(".review-drilldown");
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("60 分钟");
+  await expect(detail).toContainText("第一段");
+  await expect(detail).toContainText("40% → 60%");
+
+  // 打开明细后用户滚开了；Esc 关闭必须回到汇总原来的位置，并把焦点还给触发元素。
+  await main.evaluate((element) => { element.scrollTop = 0; });
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".review-drilldown")).toHaveCount(0);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(420);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null)).toBe("查看 8月4日 的明细");
+});
+
+test("phase 4 M11 review page has no automated accessibility violations in light and dark at 200 percent zoom", async ({ page }) => {
+  await seedReview(page);
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByLabel(/界面缩放/).fill("200");
+  await page.getByRole("button", { name: "回顾", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+
+  await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
+  const light = await page.evaluate(async () => (await (window as typeof window & { axe: { run(): Promise<{ violations: unknown[] }> } }).axe.run()).violations);
+  expect(light).toEqual([]);
+
+  // 200% 缩放下图表与等价数值表仍然可用，并且不产生横向溢出。
+  await expect(page.locator(".review-chart-table").first()).toBeVisible();
+  const main = page.locator("#main-content");
+  expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2);
+  // 核心路径可完成：从日期下钻再关掉。
+  await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
+  await expect(page.locator(".review-drilldown")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".review-drilldown")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("radio", { name: "深色" }).check();
+  await page.getByRole("button", { name: "回顾", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.waitForTimeout(150);
+  const dark = await page.evaluate(async () => (await (window as typeof window & { axe: { run(): Promise<{ violations: unknown[] }> } }).axe.run()).violations);
+  expect(dark).toEqual([]);
 });

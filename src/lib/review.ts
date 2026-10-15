@@ -3,7 +3,7 @@ import { addLocalDays, isLocalDate, localDateOf } from "./deadlines";
 import { createWorkspaceIndex, isPendingReviewIn, milestoneReached, milestoneSummary, projectProgress, projectTasksOf, type WorkspaceIndex } from "./workspaceSelectors";
 
 /**
- * 日／周／月回顾引擎（阶段 4 P4-07，规格 §7 / M11）。
+ * 日／周／月回顾引擎（阶段 4 P4-07 建立，P4-08 补下钻明细；规格 §7 / M11）。
  *
  * 它是**只读投影**：读现有工作区快照，产出周期内的统计与明细，不写任何领域事实、
  * 不新增表字段、不生成评分或连续天数。计划时段、实际执行与手动进度始终分开统计。
@@ -19,6 +19,11 @@ import { createWorkspaceIndex, isPendingReviewIn, milestoneReached, milestoneSum
  * 3. **实际投入按 UTC 毫秒求交、精度保留到汇总结束**：一条记录跨午夜时按本地日窗口
  *    切分（23:50–次日 00:20 → 前日 10 分钟、次日 20 分钟），毫秒级累加，只在最后
  *    一次换算成显示分钟 —— 逐条四舍五入再相加会累积偏差。
+ *
+ * P4-08 只**补了下钻用的明细列表**（`days[].events`／`days[].records`、
+ * `tasks[].sessions`／`records`／`runningRecords`）：页面据此显示原始事件时间、进度变化、
+ * 实际起止与已记录备注，而不必在组件里再按日期或任务过滤一遍事实。九项口径、`notes`
+ * 与排序规则都没有变化 —— 明细是同一批事实的另一种投影，不新增统计。
  */
 
 export type ReviewPeriod = "day" | "week" | "month";
@@ -47,6 +52,18 @@ export interface ReviewDaySummary {
   skippedCount: number;
   /** 该日进行中的执行记录数（没有 `actualEndUtc`）。 */
   runningCount: number;
+  /**
+   * 该日进度事件（与 `progress` 同一份排序）。**只为下钻呈现**：页面不需要再按日期
+   * 过滤一遍事件，也就不会在组件里长出第二套分桶规则。不参与任何统计。
+   */
+  events: ProgressEvent[];
+  /**
+   * 与该日本地窗口有交集的**已结束**记录（按开始时间与稳定 ID 排序）。
+   *
+   * 跨午夜的记录会同时出现在两天 —— 它本来就是两天各自的事实；`recordedMs` 仍然
+   * 按交集毫秒切分，两者不会互相矛盾。进行中的记录不在这里（单列，不计入投入）。
+   */
+  records: ExecutionRecord[];
 }
 
 export interface ReviewProgressSummary {
@@ -108,6 +125,15 @@ export interface ReviewMilestoneSummary {
   resultText: string;
 }
 
+/**
+ * 待续的原因：引擎实际命中的分支，按固定顺序给出。
+ *
+ * 规格 §7.2 的待续口径是「周期内有未完成推进**或**待回顾／未推进／跳过事实」，
+ * 四个分支语义不同（「推进过但没完成」与「根本没推进」不是一件事），所以页面
+ * 需要能如实说出是哪一种，而不是自己再判断一遍。
+ */
+export type ReviewCarryoverReason = "incompleteAdvance" | "pendingReview" | "notAdvanced" | "skippedOccurrence";
+
 export interface ReviewTaskDetail {
   taskId: string;
   title: string;
@@ -119,14 +145,24 @@ export interface ReviewTaskDetail {
   netDelta: number;
   /** 周期内事件，按发生时间与稳定 ID 排序。 */
   events: ProgressEvent[];
+  /**
+   * 周期内该任务的**计划时段**（按日期、开始时间与稳定 ID 排序）。
+   *
+   * 计划与实际始终分开：这里只给用户自己安排的时段，不因为出现了执行记录就被改写。
+   */
+  sessions: ExecutionSession[];
+  /** 周期内该任务已结束记录的交集时长（毫秒，未四舍五入）。 */
+  recordedMs: number;
+  /** 周期内该任务的已结束记录（按开始时间与稳定 ID 排序）。 */
+  records: ExecutionRecord[];
+  /** 周期内该任务的进行中记录（没有 `actualEndUtc`）；不计入 `recordedMs`。 */
+  runningRecords: ExecutionRecord[];
   /** 周期内第一条事件的 `fromProgress`；无事件为 `null`（不从当前值反推历史）。 */
   startProgress: number | null;
   /** 周期内最后一条事件的 `toProgress`；无事件为 `null`。 */
   endProgress: number | null;
   /** 周期内是否至少一次达到 100（与「当前是否已完成」分开）。 */
   everCompleted: boolean;
-  /** 周期内该任务已结束记录的交集时长（毫秒，未四舍五入）。 */
-  recordedMs: number;
   /** 周期内该任务的进行中记录数。 */
   runningCount: number;
   /** 周期内该任务的待回顾时段数。 */
@@ -137,6 +173,8 @@ export interface ReviewTaskDetail {
   skippedCount: number;
   /** 是否属于待续。 */
   carryover: boolean;
+  /** 待续的原因（不在待续时为空数组）；只在引擎命中的分支上给值。 */
+  carryoverReasons: ReviewCarryoverReason[];
 }
 
 export interface ReviewResult {
@@ -191,37 +229,6 @@ export function buildReviewFromIndex(index: WorkspaceIndex, query: ReviewQuery, 
   return buildRange(index, query.period, anchorDate, startDate, endDate, query.projectId, now);
 }
 
-/**
- * 最近 7 个本地日期（含 `endDate`）的事实汇总 —— **兼容入口**。
- *
- * 它现在是新引擎之上的薄适配，全仓只有一份统计算法；返回形状保持不变，供 7 天回顾
- * 页面与既有用例消费。移除调用者属 P4-08。
- *
- * 与旧实现的**刻意差异**（规格要求的订正，见实施报告）：
- * - 实际投入按本地日窗口切分，跨午夜的记录不再整段记在起始日；
- * - 实际投入先按毫秒汇总、最后一次换算，不再逐条四舍五入后相加；
- * - `missedCount`／`skippedCount` 由新口径给出（`missed` 仍要求该时段没有实际执行记录）；
- * - 新增 `now` 参数：待回顾是「相对现在」的派生状态，不能由引擎偷看系统时钟。
- */
-export function buildSevenDayReview(workspace: WorkspaceSnapshot, endDate: string, now: Date) {
-  const startDate = addLocalDays(endDate, -6);
-  const result = buildRange(createWorkspaceIndex(workspace), "day", endDate, startDate, endDate, null, now);
-  return {
-    startDate: result.startDate,
-    endDate: result.endDate,
-    days: result.days.map((day) => ({
-      date: day.date,
-      progressDelta: day.progressDelta,
-      actualMinutes: day.recordedMinutes,
-      missedCount: day.notAdvancedCount,
-      skippedCount: day.skippedCount,
-    })),
-    progressedTaskIds: result.progress.changedTaskIds,
-    completedTaskIds: result.progress.completedTaskIds,
-    carryoverTaskIds: result.carryoverTaskIds,
-  };
-}
-
 /** 净进度变化是**百分点**，跨任务合计不叫完成率。 */
 export function formatPercentPoints(value: number): string {
   const rounded = Math.round(value);
@@ -258,7 +265,7 @@ function buildRange(
   const dates: string[] = [];
   for (let date = startDate; date <= endDate; date = addLocalDays(date, 1)) dates.push(date);
   const dayIndex = new Map(dates.map((date, position) => [date, position]));
-  const days: ReviewDaySummary[] = dates.map((date) => ({ date, progressDelta: 0, recordedMs: 0, recordedMinutes: 0, pendingReviewCount: 0, notAdvancedCount: 0, skippedCount: 0, runningCount: 0 }));
+  const days: ReviewDaySummary[] = dates.map((date) => ({ date, progressDelta: 0, recordedMs: 0, recordedMinutes: 0, pendingReviewCount: 0, notAdvancedCount: 0, skippedCount: 0, runningCount: 0, events: [], records: [] }));
 
   const periodStartMs = localDayStartMs(startDate);
   const periodEndMs = localDayStartMs(addLocalDays(endDate, 1));
@@ -288,7 +295,7 @@ function buildRange(
   for (const event of periodEvents) {
     netDelta += event.toProgress - event.fromProgress;
     const position = dayIndex.get(localDateOf(new Date(event.occurredAtUtc)));
-    if (position !== undefined) days[position].progressDelta += event.toProgress - event.fromProgress;
+    if (position !== undefined) { days[position].progressDelta += event.toProgress - event.fromProgress; days[position].events.push(event); }
     if (!seenChanged.has(event.taskId)) { seenChanged.add(event.taskId); changedTaskIds.push(event.taskId); }
     if (event.toProgress === 100 && !seenCompleted.has(event.taskId)) { seenCompleted.add(event.taskId); completedTaskIds.push(event.taskId); }
   }
@@ -296,6 +303,7 @@ function buildRange(
 
   // 已记录实际投入：按 UTC 毫秒求交，日界换算成 UTC；跨日分别计入。
   const recordedMsByTask = new Map<string, number>();
+  const recordsByTask = new Map<string, ExecutionRecord[]>();
   const clipped: Array<{ start: number; end: number }> = [];
   for (const record of index.workspace.executionRecords) {
     if (!taskIds.has(record.taskId)) continue;
@@ -305,26 +313,30 @@ function buildRange(
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
     if (end <= periodStartMs || start >= periodEndMs) continue;
     clipped.push({ start: Math.max(start, periodStartMs), end: Math.min(end, periodEndMs) });
+    const ofTask = recordsByTask.get(record.taskId);
+    if (ofTask) ofTask.push(record); else recordsByTask.set(record.taskId, [record]);
     for (let position = 0; position < dayWindows.length; position += 1) {
       const [dayStart, dayEnd] = dayWindows[position];
       const overlap = Math.min(end, dayEnd) - Math.max(start, dayStart);
       if (overlap <= 0) continue;
       days[position].recordedMs += overlap;
+      days[position].records.push(record);
       recordedMsByTask.set(record.taskId, (recordedMsByTask.get(record.taskId) ?? 0) + overlap);
     }
   }
   const recordedMs = days.reduce((sum, day) => sum + day.recordedMs, 0);
   for (const day of days) day.recordedMinutes = Math.round(day.recordedMs / 60_000);
+  // 明细列表按发生时间与稳定 ID 排序；同一份记录可以属于两天（跨午夜），两天各自是事实。
+  for (const day of days) day.records.sort(compareRecords);
+  for (const records of recordsByTask.values()) records.sort(compareRecords);
 
   // 进行中的执行：没有 actualEndUtc 的记录单独列出，不混入已确认投入。
-  const runningByTask = new Map<string, number>();
   const runningRecords: ExecutionRecord[] = [];
   for (const record of index.workspace.executionRecords) {
     if (!taskIds.has(record.taskId) || record.actualEndUtc) continue;
     const start = Date.parse(record.actualStartUtc);
     if (!Number.isFinite(start) || start >= periodEndMs) continue;
     runningRecords.push(record);
-    runningByTask.set(record.taskId, (runningByTask.get(record.taskId) ?? 0) + 1);
     const position = dayIndex.get(localDateOf(new Date(Math.max(start, periodStartMs))));
     if (position !== undefined) days[position].runningCount += 1;
   }
@@ -364,15 +376,24 @@ function buildRange(
   const missedByTask = groupByTask(missedSessions, (session) => session.taskId);
   const droppedByTask = groupByTask([...skippedSessions, ...cancelledSessions], (session) => session.taskId);
   const occurrencesByTask = groupByTask(skippedOccurrences, (occurrence) => habitTaskIds.get(occurrence.habitId)!);
+  const runningByTaskRecords = groupByTask(runningRecords, (record) => record.taskId);
+  for (const sessions of sessionsByTask.values()) sessions.sort(compareSessions);
+  for (const records of runningByTaskRecords.values()) records.sort(compareRecords);
 
   const tasks: ReviewTaskDetail[] = [];
   for (const task of scopedTasks) {
     const events = eventsByTask.get(task.id) ?? [];
     const sessions = sessionsByTask.get(task.id) ?? [];
     const occurrences = occurrencesByTask.get(task.id) ?? [];
+    const records = recordsByTask.get(task.id) ?? [];
+    const runningOfTask = runningByTaskRecords.get(task.id) ?? [];
     const recordedMsOfTask = recordedMsByTask.get(task.id) ?? 0;
-    const runningOfTask = runningByTask.get(task.id) ?? 0;
-    if (events.length === 0 && sessions.length === 0 && occurrences.length === 0 && recordedMsOfTask === 0 && runningOfTask === 0) continue;
+    if (events.length === 0 && sessions.length === 0 && occurrences.length === 0 && recordedMsOfTask === 0 && runningOfTask.length === 0) continue;
+    const carryoverReasons: ReviewCarryoverReason[] = [];
+    if (incompleteAdvanceTaskIds.has(task.id)) carryoverReasons.push("incompleteAdvance");
+    if (pendingReviewTaskIds.has(task.id)) carryoverReasons.push("pendingReview");
+    if (notAdvancedTaskIds.has(task.id)) carryoverReasons.push("notAdvanced");
+    if (skippedOccurrenceTaskIds.has(task.id)) carryoverReasons.push("skippedOccurrence");
     tasks.push({
       taskId: task.id,
       title: task.title,
@@ -381,15 +402,19 @@ function buildRange(
       currentStatus: task.status,
       netDelta: events.reduce((sum, event) => sum + event.toProgress - event.fromProgress, 0),
       events,
+      sessions,
+      recordedMs: recordedMsOfTask,
+      records,
+      runningRecords: runningOfTask,
       startProgress: events.length > 0 ? events[0].fromProgress : null,
       endProgress: events.length > 0 ? events[events.length - 1].toProgress : null,
       everCompleted: events.some((event) => event.toProgress === 100),
-      recordedMs: recordedMsOfTask,
-      runningCount: runningOfTask,
+      runningCount: runningOfTask.length,
       pendingReviewCount: sessions.filter((session) => pendingReviewIds.has(session.id)).length,
       missedCount: (missedByTask.get(task.id) ?? []).length,
       skippedCount: (droppedByTask.get(task.id) ?? []).length + occurrences.length,
       carryover: carryover.has(task.id),
+      carryoverReasons: carryover.has(task.id) ? carryoverReasons : [],
     });
   }
 
@@ -475,6 +500,17 @@ function deviceTimeZone(): string {
 
 function compareIds(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** 明细里的记录排序：开始时间 → 稳定 ID。同一时刻的记录保留全部，不假造先后。 */
+function compareRecords(left: ExecutionRecord, right: ExecutionRecord): number {
+  const difference = Date.parse(left.actualStartUtc) - Date.parse(right.actualStartUtc);
+  return difference !== 0 && Number.isFinite(difference) ? difference : compareIds(left.id, right.id);
+}
+
+/** 明细里的计划时段排序：日期 → 开始时间 → 稳定 ID（与日历的既有顺序一致）。 */
+function compareSessions(left: ExecutionSession, right: ExecutionSession): number {
+  return `${left.localDate}${left.startLocal}`.localeCompare(`${right.localDate}${right.startLocal}`) || compareIds(left.id, right.id);
 }
 
 /** 按任务分组一次，明细不再逐行扫全量数组。 */

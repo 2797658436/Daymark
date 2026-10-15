@@ -263,14 +263,33 @@ describe("settings persistence", () => {
     await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ calendarPositions: { day: null, week } });
   });
 
-  it("keeps the review period and anchor as normalized placeholders for the phase 4 review page", () => {
+  /**
+   * 阶段 4 P4-08：`reviewPeriod`／`reviewAnchorDate` 现在真的被回顾页读写，因此除了
+   * 规范化还要证明「保存 → 重载」恒等：翻页与切周期写进去的值必须原样回来，
+   * 非法值经一次保存也不得被写回成越界值（否则页面会拿它去算周期）。
+   */
+  it("keeps the review period and anchor identical through save and reload", async () => {
     const repository = new SettingsRepository(new MemoryBackend());
     expect(repository.normalize(undefined)).toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
     expect(repository.normalize({ reviewPeriod: "month", reviewAnchorDate: "2026-08-05" }))
       .toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-08-05" });
     // 未知周期与非法日期回退默认值；旧设置没有这两个字段时同样安全。
-    expect(repository.normalize({ reviewPeriod: "quarter", reviewAnchorDate: "2026-02-30" }))
-      .toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
+    for (const reviewPeriod of ["quarter", "", null, 7]) {
+      expect(repository.normalize({ reviewPeriod })).toMatchObject({ reviewPeriod: "week" });
+    }
+    for (const reviewAnchorDate of ["2026-02-30", "2026-8-5", "today", 20260805, ""]) {
+      expect(repository.normalize({ reviewAnchorDate }), `锚点 ${String(reviewAnchorDate)} 必须回退`).toMatchObject({ reviewAnchorDate: null });
+    }
+
+    const backend = new MemoryBackend();
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, reviewPeriod: "day", reviewAnchorDate: "2026-08-05" });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ reviewPeriod: "day", reviewAnchorDate: "2026-08-05" });
+    // 「回到当前周期」写 null，重载后仍然是 null（= 跟随时钟）。
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, reviewPeriod: "day", reviewAnchorDate: null });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ reviewPeriod: "day", reviewAnchorDate: null });
+    // 非法值经一次保存也不得被写回。
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, reviewPeriod: "quarter" as never, reviewAnchorDate: "2026-02-30" });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ reviewPeriod: "week", reviewAnchorDate: null });
   });
 
   /**

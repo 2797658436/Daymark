@@ -16,10 +16,10 @@ import { placementSettled, setPendingPlacement, usePendingPlacement } from "./li
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
+import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
 import { extractBvid } from "./lib/bilibili";
 import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
-import { buildSevenDayReview } from "./lib/review";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, type WorkspaceIndex } from "./lib/workspaceSelectors";
@@ -49,7 +49,7 @@ const pages: Array<{ id: PageId; label: string; icon: typeof Home }> = [
   { id: "calendar", label: "日历", icon: CalendarDays },
   { id: "deadlines", label: "截止事项", icon: Flag },
   { id: "projects", label: "项目", icon: FolderKanban },
-  { id: "review", label: "7 天回顾", icon: ChartNoAxesColumnIncreasing },
+  { id: "review", label: "回顾", icon: ChartNoAxesColumnIncreasing },
   { id: "data", label: "数据", icon: Database },
   { id: "appearance", label: "设置", icon: Settings2 },
 ];
@@ -98,8 +98,14 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   // 滚动位置用 ref 跟手记录，避免每滚一像素都重渲染整个应用壳。
   const [deadlinesView, setDeadlinesView] = useState<{ filter: DeadlineFilter; focusKey: string | null }>({ filter: DEFAULT_DEADLINE_FILTER, focusKey: null });
   const deadlinesScrollTop = useRef(0);
-  const [deadlineEditingTask, setDeadlineEditingTask] = useState<{ taskId: string; anchorElement: HTMLElement | null } | null>(null);
-  const [deadlineTaskEditorBusy, setDeadlineTaskEditorBusy] = useState(false);
+  // 回顾页的会话状态（规格 §7.4）：项目下钻与明细区目标只放 App 层内存 —— 同一会话内
+  // 跨页返回仍然有效、应用重启后不恢复，也不写 Tauri Store。周期与锚点是**偏好**，
+  // 走 `preferences.reviewPeriod`／`reviewAnchorDate`，不在这里重复一份。
+  const [reviewView, setReviewView] = useState<{ projectId: string | null; selection: ReviewSelection | null }>({ projectId: null, selection: null });
+  const reviewScrollTop = useRef(0);
+  // 任务编辑气泡的锚点：截止页与回顾页共用同一个气泡与编辑会话，不各造一份表单。
+  const [taskEditorAnchor, setTaskEditorAnchor] = useState<{ taskId: string; anchorElement: HTMLElement | null } | null>(null);
+  const [taskEditorBusy, setTaskEditorBusy] = useState(false);
   const [projectFocus, setProjectFocus] = useState<ProjectFocusRequest | null>(null);
   const mainRef = useRef<HTMLElement>(null);
   // 稳定索引在快照变更时重建一次（规格 §8）：列表渲染不再逐行扫描全量数组。
@@ -441,7 +447,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {page === "deadlines" && <DeadlinesPage index={workspaceIndex} filter={deadlinesView.filter} onFilterChange={(filter) => setDeadlinesView((current) => ({ ...current, filter }))}
           focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
           scrollRef={mainRef} scrollTop={deadlinesScrollTop}
-          onEditTask={(task, anchorElement) => setDeadlineEditingTask({ taskId: task.id, anchorElement })}
+          onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })}
           onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
           onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
           onContinueMilestone={(milestone) => { setProjectFocus({ projectId: milestone.projectId, milestoneId: milestone.id, action: "continue" }); updatePreferences({ lastPage: "projects" }); }} />}
@@ -451,7 +457,14 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           onUpdateMilestone={async (milestone) => { await commit(() => native.updateProjectMilestone(milestone)); }}
           onDeleteMilestone={async (milestone) => { await commit(() => native.deleteProjectMilestone(milestone.id)); pushUndo({ label: "恢复项目里程碑", run: () => native.createProjectMilestone(milestone) }); }}
           onProgress={updateProgress} onFetchBilibili={(bvid) => native.fetchBilibiliVideo(bvid)} />}
-        {page === "review" && <ReviewPage workspace={workspace} onGoToday={() => updatePreferences({ lastPage: "today" })} />}
+        {page === "review" && <ReviewPage index={workspaceIndex} preferences={preferences} onPreferences={updatePreferences}
+          projectId={reviewView.projectId} onProjectId={(projectId) => setReviewView((current) => ({ ...current, projectId }))}
+          selection={reviewView.selection} onSelection={(selection) => setReviewView((current) => ({ ...current, selection }))}
+          scrollRef={mainRef} scrollTop={reviewScrollTop}
+          onGoToday={() => updatePreferences({ lastPage: "today" })}
+          onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })}
+          onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
+          onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }} />}
         {page === "data" && <DataPage native={native} />}
         {page === "appearance" && <SettingsPage preferences={preferences} onChange={updatePreferences} />}
         {hasTaskPool && !showTaskPool && <button className="task-pool-toggle" aria-label="打开任务池" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(true) : setTaskPoolOpen(true)}><Inbox size={18} /><span>任务池</span></button>}
@@ -477,9 +490,9 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           setFinishing(null);
         }} />}
       {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
-      {/* 截止事项页的任务编辑：复用与任务池完全相同的编辑气泡与编辑会话，不复制表单。 */}
-      {deadlineEditingTask && (() => { const task = workspaceIndex.tasksById.get(deadlineEditingTask.taskId); return task ? <FloatingPanel label={`编辑任务 ${task.title}`} anchorElement={deadlineEditingTask.anchorElement} busy={deadlineTaskEditorBusy} onClose={() => setDeadlineEditingTask(null)}><div className="task-editor-fields">
-        <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setDeadlineEditingTask(null); }} onCancel={() => setDeadlineEditingTask(null)} onPhase={setDeadlineTaskEditorBusy} />
+      {/* 截止页与回顾页共用的任务编辑气泡：复用与任务池完全相同的编辑会话，不复制表单。 */}
+      {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
+        <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setTaskEditorAnchor(null); }} onCancel={() => setTaskEditorAnchor(null)} onPhase={setTaskEditorBusy} />
       </div></FloatingPanel> : null; })()}
     </div>
   );
@@ -1756,15 +1769,6 @@ function scheduleDeadlineForTask(workspace: WorkspaceSnapshot, task: Task, today
     .map((milestone) => milestone.targetLocalDate);
   const projectDeadline = workspace.projects.find((project) => project.id === task.projectId)?.deadlineLocal ?? null;
   return [...milestoneDeadlines, ...(projectDeadline ? [projectDeadline] : [])].sort()[0] ?? null;
-}
-
-function ReviewPage({ workspace, onGoToday }: { workspace: WorkspaceSnapshot; onGoToday: () => void }) {
-  // 「待回顾」是相对「现在」的派生状态：页面自己取一次时钟并显式注入引擎，引擎内不读时钟。
-  const now = useCurrentTime();
-  const today = toLocalDate(now); const review = buildSevenDayReview(workspace, today, now);
-  const totalMinutes = review.days.reduce((sum, day) => sum + day.actualMinutes, 0); const totalDelta = review.days.reduce((sum, day) => sum + day.progressDelta, 0);
-  const hasFacts = review.progressedTaskIds.length > 0 || totalMinutes > 0 || totalDelta !== 0 || review.days.some((day) => day.missedCount + day.skippedCount > 0);
-  return <section className="page-stack" aria-labelledby="review-title"><PageHeader eyebrow={`${formatShortDate(review.startDate)} — ${formatShortDate(review.endDate)}`} title="最近 7 天回顾" actions={<div className="summary-pills"><span>实际投入 {totalMinutes} 分钟</span><span>净进度 {totalDelta >= 0 ? "+" : ""}{totalDelta} 百分点</span></div>} />{hasFacts ? <><div className="review-outcomes"><section className="surface-card"><h2>完成与推进</h2><p>{review.completedTaskIds.length} 项曾完成 · {review.progressedTaskIds.length} 项有进度变化</p><div className="review-task-list">{review.progressedTaskIds.map((id) => <span key={id}>{taskTitle(workspace, id)}</span>)}</div></section><section className="surface-card"><h2>待续</h2><p>{review.carryoverTaskIds.length} 项仍可继续安排</p><div className="review-task-list">{review.carryoverTaskIds.map((id) => <span key={id}>{taskTitle(workspace, id)}</span>)}</div></section></div><section className="surface-card"><div className="section-heading"><h2>每天的事实</h2><span>不评分，不计算连续天数</span></div><div className="review-days">{review.days.map((day) => <article key={day.date}><time>{weekday(day.date)}<small>{formatShortDate(day.date)}</small></time><div className="review-bar"><span style={{ width: `${Math.min(100, Math.max(0, day.actualMinutes / Math.max(1, ...review.days.map((item) => item.actualMinutes)) * 100))}%` }} /></div><p>进度 {day.progressDelta >= 0 ? "+" : ""}{day.progressDelta} 百分点 · 投入 {day.actualMinutes} 分钟 · 未执行／跳过 {day.missedCount + day.skippedCount}</p></article>)}</div></section></> : <EmptyState icon={<ChartNoAxesColumnIncreasing />} title="有实际推进后，这里会出现回顾" text="没有记录时不绘制全零图表，也不会把未记录解释为失败。" action={<Button variant="primary" onClick={onGoToday}>前往今日</Button>} />}</section>;
 }
 
 function DataPage({ native }: { native: NativeApi }) {

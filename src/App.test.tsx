@@ -1867,7 +1867,7 @@ describe("phase 4 P4-06 deadline view", () => {
     ["calendar", "日历", "日历"],
     ["deadlines", "截止事项", "截止事项"],
     ["projects", "项目", "项目"],
-    ["review", "7 天回顾", "最近 7 天回顾"],
+    ["review", "回顾", "本周回顾"],
     ["data", "数据", "数据与安全"],
     ["appearance", "设置", "设置"],
   ];
@@ -1977,6 +1977,93 @@ describe("phase 4 P4-06 deadline view", () => {
       await waitFor(() => expect(vi.mocked(native.applyScheduleDraft)).toHaveBeenCalledTimes(1));
       expect(vi.mocked(native.applyScheduleDraft).mock.calls[0][0]).toHaveLength(1);
       expect(vi.mocked(native.applyScheduleDraft).mock.calls[0][0][0]).toMatchObject({ taskId: "t-alpha" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * 阶段 4 P4-08 / AC13：回顾页的周期偏好与下钻状态。
+ *
+ * 周期与锚点是**偏好**（写进 SettingsRepository，跨重启保留）；项目筛选与明细选择只活在
+ * App 层内存里（同会话跨页返回有效，重启不恢复）—— 与 P4-06 截止页同一套归属规则。
+ */
+describe("phase 4 P4-08 review periods and drill-down", () => {
+  function reviewScenario(): WorkspaceSnapshot {
+    return {
+      ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "p-1", title: "学习项目", deadlineLocal: null }],
+      tasks: [
+        { id: "t-alpha", projectId: "p-1", title: "Alpha 任务", progress: 60, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0, kind: "task" },
+        { id: "t-beta", projectId: null, title: "Beta 任务", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1, kind: "task" },
+      ],
+      progressEvents: [{ id: "e-1", taskId: "t-alpha", fromProgress: 40, toProgress: 60, occurredAtUtc: new Date(2026, 7, 4, 9, 0).toISOString() }],
+      executionRecords: [{ id: "r-1", sessionId: null, taskId: "t-alpha", actualStartUtc: new Date(2026, 7, 4, 20, 0).toISOString(), actualEndUtc: new Date(2026, 7, 4, 21, 0).toISOString(), note: "第一段" }],
+    };
+  }
+
+  it("writes the review period and anchor through the settings repository and restores them after a restart", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "review" };
+    const first = render(<App settings={new SettingsRepository(backend)} native={createNativeApi(reviewScenario())} />);
+    try {
+      // 锚点为 null 时按「当前周期」计算：默认停在当前周。
+      expect(await screen.findByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+
+      await user.click(screen.getByRole("button", { name: "月" }));
+      await user.click(screen.getByRole("button", { name: "上一周期" }));
+      await waitFor(() => expect(backend.value).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-05" }));
+      expect(screen.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+
+      first.unmount();
+      render(<App settings={new SettingsRepository(backend)} native={createNativeApi(reviewScenario())} />);
+      expect(await screen.findByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+      expect(screen.getByRole("button", { name: "月" })).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the drill-down and the project scope across a same-session round trip but not across a restart", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "review" };
+    const native = createNativeApi(reviewScenario());
+    const first = render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const navigation = () => within(screen.getByRole("navigation", { name: "主导航" }));
+    try {
+      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      // 项目下钻：明细区先看项目，再把它设成引擎查询的一部分。
+      await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看项目「学习项目」的明细" }));
+      await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getByRole("button", { name: "只看这个项目" }));
+      expect(await screen.findByText("仅统计项目：学习项目")).toBeVisible();
+
+      // 任务下钻：明细区显示原始事件时间、进度变化与实际记录备注。
+      await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看任务「Alpha 任务」的明细" }));
+      const detail = document.querySelector<HTMLElement>(".review-drilldown")!;
+      expect(detail.textContent).toContain("40% → 60%");
+      expect(detail.textContent).toContain("第一段");
+
+      // 同会话跨页返回：查询与明细都还在。
+      await user.click(navigation().getByRole("button", { name: "项目" }));
+      await screen.findByRole("heading", { name: "项目", level: 1 });
+      await user.click(navigation().getByRole("button", { name: "回顾" }));
+      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      expect(screen.getByText("仅统计项目：学习项目")).toBeVisible();
+      expect(document.querySelector(".review-drilldown")?.textContent).toContain("40% → 60%");
+
+      // 重启（整页重载）后不恢复：项目筛选与明细选择只活在 App 层内存里。
+      first.unmount();
+      render(<App settings={new SettingsRepository(backend)} native={native} />);
+      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      expect(screen.queryByText("仅统计项目：学习项目")).toBeNull();
+      expect(document.querySelector(".review-drilldown")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
