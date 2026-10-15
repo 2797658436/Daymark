@@ -1351,6 +1351,36 @@ describe("phase 1 manual alpha", () => {
     expect(native.deleteExecutionSessions).toHaveBeenCalledWith(sessions.map((session) => session.id));
   });
 
+  it("shows the undo toast for about five seconds, pauses while hovered, and keeps Ctrl+Z working after it goes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "准备候选版", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 45, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+      const native = createNativeApi(initial);
+      render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+      await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+      await user.click(screen.getByRole("button", { name: "生成排程草案" }));
+      await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
+      const toast = await screen.findByRole("button", { name: /撤销本次自动排程/ });
+
+      // UI-SPEC §188：鼠标悬停在提示上时暂停消失计时。
+      await user.hover(toast);
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(screen.getByRole("button", { name: /撤销本次自动排程/ })).toBeInTheDocument();
+
+      // 移开后重新计时：约 5 秒收起（旧实现从不收起，这条会红）。
+      await user.unhover(toast);
+      act(() => vi.advanceTimersByTime(4_000));
+      expect(screen.getByRole("button", { name: /撤销本次自动排程/ })).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1_200));
+      expect(screen.queryByRole("button", { name: /撤销本次自动排程/ })).not.toBeInTheDocument();
+
+      // UI-SPEC §188：提示消失后仍可通过 Ctrl+Z 撤销 —— 提示与撤销栈是两件事。
+      await user.keyboard("{Control>}z{/Control}");
+      await waitFor(() => expect(native.deleteExecutionSessions).toHaveBeenCalledOnce());
+    } finally { vi.useRealTimers(); }
+  });
+
   it("moves a time block as a whole by dragging its body", async () => {
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" } };

@@ -37,6 +37,8 @@ import {
 
 type SaveState = "saved" | "saving" | "unsaved";
 type UndoOperation = { label: string; run: () => Promise<WorkspaceSnapshot> };
+/** UI-SPEC §187：「拖拽提交后在底部显示**约 5 秒**的轻量结果提示和撤销操作」。 */
+const UNDO_TOAST_MS = 5_000;
 interface AppProps { settings?: SettingsRepository; native?: NativeApi }
 interface CalendarDropIntent { date: string; startMinute: number; taskId: string; sessionId: string; mode: CalendarDropMode; targetSessionId: string }
 /** 从截止事项页跳到项目页时要定位（或续排）的目标。 */
@@ -67,6 +69,11 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<UndoOperation[]>([]);
+  // 撤销提示是**短暂**的（UI-SPEC §187–188：底部约 5 秒，鼠标悬停或键盘聚焦时暂停计时），
+  // 但撤销栈本身不随提示消失而清空 —— 提示没了以后 Ctrl+Z 依然可用。两者是分开的状态，
+  // 否则要么提示永不消失，要么一次撤销就丢掉整个栈。
+  const [undoToastOpen, setUndoToastOpen] = useState(false);
+  const undoToastTimer = useRef<number | null>(null);
   const [finishing, setFinishing] = useState<ExecutionRecord | null>(null);
   const [taskPoolOpen, setTaskPoolOpen] = useState(true);
   const [poolOverlayOpen, setPoolOverlayOpen] = useState(false);
@@ -236,12 +243,32 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     void commit(() => native.markRescuePrompted(candidate.id, now.toISOString())).finally(() => markingRescue.current.delete(candidate.id));
   }, [commit, native, preferences.checkInEnabled, preferences.checkInGraceMinutes, preferences.rescuePromptsEnabled, workspace]);
 
-  const pushUndo = useCallback((operation: UndoOperation) => setUndoStack((items) => [...items.slice(-9), operation]), []);
+  const clearUndoToastTimer = useCallback(() => {
+    if (undoToastTimer.current !== null) { window.clearTimeout(undoToastTimer.current); undoToastTimer.current = null; }
+  }, []);
+  const dismissUndoToastLater = useCallback(() => {
+    clearUndoToastTimer();
+    undoToastTimer.current = window.setTimeout(() => { undoToastTimer.current = null; setUndoToastOpen(false); }, UNDO_TOAST_MS);
+  }, [clearUndoToastTimer]);
+  useEffect(() => clearUndoToastTimer, [clearUndoToastTimer]);
+
+  const pushUndo = useCallback((operation: UndoOperation) => {
+    setUndoStack((items) => [...items.slice(-9), operation]);
+    setUndoToastOpen(true);
+    dismissUndoToastLater();
+  }, [dismissUndoToastLater]);
   const undo = useCallback(async () => {
     const operation = undoStack.at(-1); if (!operation) return;
-    try { await commit(operation.run); setUndoStack((items) => items.slice(0, -1)); }
+    try {
+      await commit(operation.run);
+      const remaining = undoStack.slice(0, -1);
+      setUndoStack(remaining);
+      // 栈空了才收起提示；还有可撤销的操作就再显示一轮，连续拖拽可以逐步撤销。
+      if (remaining.length === 0) { clearUndoToastTimer(); setUndoToastOpen(false); }
+      else { setUndoToastOpen(true); dismissUndoToastLater(); }
+    }
     catch { /* persistent banner owns the retry story */ }
-  }, [commit, undoStack]);
+  }, [commit, undoStack, clearUndoToastTimer, dismissUndoToastLater]);
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
@@ -407,7 +434,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
       <main id="main-content" ref={mainRef} className={`workspace-main ${page === "calendar" ? "calendar-workspace" : ""}`}>
         {saveError && <div className="error-banner" role="alert"><CircleAlert size={18} />未保存：{saveError}<Button variant="secondary" onClick={() => void retryAction.current?.()}>重试保存</Button></div>}
         {loadError && <div className="error-banner" role="alert"><CircleAlert size={18} />读取失败：{loadError}<Button variant="secondary" onClick={() => void reload()}>重试</Button></div>}
-        {undoStack.length > 0 && <button className="undo-toast" onClick={() => void undo()}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
+        {undoStack.length > 0 && undoToastOpen && <button className="undo-toast" onClick={() => void undo()} onMouseEnter={clearUndoToastTimer} onMouseLeave={dismissUndoToastLater} onFocus={clearUndoToastTimer} onBlur={dismissUndoToastLater}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
         {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} />}
         {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
