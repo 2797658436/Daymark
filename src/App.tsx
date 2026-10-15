@@ -70,8 +70,19 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const [finishing, setFinishing] = useState<ExecutionRecord | null>(null);
   const [taskPoolOpen, setTaskPoolOpen] = useState(true);
   const [poolOverlayOpen, setPoolOverlayOpen] = useState(false);
-  const [narrowWindow, setNarrowWindow] = useState(() => window.innerWidth < 1200);
-  useEffect(() => { const resize = () => setNarrowWindow(window.innerWidth < 1200); window.addEventListener("resize", resize); return () => window.removeEventListener("resize", resize); }, []);
+  // 判据必须与 styles.css 的 @media (max-width: 1199px) 完全一致：React 状态与 CSS 布局
+  // 各用一套（innerWidth < 1200 vs 媒体查询）时，窗口尺寸刚变化、resize 监听尚未挂上的
+  // 那个间隙会让两者分叉 —— React 仍以为窗口够宽而按内联渲染任务池，CSS 已按窄窗口把它
+  // 定位成固定浮层，浮层盖住日历头部使点击被拦截。订阅时先同步一次，补上挂载与订阅之间
+  // 错过的变更；matchMedia 的宽度与 CSS 媒体查询同源，不受滚动条宽度影响。
+  const [narrowWindow, setNarrowWindow] = useState(() => window.matchMedia("(max-width: 1199px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1199px)");
+    const sync = () => setNarrowWindow(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
   const [schedulingTaskId, setSchedulingTaskId] = useState<string | null>(null);
   const [schedulingOpen, setSchedulingOpen] = useState(false);
   const [calendarFocusSessionId, setCalendarFocusSessionId] = useState<string | null>(null);
