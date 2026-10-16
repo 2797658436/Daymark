@@ -47,6 +47,10 @@ describe("workspace index", () => {
     expect(index.recordsBySessionId.has("")).toBe(false);
     expect(projectTasksOf(index, "p-1").map((item) => item.id)).toEqual(["t-1"]);
     expect(projectTasksOf(index, "missing")).toEqual([]);
+    // P4-09：任务池按「该任务自己的时段」渲染，不再逐行扫全量时段（规格 §8）。
+    expect(index.sessionsByTaskId.get("t-1")?.map((item) => item.id)).toEqual(["s-1"]);
+    expect(index.sessionsByTaskId.get("t-2")?.map((item) => item.id)).toEqual(["s-2"]);
+    expect(index.sessionsByTaskId.get("missing")).toBeUndefined();
     expect(taskTitleOf(index, "t-2")).toBe("t-2");
     expect(taskTitleOf(index, "missing")).toBe("未知任务");
   });

@@ -900,6 +900,71 @@ describe("phase 1 manual alpha", () => {
     expect(backend.value).toMatchObject({ appearance: "dark" });
   });
 
+  /**
+   * AC16「设置慢写顺序」：旧请求的成功**不得**把新请求的状态改成「已保存」。
+   *
+   * `persist` 用 `saveRevision` 给每次写入编号，只有最新一次的结果允许改保存指示。
+   * 这里把后端做成手动放行的闸门：第一次写入（深色）放行后，第二次（浅色）才从队列
+   * 里开始写 —— 此刻界面必须仍是「正在保存」。去掉那个编号判断，旧请求返回时就会
+   * 抢先写上「已保存到本机」，用户看到的是「写完了」，而最新的偏好其实还在写。
+   */
+  it("does not let an older settings write report saved while a newer one is still in flight", async () => {
+    const user = userEvent.setup();
+    class GatedSettingsBackend implements SettingsBackend {
+      value: unknown = DEFAULT_SETTINGS;
+      writes = 0;
+      private gates: Array<() => void> = [];
+      async read() { return this.value; }
+      write(value: unknown) {
+        this.writes += 1;
+        this.value = value;
+        return new Promise<void>((resolve) => { this.gates.push(resolve); });
+      }
+      /** 放行当前所有在途写入；队列随后开始的写入会在下一次轮询里被放行。 */
+      releaseAll() { this.gates.splice(0).forEach((resolve) => resolve()); }
+    }
+
+    const backend = new GatedSettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("radio", { name: "深色" }));
+    await user.click(screen.getByRole("radio", { name: "浅色" }));
+    // 写入按顺序排队：第一次还挂在后端上，第二次根本还没开始。
+    expect(backend.writes).toBe(1);
+
+    // 放行旧请求（深色）：它成功返回，而最新的偏好（浅色）这时才轮到写。
+    backend.releaseAll();
+    await waitFor(() => expect(backend.writes).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("正在保存")).toBeVisible();
+    expect(screen.queryByText("已保存到本机")).not.toBeInTheDocument();
+
+    await waitFor(async () => {
+      backend.releaseAll();
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      expect(screen.getByText("已保存到本机")).toBeVisible();
+    });
+    expect(backend.value).toMatchObject({ appearance: "light" });
+  });
+
+  /**
+   * AC16「取消读取不误报」：在系统文件选择器里取消，不是失败。
+   *
+   * 取消返回 `null`（而不是抛错），既不弹恢复确认，也不能出现任何错误横幅 ——
+   * 尤其不能报成「最终数据库提交已取消」这类并不存在的写入结果。
+   */
+  it("reports no error when the restore source picker is cancelled", async () => {
+    const user = userEvent.setup();
+    const native = createNativeApi();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "数据" }));
+    await user.click(screen.getByRole("button", { name: "恢复" }));
+
+    expect(native.chooseRestoreSource).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "确认恢复备份" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/已取消/)).not.toBeInTheDocument();
+  });
+
   it("keeps restore confirmation keyboard-contained and returns focus on cancel", async () => {
     const user = userEvent.setup();
     const native = createNativeApi(structuredClone(EMPTY_WORKSPACE), {

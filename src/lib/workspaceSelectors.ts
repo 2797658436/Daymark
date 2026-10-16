@@ -32,6 +32,14 @@ export interface WorkspaceIndex {
   recordsBySessionId: Map<string, ExecutionRecord[]>;
   /** 项目 ID → 该项目下的任务（保持快照原顺序）。 */
   tasksByProjectId: Map<string, Task[]>;
+  /**
+   * 任务 ID → 该任务的计划执行时段（保持快照原顺序）。
+   *
+   * 任务池此前在**每一行**上 `sessions.some(...)`／`sessions.filter(...)` 扫全量时段，
+   * 1,000 任务 × 3,000 时段 就是每次渲染三百万次比较（规格 §8 点名的模式）。有了这张
+   * 分组表，每行只看自己的时段，总量降回 O(时段数)。
+   */
+  sessionsByTaskId: Map<string, ExecutionSession[]>;
   milestonesById: Map<string, ProjectMilestone>;
   milestonesByProjectId: Map<string, ProjectMilestone[]>;
   outcomesByMilestoneId: Map<string, MilestoneOutcome>;
@@ -55,7 +63,13 @@ export function createWorkspaceIndex(workspace: WorkspaceSnapshot): WorkspaceInd
   const projectsById = new Map(workspace.projects.map((project) => [project.id, project]));
 
   const sessionsById = new Map<string, ExecutionSession>();
-  for (const session of workspace.executionSessions) sessionsById.set(session.id, session);
+  const sessionsByTaskId = new Map<string, ExecutionSession[]>();
+  for (const session of workspace.executionSessions) {
+    sessionsById.set(session.id, session);
+    const bucket = sessionsByTaskId.get(session.taskId);
+    if (bucket) bucket.push(session);
+    else sessionsByTaskId.set(session.taskId, [session]);
+  }
 
   const recordsById = new Map<string, ExecutionRecord>();
   const recordsBySessionId = new Map<string, ExecutionRecord[]>();
@@ -86,6 +100,7 @@ export function createWorkspaceIndex(workspace: WorkspaceSnapshot): WorkspaceInd
     recordsById,
     recordsBySessionId,
     tasksByProjectId,
+    sessionsByTaskId,
     milestonesById,
     milestonesByProjectId,
     outcomesByMilestoneId,

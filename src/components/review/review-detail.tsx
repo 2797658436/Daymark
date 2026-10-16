@@ -240,24 +240,33 @@ function Fact({ label, value }: { label: string; value: string }) {
   return <div><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
+/**
+ * 模块级复用格式化器：`Intl.DateTimeFormat` 的**构造**很贵（每次几十微秒），而月回顾一次
+ * 渲染要调 `formatDayLabel` 约 200 次（两张数值表的 62 个日期 + 待回顾 61 + 里程碑 12 +
+ * 未推进 73 + 标题）。此前每次调用都新建一个实例，等于每帧重算同一个派生值 —— 规格 §8
+ * 点名的模式。
+ */
+const DAY_LABEL_FORMAT = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" });
+const CLOCK_FORMAT = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
 /** 本地日期的短标签：`8 月 5 日`。 */
 export function formatDayLabel(date: string) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+  return DAY_LABEL_FORMAT.format(new Date(`${date}T12:00:00`));
 }
 
 function formatClock(iso: string) {
-  return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  return CLOCK_FORMAT.format(new Date(iso));
 }
 
 function formatDateTime(iso: string) {
-  return `${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(iso))} ${formatClock(iso)}`;
+  return `${DAY_LABEL_FORMAT.format(new Date(iso))} ${formatClock(iso)}`;
 }
 
 /** 实际起止：跨午夜时把结束侧的日期也写出来，不靠读者自己推断。 */
 function formatRecordRange(record: ExecutionRecord) {
   const start = formatDateTime(record.actualStartUtc);
   if (!record.actualEndUtc) return `${start} 起 · 进行中`;
-  const endDate = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(record.actualEndUtc));
-  const sameDay = endDate === new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(record.actualStartUtc));
+  const endDate = DAY_LABEL_FORMAT.format(new Date(record.actualEndUtc));
+  const sameDay = endDate === DAY_LABEL_FORMAT.format(new Date(record.actualStartUtc));
   return `${start} — ${sameDay ? "" : `${endDate} `}${formatClock(record.actualEndUtc)}`;
 }
