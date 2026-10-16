@@ -15,6 +15,11 @@
   --accent-tint: #f5d8c2; /* 新增：用于节段高亮、文字 tint 等低饱和装饰 */
   --success: #39745a; --danger: #a83a35; --focus: #176d86;
   --action: #a94724; --action-hover: #873718; --action-text: #ffffff;
+  /* P4-12：实际记录叠加层的专用前景。它坐在 color-mix(--accent 82%, --panel) 上 ——
+     浅／深两主题混出来的底都是**中间调的橙**（浅 #da845e / 深 #cb794e），所以两主题
+     共用同一个深色前景，深色块里**故意不覆盖**它。不能沿用 --action-text：那是给
+     **实色** --action 按钮配的（浅色下是白字），落到被稀释过的底上只有 2.82:1。 */
+  --actual-record-text: #23150d;
   /* 阴影三级：low（卡片默认）、float（浮窗/按钮）、modal（模态/抽屉），新加 ring 给 hover 聚焦用 */
   --shadow-low: 0 1px 2px rgb(35 31 27 / 6%), 0 1px 1px rgb(35 31 27 / 4%);
   --shadow-float: 0 2px 6px rgb(35 31 27 / 8%), 0 8px 24px rgb(35 31 27 / 10%);
@@ -293,7 +298,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .session-review-actions button { min-height: 44px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .72rem; }
 .session-review-actions button:hover { color: var(--accent-strong); }
 .session-review-actions .progress-control { flex-basis: 100%; min-width: 250px; }
-.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); color: var(--action-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+/* P4-12：前景走 --actual-record-text（两主题都取深色）。此前用 --action-text，浅色下白字
+   落在 color-mix(accent 82%, panel) 的浅橙底上只有 2.82:1（axe color-contrast）。 */
+.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); color: var(--actual-record-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
 .back-to-now { position: absolute; z-index: 16; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
 @container (max-height: 28px) { .calendar-actual-record { align-content: center; padding-block: 2px; } .calendar-actual-record span, .calendar-actual-record time { display: none; } }.resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
 .session-edit-button { position: absolute; top: 3px; right: 3px; z-index: 2; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }.calendar-session[data-card-density="detailed"] .session-edit-button, .calendar-session:hover .session-edit-button, .calendar-session:focus-within .session-edit-button { opacity: 1; }.session-edit-button:hover { background: var(--panel-strong); color: var(--accent-strong); }

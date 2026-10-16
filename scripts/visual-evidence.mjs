@@ -15,7 +15,9 @@
  * 产出默认落在 `output/visual-p4-09/`（`output/` 是 gitignored 的交付目录，不会被
  * Playwright 的 `test-results/` 清理带走），文件名与规格里的六类一一对应。
  * 用 `--out <dir>` 可以换目录 —— P4-11 就是靠它把日历页的改前／改后截图分开落盘
- * （`--only calendar --out output/visual-p4-11-before` 与 `…-after`）。
+ * （`--only calendar --out output/visual-p4-11-before` 与 `…-after`）。P4-12 用同一招拍
+ * 实际记录叠加层（`--only actual-record --out output/visual-p4-12-before`），场景里带
+ * `crop` 的还会多出一张 `-crop.png` 元素近景。
  *
  * 用法：
  *   node scripts/visual-evidence.mjs                 # 全套
@@ -181,8 +183,9 @@ const preference = (overrides = {}) => ({ motion: "full", scale: 100, ...overrid
  * 日历页样本（P4-11 加）：同一周里同时有截止旗帜、项目截止、里程碑菱形、已排时段、
  * 已结束记录与时间块，好让三种视图的截图都能看出真实信息密度。
  *
- * **不开启** `showActualRecords`：实际记录叠加层的白字配 accent 底色对比度只有 2.82，
- * 是 P4-11 探针记录的既有缺陷（修它要改配色，超出 P4-11 的边界），截图不必把它拍进来。
+ * **不开启** `showActualRecords`：这 4 张图是 P4-11 用来证明「结构重排对视觉零影响」的
+ * 基线（逐字节相同），所以保持当时的配置不动。实际记录叠加层的改前／改后对照是 P4-12
+ * 的 `actual-record-*` 场景（见下面 `actualRecordWorkspace()`）。
  */
 function calendarWorkspace() {
   return workspace({
@@ -215,9 +218,89 @@ function calendarWorkspace() {
   });
 }
 
+/**
+ * 实际记录叠加层样本（P4-12 加）：一条 09:00–11:00 的已结束记录。
+ *
+ * **为什么截图用 2 小时、而 axe 实测用 30 分钟**：两者量的都是同一处配色（前景 token 变了，
+ * 底色没变）。200% 缩放下正文行高是 44px，30 分钟的叠加层只有 24px 高，标题那一行会被
+ * `overflow: hidden` 裁掉一截，截图里看不出字形；2 小时的叠加层有 144px，三行（「实际」／
+ * 标题／起止时间）都完整渲染。所以截图取 2 小时 + 默认 `calendarScale`（72px/小时），
+ * axe 与 E2E 取 P4-11 §7.1 的原始状态（30 分钟 × 48px/小时 = 24px，只剩标题）。
+ *
+ * 时间避开 12:00：那是「现在」线的位置，它的时间徽标会正好盖住叠加层的标题行（实测过）。
+ */
+function actualRecordWorkspace() {
+  return workspace({
+    tasks: [
+      { id: "ar-t1", projectId: null, title: "写开题报告", progress: 40, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task" },
+      { id: "ar-t2", projectId: null, title: "看第一章", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 30, sessionMinutes: 30, priority: "normal", sortOrder: 1, kind: "task" },
+    ],
+    executionSessions: [
+      { id: "ar-s1", taskId: "ar-t1", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "09:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      { id: "ar-s2", taskId: "ar-t2", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "missed" },
+    ],
+    executionRecords: [
+      { id: "ar-r1", sessionId: "ar-s1", taskId: "ar-t1", actualStartUtc: anchorAt(ANCHOR_DAY, "09:00"), actualEndUtc: anchorAt(ANCHOR_DAY, "11:00"), note: "" },
+    ],
+  });
+}
+
+/**
+ * 把实际记录叠加层滚进「吸顶头部下方」的可见区，并且**确认它真的在那里**（确认不了就抛错，
+ * 免得悄悄拍出一张没有叠加层的全页截图）。
+ *
+ * 三个坑，都是 P4-12 实测踩到的：
+ *   1. 只调 `scrollIntoViewIfNeeded()` 不够 —— 应用进入视图后还会自己定位一次，会把刚滚的
+ *      位置覆盖掉；
+ *   2. 周视图的日期头 + 全天区是**吸顶**的（`.week-sticky-header`，z-index 12），叠加层
+ *      z-index 只有 7 —— 滚到「滚动窗口上三分之一」仍然被它盖住，截图只会拍到一片纯色；
+ *   3. 日视图有三块连续日面板，`scroller.querySelector(".continuous-day-separator")` 拿到的是
+ *      **第一块**面板的分隔条；叠加层在第二块里，拿它当锚点会一路滚过头。锚点必须取叠加层
+ *      **自己那块面板**的分隔条。
+ */
+const measureActualRecord = (nudge) => {
+  const overlay = document.querySelector(".calendar-actual-record");
+  if (!overlay) return { ok: false, reason: "no-overlay" };
+  let node = overlay.parentElement;
+  let scroller = null;
+  while (node) {
+    if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) { scroller = node; break; }
+    node = node.parentElement;
+  }
+  if (!scroller) return { ok: false, reason: "no-scroller" };
+  const header = scroller.querySelector(".week-sticky-header")
+    ?? overlay.closest(".continuous-day-panel")?.querySelector(".continuous-day-separator")
+    ?? null;
+  const scrollerRect = scroller.getBoundingClientRect();
+  const safeTop = header ? header.getBoundingClientRect().bottom : scrollerRect.top;
+  const rect = overlay.getBoundingClientRect();
+  const ok = rect.top >= safeTop + 8 && rect.bottom <= scrollerRect.bottom - 8;
+  if (!ok && nudge) scroller.scrollTop += rect.top - safeTop - 24;
+  return {
+    ok, reason: header ? (scroller.querySelector(".week-sticky-header") ? "week-header" : "day-separator") : "scroller-top",
+    overlayTop: Math.round(rect.top), overlayBottom: Math.round(rect.bottom),
+    safeTop: Math.round(safeTop), scrollerBottom: Math.round(scrollerRect.bottom),
+    scrollTop: Math.round(scroller.scrollTop),
+  };
+};
+
+async function frameActualRecord(page) {
+  let last = { ok: false, reason: "not-run" };
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    last = await page.evaluate(measureActualRecord, true);
+    await page.waitForTimeout(300);
+    if (last.ok) {
+      const confirm = await page.evaluate(measureActualRecord, false);
+      if (confirm.ok) return confirm;
+      last = confirm;
+    }
+  }
+  throw new Error(`实际记录叠加层没能滚进可见区（${JSON.stringify(last)}）`);
+}
+
 // ---------------------------------------------------------------- 场景
 
-async function capture(browser, name, seed, act) {
+async function capture(browser, name, seed, act, crop) {
   const context = await browser.newContext({ viewport: seed.viewport ?? { width: 1200, height: 760 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   try {
@@ -239,6 +322,12 @@ async function capture(browser, name, seed, act) {
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(outputDirectory, `${name}.png`) });
     console.log(`[visual] ${name}.png`);
+    // `crop`：再拍一张目标元素的近景。小色块（实际记录叠加层只有 24–72px 高）在全页
+    // 截图里只有几个像素高，看不出文字，近景才是「改前白字 / 改后深字」的直接证据。
+    if (crop) {
+      await page.locator(crop).first().screenshot({ path: join(outputDirectory, `${name}-crop.png`) });
+      console.log(`[visual] ${name}-crop.png`);
+    }
   } finally {
     await context.close();
   }
@@ -398,6 +487,33 @@ function scenarios(port) {
         await page.getByRole("heading", { name: "2026年8月回顾", level: 1 }).waitFor();
       },
     })),
+    // P4-12：实际记录叠加层的改前／改后对照。开启「显示实际记录」，浅／深各一张全页 +
+    // 一张叠加层近景。宽度用 1200：960 宽时右侧任务池会变成覆盖面板压住日历。
+    //
+    // **只拍日视图**：200% 缩放下周视图的可见时间窗只有约 140px 高（日期头 + 全天区吸顶占了
+    // 一多半），而 2 小时的叠加层有 144px —— 放不下。日视图的可视窗口宽得多，三行文字都能
+    // 完整渲染，是「白字 → 深字」最直接的对照。
+    //
+    // 改前那组要先 `git checkout HEAD -- src/styles.css`（跑完立刻从备份拷回来）。
+    ...["day"].flatMap((view) => ["light", "dark"].map((appearance) => ({
+      name: `actual-record-${view}-1200-200-${appearance}`,
+      crop: ".calendar-actual-record",
+      seed: {
+        port, clock, viewport: { width: 1200, height: 760 },
+        preferences: preference({
+          lastPage: "calendar", calendarView: view, appearance, scale: 200, showActualRecords: true,
+          calendarAnchors: { day: ANCHOR_DAY, week: ANCHOR_DAY, month: ANCHOR_DAY },
+          calendarZoom: { day: "standard", week: "standard", month: "standard" },
+        }),
+        workspace: actualRecordWorkspace(),
+      },
+      act: async (page) => {
+        await page.getByRole("heading", { name: "日历", level: 1 }).waitFor();
+        await page.getByRole("button", { name: view === "week" ? "周" : "日", exact: true }).click();
+        await page.locator(view === "week" ? ".week-calendar-main" : ".continuous-day-axis").waitFor();
+        await frameActualRecord(page);
+      },
+    }))),
   ];
 }
 
@@ -419,7 +535,7 @@ async function main() {
     browser = await chromium.launch({ headless: !args.headed });
     for (const scenario of scenarios(args.port)) {
       if (args.only && !scenario.name.includes(args.only)) continue;
-      await capture(browser, scenario.name, scenario.seed, scenario.act);
+      await capture(browser, scenario.name, scenario.seed, scenario.act, scenario.crop);
       written.push(scenario.name);
     }
   } finally {

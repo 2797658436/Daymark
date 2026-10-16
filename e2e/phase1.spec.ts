@@ -1198,9 +1198,9 @@ test("phase 4 M12 has no automated accessibility violations on every page at 960
  * 名字被丢弃，状态反而彻底读不到。P4-11 删掉了那个多余的 `aria-label`（状态本来就写在
  * 卡片自己的可访问名里），这条用例把「有状态图标」这一态钉住。
  *
- * **不开启「显示实际记录」**：实际记录叠加层（`.calendar-actual-record`）的白字落在 accent
- * 底色上，对比度 2.82（< 4.5）—— 那是 P4-11 探针发现的另一条既有缺陷，修它要改配色，
- * 超出本包「不改视觉」的边界，记录在 docs/reports/phase-4-p4-11-implementation.md。
+ * **本用例不开启「显示实际记录」**：实际记录叠加层（`.calendar-actual-record`）的对比度缺陷
+ * 已由 **P4-12** 修掉，并由下面那条专门的用例覆盖（它会显式开启这一项）。这里保持不开启，
+ * 是为了让这条用例只回答「状态图标／全天标记／时间块」这一组问题。
  */
 function calendarAxeWorkspace() {
   const session = (id: string, taskId: string, date: string, startLocal: string, endLocal: string, status: string) => ({
@@ -1263,6 +1263,177 @@ test("phase 4 M12 keeps the calendar page clean with session status icons and al
       await page.getByRole("button", { name: label, exact: true }).click();
       await expect(page.locator(`.${selector}`)).toBeVisible();
       expect(await violationIds(), `${theme} · 日历（${label}）· 状态图标`).toEqual([]);
+    }
+  }
+});
+
+/**
+ * P4-12：实际记录叠加层（`.calendar-actual-record`）的文字对比度。
+ *
+ * **缺陷**：浅色主题下叠加层用 `color: var(--action-text)`（白字）压在
+ * `color-mix(in srgb, var(--accent) 82%, var(--panel))` 这个**被稀释过的**底上 —— 混色后底色是
+ * `#da845e`，白字实测对比度 **2.82**（< 4.5:1；字号 23.04px、字重 600，不属于大字号豁免）。
+ * `--action-text` 本来是给**实色** `--action` 按钮配的，用在这里是设计 token 配错了对象。
+ * 修法与实测见 `docs/reports/phase-4-p4-12-implementation.md`。
+ *
+ * **本用例显式开启「显示实际记录」**（P4-09 的夹具没开这一项，所以这条缺陷从 AC14 眼里溜过去了），
+ * 并且断言顺序是：
+ *   1. 叠加层**真的渲染出来了**（夹具里必须真的有已结束的 `executionRecords`）；
+ *   2. 它**真的在屏幕上**（`toBeInViewport`，按 IntersectionObserver 算，会扣掉祖先滚动容器的裁剪）；
+ *   3. `strong` 的实测对比度（前景 vs 叠加层底色）**≥ 4.5:1** —— 也就是报告里那个 2.82；
+ *   4. axe **确实评估过**叠加层（节点进过四个桶之一）；
+ *   5. 最后才断言整页零违规。
+ *
+ * 第 2、4 步一步都不能省。`color-contrast` 是「检查**已渲染且在屏幕上**的元素」的规则：
+ *   - 元素没渲染（P4-09 的夹具）→ 规则不跑；
+ *   - 元素渲染了但滚出视口 → 规则**同样**不跑，节点连 violations／incomplete／passes／inapplicable
+ *     四个桶都不进（P4-12 实测：960×200% 下日视图的可视窗口只有约 3 小时，叠加层默认在窗口外）。
+ * 两种情形用例都会**假绿**，这正是 P4-09 漏掉这条缺陷的机制。
+ *
+ * 第 3 步是必要的补充：叠加层里的文字**经常被 axe 判成 `incomplete`**（「背景色无法确定：被另一个
+ * 元素盖住」）—— `incomplete` 既不算通过也不算违规，所以「axe 零违规」并不等于「标题这条真的被量过了」。
+ * 直接按 WCAG 公式算一次比值（与 axe 同一套口径）才能确定地钉住报告里的元素。
+ *
+ * **夹具里的时段都不是「待回顾」**，因此不会渲染 `.review-summary`。这不是为了让用例变绿：
+ * 那个元素在 `opacity: .62` 的 `.planned-outline` 卡片（只在开启「显示实际记录」时出现）里
+ * 有**另一条独立的**对比度问题（浅色实测 2.48、暗色 3.88），成因是整卡降透明度、而不是本包要修的
+ * accent 底色，按本包边界记录在 `docs/reports/phase-4-p4-12-implementation.md`，不在这里顺手改。
+ */
+function calendarActualRecordWorkspace() {
+  const session = (id: string, taskId: string, date: string, startLocal: string, endLocal: string, status: string) => ({
+    id, taskId, localDate: date, endLocalDate: date, startLocal, endLocal, timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status,
+  });
+  /**
+   * 记录时间用**本地墙钟**换算成 UTC。叠加层按 `new Date(actualStartUtc)` 的本地时刻落位，
+   * 直接写 `…Z` 会让「11:30 那条记录在不在可视窗口里」随跑测机器的时区变化。
+   *
+   * 长度取 **30 分钟**：配合下面 48px/小时的 `calendarScale`，叠加层正好 24px ≤ 28px，
+   * 容器查询把「实际」和时间行隐藏，只剩标题 —— 也就是 P4-11 §7.1 实测到 2.82 的那个
+   * **同一个**状态，断言和报告里的元素、字号（23.04px）逐项对得上。
+   */
+  const at = (date: string, time: string) => new Date(`${date}T${time}:00`).toISOString();
+  return {
+    ...calendarAxeWorkspace(),
+    executionSessions: [
+      session("ar-s1", "t-1", "2026-08-05", "11:30", "12:00", "scheduled"),
+      session("ar-s2", "t-3", "2026-08-05", "14:00", "15:00", "missed"),
+      session("ar-s3", "t-2", "2026-08-06", "20:00", "21:00", "scheduled"),
+    ],
+    executionRecords: [
+      { id: "ar-r1", sessionId: "ar-s1", taskId: "t-1", actualStartUtc: at("2026-08-05", "11:30"), actualEndUtc: at("2026-08-05", "12:00"), note: "" },
+    ],
+  };
+}
+
+test("phase 4 M12 keeps the calendar page clean with the actual-record overlay", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", showActualRecords: true,
+      // 48px/小时（与 P4-11 的探针一致）→ 30 分钟的记录 = 24px 高的叠加层，只剩标题那一行。
+      calendarScale: { day: 48, week: 48, month: 82 },
+      calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, calendarActualRecordWorkspace());
+  await page.reload();
+  await page.setViewportSize({ width: 960, height: 720 });
+  await setAppScale(page, 200);
+  await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
+
+  /**
+   * 两件事一起看：
+   *
+   * 1. **axe**：违规 id、以及「叠加层的文字到底有没有被评估过」。`color-contrast` 通过时节点落在
+   *    `passes` 里；元素不在屏幕上时它哪个桶都不进。
+   * 2. **实测对比度**：直接按 WCAG 的相对亮度公式，用 `getComputedStyle` 解析出来的前景色
+   *    （`strong`）与底色（叠加层）算一次比值。为什么不能只靠 axe —— 叠加层里的文字**经常被
+   *    axe 判成 `incomplete`**（「背景色无法确定：被另一个元素盖住」），而 `incomplete` 既不是
+   *    通过也不是违规。也就是说：axe 说「零违规」并不等于「标题这条真的被量过了」。
+   *    这里算出来的比值与 axe 自己的口径完全一致（同一套公式），但不受它的重叠启发式影响，
+   *    所以它能**确定地**钉住报告里的那个元素。
+   */
+  const audit = () => page.evaluate(async () => {
+    type AxeRule = { id: string; nodes: Array<{ target: string[] }> };
+    const axe = (window as unknown as { axe: { run(): Promise<{ violations: AxeRule[]; incomplete: AxeRule[]; passes: AxeRule[]; inapplicable: AxeRule[] }> } }).axe;
+    const outcome = await axe.run();
+    const targetsIn = (bucket: AxeRule[]) => bucket
+      .filter((entry) => entry.id === "color-contrast")
+      .flatMap((entry) => entry.nodes.map((node) => node.target.join(" ")));
+
+    /** 用 canvas 把任意颜色写法（含 `color(srgb …)`）归一成 0–255 三元组。 */
+    const toRgb = (color: string) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1; canvas.height = 1;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("拿不到 2d context");
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+      return [r, g, b] as [number, number, number];
+    };
+    const luminance = (rgb: [number, number, number]) => {
+      const channel = (value: number) => { const c = value / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+    };
+    const overlay = document.querySelector(".calendar-actual-record");
+    const strong = overlay?.querySelector("strong");
+    let contrast: { ratio: number; foreground: string; background: string } | null = null;
+    if (overlay && strong) {
+      const foreground = getComputedStyle(strong).color;
+      const background = getComputedStyle(overlay).backgroundColor;
+      const [high, low] = luminance(toRgb(foreground)) > luminance(toRgb(background))
+        ? [luminance(toRgb(foreground)), luminance(toRgb(background))]
+        : [luminance(toRgb(background)), luminance(toRgb(foreground))];
+      contrast = { ratio: (high + 0.05) / (low + 0.05), foreground, background };
+    }
+
+    return {
+      violationIds: Array.from(new Set(outcome.violations.map((violation) => violation.id))).sort(),
+      overlayEvaluated: [
+        ...targetsIn(outcome.violations), ...targetsIn(outcome.incomplete),
+        ...targetsIn(outcome.passes), ...targetsIn(outcome.inapplicable),
+      ].some((target) => target.includes("calendar-actual-record")),
+      contrast,
+    };
+  });
+
+  for (const theme of ["浅色", "深色"] as const) {
+    await sidebar(page).getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("radio", { name: theme }).check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme === "深色" ? "dark" : "light");
+    await page.waitForTimeout(150);
+    await sidebar(page).getByRole("button", { name: "日历", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+    for (const [label, selector] of [["日", "continuous-day-axis"], ["周", "week-calendar-main"], ["月", "month-calendar"]] as const) {
+      await page.getByRole("button", { name: label, exact: true }).click();
+      await expect(page.locator(`.${selector}`)).toBeVisible();
+      const overlay = page.locator(".calendar-actual-record").first();
+      if (label === "月") {
+        // 月视图**按设计**不渲染实际记录叠加层（工具栏在月视图里根本不显示那个开关），
+        // 所以这里没有可测的对比度 —— 断言它确实不存在，免得把「没渲染」误当成「达标」。
+        await expect(page.locator(".calendar-actual-record"), `${theme} · 日历（月）· 按设计不渲染叠加层`).toHaveCount(0);
+      } else {
+        await expect(overlay, `${theme} · 日历（${label}）· 叠加层必须真的渲染出来`).toBeVisible();
+        // 滚动容器（日视图约 3 小时高、周视图约 5 小时高）默认停在「现在」附近，记录时间不同
+        // 就可能整条落在窗口外。这里显式滚进来，再用 IntersectionObserver 口径的
+        // `toBeInViewport` 断言它**真的**在屏幕上 —— 元素不在屏幕上，下面的 axe 断言就是空跑。
+        await overlay.scrollIntoViewIfNeeded();
+        await expect(overlay, `${theme} · 日历（${label}）· 叠加层必须真的在屏幕上，否则 axe 不会评估它`).toBeInViewport({ ratio: 0.9 });
+      }
+      const result = await audit();
+      if (label !== "月") {
+        // 报告里的那条缺陷是 `.calendar-actual-record > strong`（白字压在 `#da845e` 上，2.82）。
+        // 这里量的是同一个东西：`strong` 的前景色 vs 叠加层的底色。
+        if (!result.contrast) throw new Error(`${theme} · 日历（${label}）· 拿不到叠加层的实测对比度`);
+        expect(
+          result.contrast.ratio,
+          `${theme} · 日历（${label}）· 实际记录标题对比度（前景 ${result.contrast.foreground} / 底色 ${result.contrast.background}）`,
+        ).toBeGreaterThanOrEqual(4.5);
+        expect(result.overlayEvaluated, `${theme} · 日历（${label}）· axe 必须真的评估过叠加层`).toBe(true);
+      }
+      expect(result.violationIds, `${theme} · 日历（${label}）· 实际记录叠加层`).toEqual([]);
     }
   }
 });
