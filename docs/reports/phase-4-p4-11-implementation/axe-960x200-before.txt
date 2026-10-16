@@ -1,0 +1,96 @@
+[probe] npm run build …
+[36mvite v8.1.5 [32mbuilding client environment for production...[36m[39m
+[2Ktransforming...✓ 1818 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.34 kB
+dist/assets/index-Bg3gf6S4.css   81.24 kB │ gzip:  15.19 kB
+dist/assets/index-BUVfdBEz.js   465.54 kB │ gzip: 137.50 kB
+
+[32m✓ built in 2.92s[39m
+
+===== light / day =====
+（零违规）
+
+===== light / week =====
+- aria-prohibited-attr [serious] ×1  tags=cat.aria,wcag2a,wcag412,EN-301-549,EN-9.4.1.2,RGAAv4,RGAA-7.1.1
+    target: span[aria-label="本次未推进"]
+    html:   <span class="session-status-icon" aria-label="本次未推进">
+    why:    Fix all of the following:   aria-label attribute cannot be used on a span with no valid role attribute.
+- aria-required-parent [critical] ×7  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: div[aria-label="2026-08-03 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-03 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-04 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-04 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-05 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-05 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-06 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-06 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+- color-contrast [serious] ×1  tags=cat.color,wcag2aa,wcag143,TTv5,TT13.c,EN-301-549,EN-9.1.4.3,ACT,RGAAv4,RGAA-3.2.1
+    target: .calendar-actual-record > strong
+    html:   <strong>看第一章</strong>
+    why:    Fix any of the following:   Element has insufficient color contrast of 2.82 (foreground color: #ffffff, background color: #da845e, font size: 17.3pt (23.04px), font weight: normal). Expected contrast ratio of 4.5:1
+
+===== light / month =====
+- aria-required-children [critical] ×1  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: .month-calendar
+    html:   <div class="month-calendar" role="grid" aria-label="月历">
+    why:    Fix any of the following:   Element has children which are not allowed: [role=columnheader], [role=gridcell]
+- aria-required-parent [critical] ×49  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: div[aria-label="周一"]
+    html:   <div role="columnheader" aria-label="周一">周一</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周二"]
+    html:   <div role="columnheader" aria-label="周二">周二</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周三"]
+    html:   <div role="columnheader" aria-label="周三">周三</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周四"]
+    html:   <div role="columnheader" aria-label="周四">周四</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+
+===== dark / day =====
+（零违规）
+
+===== dark / week =====
+- aria-prohibited-attr [serious] ×1  tags=cat.aria,wcag2a,wcag412,EN-301-549,EN-9.4.1.2,RGAAv4,RGAA-7.1.1
+    target: span[aria-label="本次未推进"]
+    html:   <span class="session-status-icon" aria-label="本次未推进">
+    why:    Fix all of the following:   aria-label attribute cannot be used on a span with no valid role attribute.
+- aria-required-parent [critical] ×7  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: div[aria-label="2026-08-03 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-03 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-04 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-04 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-05 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-05 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="2026-08-06 09:00 空白时间"]
+    html:   <div class="day-track" role="gridcell" tabindex="-1" aria-label="2026-08-06 09:00 空白时间" aria-selected="false">
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+
+===== dark / month =====
+- aria-required-children [critical] ×1  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: .month-calendar
+    html:   <div class="month-calendar" role="grid" aria-label="月历">
+    why:    Fix any of the following:   Element has children which are not allowed: [role=columnheader], [role=gridcell]
+- aria-required-parent [critical] ×49  tags=cat.aria,wcag2a,wcag131,EN-301-549,EN-9.1.3.1,RGAAv4,RGAA-9.3.1
+    target: div[aria-label="周一"]
+    html:   <div role="columnheader" aria-label="周一">周一</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周二"]
+    html:   <div role="columnheader" aria-label="周二">周二</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周三"]
+    html:   <div role="columnheader" aria-label="周三">周三</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row
+    target: div[aria-label="周四"]
+    html:   <div role="columnheader" aria-label="周四">周四</div>
+    why:    Fix any of the following:   Required ARIA parent role not present: row

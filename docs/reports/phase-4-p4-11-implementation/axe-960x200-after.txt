@@ -1,0 +1,21 @@
+
+===== light / day =====
+（零违规）
+
+===== light / week =====
+- color-contrast [serious] ×1  tags=cat.color,wcag2aa,wcag143,TTv5,TT13.c,EN-301-549,EN-9.1.4.3,ACT,RGAAv4,RGAA-3.2.1
+    target: .calendar-actual-record > strong
+    html:   <strong>看第一章</strong>
+    why:    Fix any of the following:   Element has insufficient color contrast of 2.82 (foreground color: #ffffff, background color: #da845e, font size: 17.3pt (23.04px), font weight: normal). Expected contrast ratio of 4.5:1
+
+===== light / month =====
+（零违规）
+
+===== dark / day =====
+（零违规）
+
+===== dark / week =====
+（零违规）
+
+===== dark / month =====
+（零违规）
