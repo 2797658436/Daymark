@@ -1,0 +1,369 @@
+
+===== other-findings-15 / light / 日 =====
+.calendar-actual-record 命中 1 个
+{
+  "overlayColor": "rgb(35, 21, 13)",
+  "overlayBackground": "color(srgb 0.855294 0.517647 0.369725)",
+  "strongColor": "rgb(35, 21, 13)",
+  "strongFontSize": "23.04px",
+  "strongFontWeight": "600",
+  "strongWidth": 576,
+  "strongHeight": 14,
+  "strongTop": 376,
+  "inViewport": true,
+  "elementFromPoint": "BUTTON.active",
+  "text": "看第一章"
+}
+axe 是否评估了 .calendar-actual-record：否（元素不在视口里，color-contrast 根本不会跑）
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: color-contrast
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [violation] target: .calendar-time-block > time
+  [violation] html:   <time>16:00–17:00</time>
+  [violation] why:    Fix any of the following:   Element has insufficient color contrast of 4.21 (foreground color: #706d66, background color: #e9e8e5, font size: 16.3pt (21.76px), font weight: normal). Expected contrast ratio of 4.5:1
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(14)
+  [incomplete] html:   <span style="top: 54.1667%;">13:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(15)
+  [incomplete] html:   <span style="top: 58.3333%;">14:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(16)
+  [incomplete] html:   <span style="top: 62.5%;">15:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(17)
+  [incomplete] html:   <span style="top: 66.6667%;">16:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(18)
+  [incomplete] html:   <span style="top: 70.8333%;">17:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(19)
+  [incomplete] html:   <span style="top: 75%;">18:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .today-number
+  [incomplete] html:   <span class="today-number">5</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .review-summary
+  [incomplete] html:   <span class="review-summary">时段已结束 · 当前进度 40%</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+  [incomplete] target: .missed > .session-time
+  [incomplete] html:   <time class="session-time">14:00–15:00</time>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+  [incomplete] target: span > strong
+  [incomplete] html:   <strong>2 项还没有下一次安排</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+
+===== other-findings-15 / light / 周 =====
+.calendar-actual-record 命中 1 个
+{
+  "overlayColor": "rgb(35, 21, 13)",
+  "overlayBackground": "color(srgb 0.855294 0.517647 0.369725)",
+  "strongColor": "rgb(35, 21, 13)",
+  "strongFontSize": "23.04px",
+  "strongFontWeight": "600",
+  "strongWidth": 76,
+  "strongHeight": 14,
+  "strongTop": 418,
+  "inViewport": true,
+  "elementFromPoint": "BUTTON.urgency-today ",
+  "text": "看第一章"
+}
+axe 是否评估了 .calendar-actual-record：是
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[".calendar-actual-record > strong"]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: （零违规）
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .today-number
+  [incomplete] html:   <span class="today-number">5</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .time-axis-track > span:nth-child(4)
+  [incomplete] html:   <span style="top: 12.5%;">03:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(5)
+  [incomplete] html:   <span style="top: 16.6667%;">04:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .time-axis-track > span:nth-child(6)
+  [incomplete] html:   <span style="top: 20.8333%;">05:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(7)
+  [incomplete] html:   <span style="top: 25%;">06:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(8)
+  [incomplete] html:   <span style="top: 29.1667%;">07:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(9)
+  [incomplete] html:   <span style="top: 33.3333%;">08:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(10)
+  [incomplete] html:   <span style="top: 37.5%;">09:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(11)
+  [incomplete] html:   <span style="top: 41.6667%;">10:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(12)
+  [incomplete] html:   <span style="top: 45.8333%;">11:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(13)
+  [incomplete] html:   <span style="top: 50%;">12:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(14)
+  [incomplete] html:   <span style="top: 54.1667%;">13:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(15)
+  [incomplete] html:   <span style="top: 58.3333%;">14:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(16)
+  [incomplete] html:   <span style="top: 62.5%;">15:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(17)
+  [incomplete] html:   <span style="top: 66.6667%;">16:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(18)
+  [incomplete] html:   <span style="top: 70.8333%;">17:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(19)
+  [incomplete] html:   <span style="top: 75%;">18:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .calendar-time-block > time
+  [incomplete] html:   <time>16:00–17:00</time>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+  [incomplete] target: .pending-review > strong
+  [incomplete] html:   <strong>写开题报告</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+  [incomplete] target: .review-summary
+  [incomplete] html:   <span class="review-summary">时段已结束 · 当前进度 40%</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: .missed > strong
+  [incomplete] html:   <strong>看第一章</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: .calendar-actual-record > strong
+  [incomplete] html:   <strong>看第一章</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: article[data-session-id="s-4"] > strong
+  [incomplete] html:   <strong>写开题报告</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+
+===== other-findings-15 / light / 月 =====
+.calendar-actual-record 命中 0 个
+  ⚠️ 元素不存在 —— 本格没有可测的对比度，下面的零违规没有意义
+axe 是否评估了 .calendar-actual-record：否（元素不在视口里，color-contrast 根本不会跑）
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: （零违规）
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: div[aria-label="周一"]
+  [incomplete] html:   <div role="columnheader" aria-label="周一">周一</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周二"]
+  [incomplete] html:   <div role="columnheader" aria-label="周二">周二</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周三"]
+  [incomplete] html:   <div role="columnheader" aria-label="周三">周三</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周四"]
+  [incomplete] html:   <div role="columnheader" aria-label="周四">周四</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周五"]
+  [incomplete] html:   <div role="columnheader" aria-label="周五">周五</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周六"]
+  [incomplete] html:   <div role="columnheader" aria-label="周六">周六</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周日"]
+  [incomplete] html:   <div role="columnheader" aria-label="周日">周日</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .urgency-soon > span
+  [incomplete] html:   <span>7 天内截止 · 看第一章</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+
+===== other-findings-15 / dark / 日 =====
+.calendar-actual-record 命中 1 个
+{
+  "overlayColor": "rgb(35, 21, 13)",
+  "overlayBackground": "color(srgb 0.794667 0.473098 0.307686)",
+  "strongColor": "rgb(35, 21, 13)",
+  "strongFontSize": "23.04px",
+  "strongFontWeight": "600",
+  "strongWidth": 576,
+  "strongHeight": 14,
+  "strongTop": 376,
+  "inViewport": true,
+  "elementFromPoint": "BUTTON.active",
+  "text": "看第一章"
+}
+axe 是否评估了 .calendar-actual-record：否（元素不在视口里，color-contrast 根本不会跑）
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: （零违规）
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(14)
+  [incomplete] html:   <span style="top: 54.1667%;">13:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(15)
+  [incomplete] html:   <span style="top: 58.3333%;">14:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(16)
+  [incomplete] html:   <span style="top: 62.5%;">15:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(17)
+  [incomplete] html:   <span style="top: 66.6667%;">16:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(18)
+  [incomplete] html:   <span style="top: 70.8333%;">17:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: section[data-calendar-date="2026-08-05"] > .calendar-grid.day > .time-axis > .time-axis-track > span:nth-child(19)
+  [incomplete] html:   <span style="top: 75%;">18:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .today-number
+  [incomplete] html:   <span class="today-number">5</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .review-summary
+  [incomplete] html:   <span class="review-summary">时段已结束 · 当前进度 40%</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+  [incomplete] target: .missed > .session-time
+  [incomplete] html:   <time class="session-time">14:00–15:00</time>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+  [incomplete] target: span > strong
+  [incomplete] html:   <strong>2 项还没有下一次安排</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+
+===== other-findings-15 / dark / 周 =====
+.calendar-actual-record 命中 1 个
+{
+  "overlayColor": "rgb(35, 21, 13)",
+  "overlayBackground": "color(srgb 0.794667 0.473098 0.307686)",
+  "strongColor": "rgb(35, 21, 13)",
+  "strongFontSize": "23.04px",
+  "strongFontWeight": "600",
+  "strongWidth": 76,
+  "strongHeight": 14,
+  "strongTop": 418,
+  "inViewport": true,
+  "elementFromPoint": "BUTTON.urgency-today ",
+  "text": "看第一章"
+}
+axe 是否评估了 .calendar-actual-record：是
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[".calendar-actual-record > strong"]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: （零违规）
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .today-number
+  [incomplete] html:   <span class="today-number">5</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: .time-axis-track > span:nth-child(4)
+  [incomplete] html:   <span style="top: 12.5%;">03:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(5)
+  [incomplete] html:   <span style="top: 16.6667%;">04:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .time-axis-track > span:nth-child(6)
+  [incomplete] html:   <span style="top: 20.8333%;">05:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(7)
+  [incomplete] html:   <span style="top: 25%;">06:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(8)
+  [incomplete] html:   <span style="top: 29.1667%;">07:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(9)
+  [incomplete] html:   <span style="top: 33.3333%;">08:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(10)
+  [incomplete] html:   <span style="top: 37.5%;">09:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(11)
+  [incomplete] html:   <span style="top: 41.6667%;">10:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(12)
+  [incomplete] html:   <span style="top: 45.8333%;">11:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(13)
+  [incomplete] html:   <span style="top: 50%;">12:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(14)
+  [incomplete] html:   <span style="top: 54.1667%;">13:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(15)
+  [incomplete] html:   <span style="top: 58.3333%;">14:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(16)
+  [incomplete] html:   <span style="top: 62.5%;">15:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(17)
+  [incomplete] html:   <span style="top: 66.6667%;">16:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(18)
+  [incomplete] html:   <span style="top: 70.8333%;">17:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: span:nth-child(19)
+  [incomplete] html:   <span style="top: 75%;">18:00</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .calendar-time-block > time
+  [incomplete] html:   <time>16:00–17:00</time>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+  [incomplete] target: .pending-review > strong
+  [incomplete] html:   <strong>写开题报告</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it partially overlaps other elements
+  [incomplete] target: .review-summary
+  [incomplete] html:   <span class="review-summary">时段已结束 · 当前进度 40%</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: .missed > strong
+  [incomplete] html:   <strong>看第一章</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: .calendar-actual-record > strong
+  [incomplete] html:   <strong>看第一章</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+  [incomplete] target: article[data-session-id="s-4"] > strong
+  [incomplete] html:   <strong>写开题报告</strong>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined due to a background gradient
+
+===== other-findings-15 / dark / 月 =====
+.calendar-actual-record 命中 0 个
+  ⚠️ 元素不存在 —— 本格没有可测的对比度，下面的零违规没有意义
+axe 是否评估了 .calendar-actual-record：否（元素不在视口里，color-contrast 根本不会跑）
+  分桶：[{"name":"violations","targets":[]},{"name":"incomplete","targets":[]},{"name":"passes","targets":[]},{"name":"inapplicable","targets":[]}]
+violation ids: （零违规）
+incomplete ids: aria-prohibited-attr, aria-valid-attr-value, color-contrast
+  [incomplete] target: .brand-mark
+  [incomplete] html:   <span class="brand-mark">D</span>
+  [incomplete] why:    Fix any of the following:   Element content is too short to determine if it is actual text content
+  [incomplete] target: div[aria-label="周一"]
+  [incomplete] html:   <div role="columnheader" aria-label="周一">周一</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周二"]
+  [incomplete] html:   <div role="columnheader" aria-label="周二">周二</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周三"]
+  [incomplete] html:   <div role="columnheader" aria-label="周三">周三</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周四"]
+  [incomplete] html:   <div role="columnheader" aria-label="周四">周四</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周五"]
+  [incomplete] html:   <div role="columnheader" aria-label="周五">周五</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周六"]
+  [incomplete] html:   <div role="columnheader" aria-label="周六">周六</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: div[aria-label="周日"]
+  [incomplete] html:   <div role="columnheader" aria-label="周日">周日</div>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it's partially obscured by another element
+  [incomplete] target: .urgency-soon > span
+  [incomplete] html:   <span>7 天内截止 · 看第一章</span>
+  [incomplete] why:    Fix any of the following:   Element's background color could not be determined because it is overlapped by another element
+
+===== 汇总（other-findings-15）=====
+light / 日: color=rgb(35, 21, 13) background=color(srgb 0.855294 0.517647 0.369725) font=23.04px/600 top=376 inViewport=true
+light / 周: color=rgb(35, 21, 13) background=color(srgb 0.855294 0.517647 0.369725) font=23.04px/600 top=418 inViewport=true
+dark / 日: color=rgb(35, 21, 13) background=color(srgb 0.794667 0.473098 0.307686) font=23.04px/600 top=376 inViewport=true
+dark / 周: color=rgb(35, 21, 13) background=color(srgb 0.794667 0.473098 0.307686) font=23.04px/600 top=418 inViewport=true
