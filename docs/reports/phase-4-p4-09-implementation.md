@@ -143,7 +143,7 @@
 
 ### 4.3 视觉证据
 
-`node scripts/visual-evidence.mjs` 产出 `output/visual-p4-09/`：
+`node scripts/visual-evidence.mjs` 产出 `output/visual-p4-09/`；**入库的证据快照在本报告同名的目录 [`phase-4-p4-09-implementation/`](phase-4-p4-09-implementation/)**（`output/` 是 gitignored 的，只放过程文件）：
 
 | 文件名 | 规格 §11 要求对应 |
 | --- | --- |
@@ -239,12 +239,19 @@
 
 1. **`docs/reports/phase-4-p4-01-baseline.md` 记录的预算未达标项需要按本包的测量口径重述。** P4-01 的基线是在开发服务器上取数的，规格 §8 要求的是生产构建；两者不可直接比较。
 2. **`perf-p4-09-before.json` / `perf-p4-09-after.json` 是脚本早期修订的产物**（当时还没有 `mode` 字段，页面复用策略与最终版不同），所以它们**不能**与 `perf-p4-09-isolated-*.json` 直接并列比较。本报告只把「同一脚本修订 + 同一口径」的两组数字（§3.1 的两次 isolated、§3.3 的变异对照）当作证据，早期文件保留在 `output/` 里作过程留痕。
-3. **`e2e/gui-optimization.spec.ts` 的截图落在 `test-results/`**，而该目录每次 E2E 启动都会被 Playwright 清空（`run-e2e.mjs` 还会把残留挪进 `_quarantine/`）。它作为「运行期证据」没问题，但**不能**当长期视觉证据 —— 这也是本包把 AC14 的截图另放到 `output/visual-p4-09/` 的原因。
+3. **`e2e/gui-optimization.spec.ts` 的截图落在 `test-results/`**，而该目录每次 E2E 启动都会被 Playwright 清空（`run-e2e.mjs` 还会把残留挪进 `_quarantine/`）。它作为「运行期证据」没问题，但**不能**当长期视觉证据 —— 这也是本包把 AC14 的截图另放到 `output/visual-p4-09/`、随后**入库到 [`phase-4-p4-09-implementation/`](phase-4-p4-09-implementation/)）** 的原因（见 §10.3）。
 4. 规格 §8 的「网络导入按请求编号丢弃过期结果」在 UI 上不可达（按钮在在途期间被禁用），已按 §5.2 说明；如果要为将来的并行导入预留，需要先有能触发并行的入口。
 
 ---
 
 ## 9. 仍需用户决定
+
+> **三条已于 2026-10-16 全部拍板**，见 `phase-4-open-decisions.md` §7：
+> ① **保持 isolated 稳态判据**，sequential 数字保留为已知边界（规格 §12 对 S2 的处理本就是「记录影响、替代路径和后续任务」，不阻塞发布）；
+> ② 日历网格 ARIA 缺陷**单开一个小工作包**（P4-11），不并入 P4-10 —— 验收包里改产品代码会让已验证安装包对应的代码在发布前又变一次，且它要重排周／月网格，不是一行改动；
+> ③ **关键证据入库**到本报告同名的目录，过程文件留在 `output/`（见 §10.3）。
+>
+> 以下三条保留原文，作为当时的决策记录。
 
 1. **sequential（最坏情况）口径要不要算进预算？** 本包按「isolated 稳态」判定达标，并如实记录了 sequential 的 117.4ms。规格 §8 只写了「预热后 20 次」，没有定义页面复用。若要按最坏情况判，需要一轮针对性优化（回顾页数值表分帧／复用），那会改动 P4-08 的呈现实现。
 2. **日历网格 ARIA 缺陷的修复归属**：并入 P4-10，还是单独开一个工作包？它不阻塞 P4-10 的交付，但会一直挂在 AC14 上。
@@ -274,13 +281,15 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `output/perf-sample.json` | 固定样本（seed 20260910 / anchor 2026-10-16 / 1,000 任务 / 10,000 条历史） |
-| `output/perf-p4-09-isolated-1.json`、`-isolated-2.json` | 修复后两次独立运行（预算判据） |
-| `output/perf-p4-09-mutated.json` | 反向验证：7 处改动改回缺陷形态后的读数 |
-| `output/perf-p4-09-sequential.json` | 最坏情况对照（不作为判据，见 §3.4） |
-| `output/perf-p4-09-final.json` | 修复后第三次运行（`npm run check` 之后，机器带后台负载，读数偏高的那一组） |
-| `output/perf-p4-09.json`、`-before.json`、`-after.json` | 过程留痕（脚本早期修订，口径与最终版不同，见 §8.2） |
-| `output/visual-p4-09/*.png` | 14 张 AC14 视觉证据（清单见 §4.3） |
+| `output/perf-sample.json` | 固定样本（seed 20260910 / anchor 2026-10-16 / 1,000 任务 / 10,000 条历史）。**留在 `output/` 不入库**：2.8 MB，可由 fixture + 固定种子随时重建 |
+| `docs/reports/phase-4-p4-09-implementation/`（本报告同名的证据目录，以下都在这里） | 入库的证据快照。`output/` 是 gitignored 的，报告引用的路径若指向那里就是死链 |
+| `…/perf-p4-09-isolated-1.json`、`-isolated-2.json` | 修复后两次独立运行（预算判据） |
+| `…/perf-p4-09-mutated.json` | 反向验证：7 处改动改回缺陷形态后的读数 |
+| `…/perf-p4-09-sequential.json` | 最坏情况对照（不作为判据，见 §3.4） |
+| `…/perf-p4-09-final.json` | 修复后第三次运行（`npm run check` 之后，机器带后台负载，读数偏高的那一组） |
+| `…/perf-p4-09-verify.json`、`-verify2.json` | 独立复核的两次运行（见 §12） |
+| `…/*.png` | 14 张 AC14 视觉证据（清单见 §4.3） |
+| `output/perf-p4-09.json`、`-before.json`、`-after.json` | 过程留痕（脚本早期修订，口径与最终版不同，见 §8.2）。**留在 `output/` 不入库** |
 
 ### 10.4 未在本包验证
 
@@ -313,5 +322,5 @@
 1. **达标结论成立。** 五次运行（本包三次 + 复核两次）三项预算全部在限内；反向验证的方向也复现了 —— 缺陷形态下搜索确实会冲到预算之上。
 2. **但 §3.1「余量充足」对月回顾偏乐观。** 复核在带负载条件下测到月回顾 **max 93.7ms**（预算 100ms，余量仅 **6%**），比本包记录的 77.0ms 差；搜索 p95 在同一条件下到 **183.4ms**（预算 200ms，余量 **8%**），也差于本包最差的 162.1ms。这两项属于**压线达标**，且对机器负载相当敏感 —— §3.1 已经说了「单次读数不足以当结论」，这次复核把观测到的下界又拉低了一档。
 3. 这不改变「未超预算」的判定，也不改变 §3.3 的承重结论；但它意味着 **P4-10 在真机桌面上复测时要把搜索与月回顾当重点盯**，并且至少要跑两次（一次空闲、一次带负载），不能只看一次读数。
-4. 复核产物：`output/perf-p4-09-verify.json`、`output/perf-p4-09-verify2.json`（`output/` 已 gitignored）。
+4. 复核产物：`docs/reports/phase-4-p4-09-implementation/perf-p4-09-verify.json`、`-verify2.json`（与其它证据一起入库，见 §10.3）。
 5. **结构检查同样通过**：`WorkspaceIndex` 的改动是纯增量且保持快照顺序；`TaskPool`／`ProjectsPage` 的替换都是保行为的等价改写（`includes` → `Set`、`find` → `Map`、全量扫 → 分组表）；`review-detail` 把 `Intl` 提到模块级后输出字符串不变。`npm run check` 四步全绿（Vitest **293/24**、Playwright **39**、Rust **38**，dist JS 465.54 kB / CSS 81.24 kB），与 §10.1 逐项一致。
