@@ -956,9 +956,18 @@ function MonthCalendar({ anchor, workspace, selectedDate, focusDate, onFocusDate
     if (!next) return; event.preventDefault(); onNavigateDate(next);
     gridRef.current?.querySelector<HTMLElement>(`[data-month-date="${next}"]`)?.focus();
   };
+  // 月历是一张真正的表：6 行 × 7 列。`role="grid"` 的直接子元素只能是 `role="row"`，
+  // 表头那一行也一样 —— 否则 42 个 gridcell 与 7 个 columnheader 都没有 row 祖先，
+  // axe 报 `aria-required-children` + `aria-required-parent`（P4-11 修）。
+  // 七列因此落在「行」上，外层只排 7 行；视觉几何不变（见 styles.css 的
+  // `.month-calendar`／`.month-calendar-row`）。
+  const weeks = Array.from({ length: 6 }, (_, index) => dates.slice(index * 7, index * 7 + 7));
   return <div ref={gridRef} className="month-calendar" role="grid" aria-label="月历">
-    {(["一", "二", "三", "四", "五", "六", "日"] as const).map((day) => <div key={day} role="columnheader" aria-label={`周${day}`}>周{day}</div>)}
-    {dates.map((date) => { const summary = calendarDaySummary(workspace, date, today); return <div key={date} role="gridcell" data-month-date={date} tabIndex={date === focusDate ? 0 : -1} className={`${date.startsWith(month) ? "" : "adjacent-month"} ${date === today ? "today" : ""} ${date === selectedDate ? "selected" : ""}`.trim()} aria-label={`${date} ${formatLongDate(date)}`} aria-selected={date === selectedDate} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onSelectDate(date)}><header><span>{Number(date.slice(-2))}</span>{date === today && <small>今天</small>}</header><div className="month-cell-summary">{summary.visible.map((item) => item.taskId ? <button key={item.id} className={`month-summary-item ${item.kind} urgency-${item.urgency}`} aria-label={`${deadlineUrgencyLabel(item.urgency!)}：${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenTask(date, item.taskId!); }}><Flag size={11} aria-hidden="true" /><span>{item.urgency !== "later" && `${deadlineUrgencyLabel(item.urgency!)} · `}{item.label}</span></button> : item.projectId ? <button key={item.id} className={`month-summary-item ${item.kind} ${item.kind === "milestone" ? "milestone-marker" : ""}`} aria-label={item.kind === "milestone" ? `里程碑：${item.label}` : `${deadlineUrgencyLabel(item.urgency!)}：项目截止 ${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenProject(date, item.projectId!); }}>{item.kind === "milestone" ? <Diamond size={11} aria-hidden="true" /> : <Flag size={11} aria-hidden="true" />}<span>{item.label}</span></button> : <span key={item.id} className={`month-summary-item ${item.kind}`}>{item.label}</span>)}{summary.overflowCount > 0 && <button className="month-summary-overflow" onClick={(event) => { event.stopPropagation(); onSelectDate(date); }}>另外 {summary.overflowCount} 项</button>}</div></div>; })}
+    <div className="month-calendar-row" role="row">
+      {(["一", "二", "三", "四", "五", "六", "日"] as const).map((day) => <div key={day} role="columnheader" aria-label={`周${day}`}>周{day}</div>)}
+    </div>
+    {weeks.map((week) => <div key={week[0]} className="month-calendar-row" role="row">
+      {week.map((date) => { const summary = calendarDaySummary(workspace, date, today); return <div key={date} role="gridcell" data-month-date={date} tabIndex={date === focusDate ? 0 : -1} className={`${date.startsWith(month) ? "" : "adjacent-month"} ${date === today ? "today" : ""} ${date === selectedDate ? "selected" : ""}`.trim()} aria-label={`${date} ${formatLongDate(date)}`} aria-selected={date === selectedDate} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onSelectDate(date)}><header><span>{Number(date.slice(-2))}</span>{date === today && <small>今天</small>}</header><div className="month-cell-summary">{summary.visible.map((item) => item.taskId ? <button key={item.id} className={`month-summary-item ${item.kind} urgency-${item.urgency}`} aria-label={`${deadlineUrgencyLabel(item.urgency!)}：${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenTask(date, item.taskId!); }}><Flag size={11} aria-hidden="true" /><span>{item.urgency !== "later" && `${deadlineUrgencyLabel(item.urgency!)} · `}{item.label}</span></button> : item.projectId ? <button key={item.id} className={`month-summary-item ${item.kind} ${item.kind === "milestone" ? "milestone-marker" : ""}`} aria-label={item.kind === "milestone" ? `里程碑：${item.label}` : `${deadlineUrgencyLabel(item.urgency!)}：项目截止 ${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenProject(date, item.projectId!); }}>{item.kind === "milestone" ? <Diamond size={11} aria-hidden="true" /> : <Flag size={11} aria-hidden="true" />}<span>{item.label}</span></button> : <span key={item.id} className={`month-summary-item ${item.kind}`}>{item.label}</span>)}{summary.overflowCount > 0 && <button className="month-summary-overflow" onClick={(event) => { event.stopPropagation(); onSelectDate(date); }}>另外 {summary.overflowCount} 项</button>}</div></div>; })}</div>)}
   </div>;
 }
 
@@ -1086,8 +1095,16 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
   };
   const heading = <><strong>{isToday ? "今天" : weekday(date)}</strong><span className={isToday ? "today-number" : ""}>{Number(date.slice(-2))}</span></>;
   const dayClasses = ["calendar-day", isToday ? "today" : "", hideHeader ? "without-header" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
-  return <div className={dayClasses} data-day-date={date}>{!hideHeader && <header>{heading}</header>}
-    <div className={timeline ? "day-track folded-timeline" : "day-track"} role={onWeekGridNavigate ? "gridcell" : undefined} tabIndex={weekGridTabIndex} aria-label={onWeekGridNavigate ? `${date} ${minutesTime(weekGridMinute ?? 540)} 空白时间` : undefined} aria-selected={onWeekGridNavigate ? selected : undefined} onFocus={(event) => { if (event.target === event.currentTarget) onWeekGridFocus?.(); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !onWeekGridNavigate) return; if (event.key === "Enter") { event.preventDefault(); const start = weekGridMinute ?? 540; setBlankRange({ start, end: Math.min(1440, start + 30) }); setBlankAction("menu"); return; } onWeekGridNavigate(event); }} style={timeline ? { height: `${timeline.totalHeight}px` } : undefined}
+  /**
+   * 周视图**不是**一张表格：7 个日列各自是一条 24 小时连续时间轴，DOM 里没有「行」。
+   * 所以这里不给 `.day-track` 挂 `role="gridcell"` —— 那会声称一个并不存在的
+   * `grid → row → gridcell` 结构（axe `aria-required-parent`）。方案 B：日列与列里的
+   * 时间光标都用 `group` + 可访问名表达（日列给出日期，光标给出「日期 + 时间 + 空白时间」），
+   * 选中态改用 `aria-current`（`group` 不支持 `aria-selected`）。
+   * 方向键语义不变，说明见 docs/reports/phase-4-p4-11-implementation.md。
+   */
+  return <div className={dayClasses} data-day-date={date} role={onWeekGridNavigate ? "group" : undefined} aria-label={onWeekGridNavigate ? `${date} ${formatLongDate(date)}` : undefined}>{!hideHeader && <header>{heading}</header>}
+    <div className={timeline ? "day-track folded-timeline" : "day-track"} role={onWeekGridNavigate ? "group" : undefined} tabIndex={weekGridTabIndex} aria-label={onWeekGridNavigate ? `${date} ${minutesTime(weekGridMinute ?? 540)} 空白时间` : undefined} aria-current={onWeekGridNavigate && selected ? "true" : undefined} onFocus={(event) => { if (event.target === event.currentTarget) onWeekGridFocus?.(); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !onWeekGridNavigate) return; if (event.key === "Enter") { event.preventDefault(); const start = weekGridMinute ?? 540; setBlankRange({ start, end: Math.min(1440, start + 30) }); setBlankAction("menu"); return; } onWeekGridNavigate(event); }} style={timeline ? { height: `${timeline.totalHeight}px` } : undefined}
       onPointerDown={(event) => { if (event.button !== 0 || !pointsAtBlankTrack(event.target)) return; const minute = minuteAtPointer(event.clientY, event.currentTarget); blankSelectionStart.current = minute; setBlankRange({ start: minute, end: minute + 5 }); setBlankAction(null); try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* synthetic pointers need no capture */ } }}
       onPointerMove={(event) => { if (event.buttons !== 0) { if (blankSelectionStart.current === null) { setBlankHoverMinute(null); } return; } if (!pointsAtBlankTrack(event.target)) { if (blankSelectionStart.current === null) setBlankHoverMinute(null); return; } const minute = minuteAtPointer(event.clientY, event.currentTarget); if (blankSelectionStart.current === null) setBlankHoverMinute(minute); else { const start = Math.min(blankSelectionStart.current, minute); const end = Math.max(blankSelectionStart.current, minute, start + 5); setBlankRange({ start, end }); } }}
       onPointerUp={(event) => { if (blankSelectionStart.current === null) return; const origin = blankSelectionStart.current; const minute = minuteAtPointer(event.clientY, event.currentTarget); const start = Math.min(origin, minute); const end = minute === origin ? origin + 30 : Math.max(origin, minute, start + 5); blankSelectionStart.current = null; setBlankAnchor(new DOMRect(event.clientX, event.clientY, 0, 0)); setBlankRange({ start, end: Math.min(1440, end) }); setBlankAction("menu"); try { if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ } }}
@@ -1344,6 +1361,16 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
     </FloatingPanel>
   ) : null;
   const showDetails = density === "detailed";
+  /**
+   * 卡片状态（当前安排／待回顾／本次未推进／已完成）。
+   *
+   * 两种呈现：可交互的「待回顾」入口是 `<button>`，`aria-label` 合法；其余状态是**纯展示**
+   * 的 `<span>`，**不能**再挂 `aria-label` —— `span` 的隐式角色是 `generic`，ARIA 1.2 禁止它
+   * 被命名（axe `aria-prohibited-attr`，wcag2a／4.1.2）。周视图在 960×200% 下每列不足 100px，
+   * 容器查询会把里面的文字隐藏，于是这个 span 既没有可见文字、名字又被丢弃 —— 状态就彻底读不到了。
+   * 状态本来就写在这张卡片自己的 `aria-label` 里（`${task.title}，${start} 至 ${end}，${status.label}`），
+   * 所以删掉多余的 `aria-label` 不会丢信息（P4-11 修，见 docs/reports/phase-4-p4-11-implementation.md）。
+   */
   const status = current ? { icon: <Clock3 size={12} />, label: "当前安排" }
     : pendingReview ? { icon: <CircleAlert size={12} />, label: "待回顾" }
       : confirmedNoProgress ? { icon: <Ban size={12} />, label: "本次未推进" }
@@ -1377,7 +1404,7 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
     {showTimeAndProgress && <time className="session-time">{session.startLocal}–{session.endLocal}</time>}<strong>{task.title}</strong>
     {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && (pendingReview
       ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</button>
-      : <span className="session-status-icon" aria-label={status.label}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>)}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
+      : <span className="session-status-icon">{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>)}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
     {showDetails && projectTitle && <span className="session-project">{projectTitle}</span>}
     {current && showTimeAndProgress && <div className="session-elapsed" role="progressbar" aria-label={`${task.title} 本时段已过去`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={elapsed}><span style={{ width: `${elapsed}%` }} /></div>}
     {showTimeAndProgress && <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>}

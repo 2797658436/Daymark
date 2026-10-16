@@ -263,6 +263,15 @@ describe("phase 1 manual alpha", () => {
     const monthGrid = screen.getByRole("grid", { name: "月历" });
     expect(screen.getAllByRole("columnheader", { name: /周[一二三四五六日]/ })).toHaveLength(7);
     expect(monthGrid.querySelectorAll('[role="gridcell"]')).toHaveLength(42);
+    // 结构回归（P4-11）：`role="grid"` 的直接子元素只能是 `role="row"` —— 表头一行 + 六个日期行；
+    // 每行恰好 7 个格子。缺了 row 这一层，axe 会报 aria-required-children／aria-required-parent。
+    const rows = monthGrid.querySelectorAll(':scope > [role="row"]');
+    expect(rows).toHaveLength(7);
+    expect(rows[0].querySelectorAll('[role="columnheader"]')).toHaveLength(7);
+    expect(rows[0].querySelectorAll('[role="gridcell"]')).toHaveLength(0);
+    for (const row of Array.from(rows).slice(1)) expect(row.querySelectorAll('[role="gridcell"]')).toHaveLength(7);
+    // 表头行与日期行都直接挂在 grid 下，中间没有其它非 row 子节点。
+    expect(monthGrid.querySelectorAll(":scope > :not([role='row'])")).toHaveLength(0);
   });
 
   it("shows prioritized month summaries and opens the selected date in a right-side detail panel", async () => {
@@ -313,7 +322,8 @@ describe("phase 1 manual alpha", () => {
     expect(allDay.querySelectorAll("[data-all-day-marker]")).toHaveLength(4);
     await user.click(screen.getByRole("button", { name: /：全天 1/ }));
     expect(screen.getByRole("complementary", { name: /2026-08-05.*详情/ })).toHaveTextContent("全天 1");
-    expect(screen.getByRole("gridcell", { name: /2026-08-05 09:00 空白时间/ })).toHaveAttribute("aria-selected", "true");
+    // 周视图不是网格：日列里的时间光标是 `group`，选中态走 `aria-current`（P4-11 方案 B）。
+    expect(screen.getByRole("group", { name: /2026-08-05 09:00 空白时间/ })).toHaveAttribute("aria-current", "true");
   });
 
   it("shows project deadline flag and milestone diamond in week all-day and opens the project detail", async () => {
@@ -377,11 +387,15 @@ describe("phase 1 manual alpha", () => {
     await user.keyboard("{ArrowRight}{ArrowLeft}{PageDown}");
     await waitFor(() => expect(document.activeElement).toHaveAccessibleName(/打开 2026-08-12/));
 
-    const track = screen.getByRole("gridcell", { name: "2026-08-12 09:00 空白时间" }); track.focus();
+    const track = screen.getByRole("group", { name: "2026-08-12 09:00 空白时间" }); track.focus();
     await user.keyboard("{ArrowDown}"); expect(document.activeElement).toHaveAccessibleName("2026-08-12 09:15 空白时间");
-    await user.keyboard("{ArrowRight}"); expect(document.activeElement).toHaveAccessibleName("2026-08-13 09:15 空白时间");
+    await user.keyboard("{ArrowUp}"); expect(document.activeElement).toHaveAccessibleName("2026-08-12 09:00 空白时间");
+    await user.keyboard("{ArrowRight}"); expect(document.activeElement).toHaveAccessibleName("2026-08-13 09:00 空白时间");
+    await user.keyboard("{ArrowLeft}"); expect(document.activeElement).toHaveAccessibleName("2026-08-12 09:00 空白时间");
     expect(screen.queryByRole("dialog", { name: "空白时段操作" })).not.toBeInTheDocument();
-    await user.keyboard("{PageUp}"); await waitFor(() => expect(document.activeElement).toHaveAccessibleName("2026-08-06 09:15 空白时间"));
+    await user.keyboard("{PageDown}"); await waitFor(() => expect(document.activeElement).toHaveAccessibleName("2026-08-19 09:00 空白时间"));
+    await user.keyboard("{PageUp}"); await waitFor(() => expect(document.activeElement).toHaveAccessibleName("2026-08-12 09:00 空白时间"));
+    await user.keyboard("{ArrowDown}");
     await user.keyboard("{Enter}");
     expect(screen.getByRole("dialog", { name: "空白时段操作" })).toHaveTextContent("09:15–09:45");
   });

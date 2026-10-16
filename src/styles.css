@@ -218,7 +218,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .continuous-day-panel { min-width: 520px; border-bottom: 2px solid var(--line); }
 .continuous-day-separator { position: sticky; top: 0; z-index: 8; min-height: 40px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel-strong); color: var(--text); font-size: .8rem; font-weight: 600; }
 .continuous-day-panel .calendar-day > header, .continuous-day-panel .day-head-spacer { top: 40px; }
-.month-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.month-calendar-layout.with-detail { grid-template-columns: minmax(600px, 1fr) minmax(260px, 320px); }.month-calendar { height: 100%; min-height: calc(42px + (var(--calendar-month-row-height) * 6)); display: grid; grid-template-columns: repeat(7, minmax(86px, 1fr)); grid-template-rows: 42px repeat(6, minmax(var(--calendar-month-row-height), 1fr)); }
+.month-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.month-calendar-layout.with-detail { grid-template-columns: minmax(600px, 1fr) minmax(260px, 320px); }.month-calendar { height: 100%; min-height: calc(42px + (var(--calendar-month-row-height) * 6)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 42px repeat(6, minmax(var(--calendar-month-row-height), 1fr)); }
+/* 月历是 6×7 的表：`grid → row → columnheader／gridcell`。七列落在**行**上，外层只排 7 行
+   （1 行表头 + 6 行日期），否则 `role="gridcell"` 就没有 `role="row"` 祖先（P4-11 修）。 */
+.month-calendar-row { display: grid; grid-template-columns: repeat(7, minmax(86px, 1fr)); }
 .month-calendar [role="columnheader"] { display: grid; place-items: center; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .75rem; font-weight: 600; }
 .month-calendar [role="gridcell"] { min-width: 0; border: 0; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); border-radius: 0; background: var(--panel); color: var(--text); padding: 7px; display: grid; align-content: start; gap: 4px; text-align: left; cursor: pointer; transition: background .12s ease; }
 .month-calendar [role="gridcell"] > header { min-height: 20px; display: flex; align-items: center; gap: 5px; }
@@ -238,7 +241,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
   .with-detail > .calendar-date-details { position: absolute; z-index: 18; inset: 0 0 0 auto; width: min(320px, calc(100% - 58px)); max-height: 100%; box-shadow: var(--shadow-float); }
   /* 让出宽度后日历只剩 content box；这些 min-width 会把内容顶回覆盖层下面，必须一并放开。 */
   .with-detail .month-calendar, .with-detail .week-calendar-main, .with-detail .week-sticky-header { min-width: 0; }
-  .with-detail .month-calendar { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .with-detail .month-calendar-row { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .with-detail .week-date-headers, .with-detail .week-all-day { grid-template-columns: 58px repeat(7, minmax(0, 1fr)); }
 }
 .time-axis, .calendar-day { min-width: 0; display: grid; grid-template-rows: 52px 1fr; }.time-axis { border-right: 1px solid var(--line); background: var(--panel-strong); }.day-head-spacer { position: sticky; top: 0; z-index: 5; background: var(--panel-strong); border-bottom: 1px solid var(--line); }.time-axis-track { position: relative; min-height: 0; }.time-axis-track > span { position: absolute; right: 7px; color: var(--muted); font-size: .78rem; line-height: 1rem; transform: translateY(-50%); font-variant-numeric: tabular-nums; }

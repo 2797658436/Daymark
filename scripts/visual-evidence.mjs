@@ -12,13 +12,16 @@
  *     不依赖真实数据库或系统日期。
  *   - **只读边界**：样本只写浏览器 `localStorage`，不碰 SQLite／Tauri。
  *
- * 产出落在 `output/visual-p4-09/`（`output/` 是 gitignored 的交付目录，不会被
+ * 产出默认落在 `output/visual-p4-09/`（`output/` 是 gitignored 的交付目录，不会被
  * Playwright 的 `test-results/` 清理带走），文件名与规格里的六类一一对应。
+ * 用 `--out <dir>` 可以换目录 —— P4-11 就是靠它把日历页的改前／改后截图分开落盘
+ * （`--only calendar --out output/visual-p4-11-before` 与 `…-after`）。
  *
  * 用法：
  *   node scripts/visual-evidence.mjs                 # 全套
  *   node scripts/visual-evidence.mjs --skip-build    # 复用已有 dist/
  *   node scripts/visual-evidence.mjs --only review   # 只跑名字含 review 的场景
+ *   node scripts/visual-evidence.mjs --only calendar --out output/visual-p4-11-after
  */
 
 import { spawn } from "node:child_process";
@@ -31,11 +34,12 @@ import { chromium } from "@playwright/test";
 
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const viteEntry = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
-const outputDirectory = join(projectRoot, "output", "visual-p4-09");
+const defaultOutputDirectory = join(projectRoot, "output", "visual-p4-09");
+let outputDirectory = defaultOutputDirectory;
 const preferencesKey = "daymark.phase0.preferences";
 const workspaceKey = "daymark.phase1.workspace";
 
-const DEFAULTS = { port: 4175, skipBuild: false, headed: false, only: null };
+const DEFAULTS = { port: 4175, skipBuild: false, headed: false, only: null, out: defaultOutputDirectory };
 
 function parseArgs(argv) {
   const args = { ...DEFAULTS };
@@ -50,6 +54,7 @@ function parseArgs(argv) {
     i += 1;
     if (key === "port") args.port = Number(value);
     else if (key === "only") args.only = value;
+    else if (key === "out") args.out = value;
     else throw new Error(`未知参数 --${key}`);
   }
   return args;
@@ -171,6 +176,44 @@ function reviewWorkspace() {
 }
 
 const preference = (overrides = {}) => ({ motion: "full", scale: 100, ...overrides });
+
+/**
+ * 日历页样本（P4-11 加）：同一周里同时有截止旗帜、项目截止、里程碑菱形、已排时段、
+ * 已结束记录与时间块，好让三种视图的截图都能看出真实信息密度。
+ *
+ * **不开启** `showActualRecords`：实际记录叠加层的白字配 accent 底色对比度只有 2.82，
+ * 是 P4-11 探针记录的既有缺陷（修它要改配色，超出 P4-11 的边界），截图不必把它拍进来。
+ */
+function calendarWorkspace() {
+  return workspace({
+    projects: [
+      { id: "cal-p1", title: "毕业设计", deadlineLocal: "2026-08-07" },
+      { id: "cal-p2", title: "课程学习", deadlineLocal: "2026-08-20" },
+    ],
+    projectMilestones: [
+      { id: "cal-ms1", projectId: "cal-p1", title: "中期答辩", targetLocalDate: "2026-08-05", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 2, targetProgress: null },
+      { id: "cal-ms2", projectId: "cal-p2", title: "第一章", targetLocalDate: "2026-08-06", sortOrder: 1, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null },
+    ],
+    tasks: [
+      { id: "cal-t1", projectId: "cal-p1", title: "写开题报告", progress: 40, status: "active", deadlineLocal: "2026-08-05", estimatedMinutes: 60, sessionMinutes: 60, priority: "high", sortOrder: 0, kind: "task" },
+      { id: "cal-t2", projectId: "cal-p1", title: "整理文献", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 45, sessionMinutes: 45, priority: "normal", sortOrder: 1, kind: "task" },
+      { id: "cal-t3", projectId: "cal-p2", title: "看第一章", progress: 20, status: "active", deadlineLocal: "2026-08-06", estimatedMinutes: 30, sessionMinutes: 30, priority: "normal", sortOrder: 2, kind: "task" },
+      { id: "cal-t4", projectId: null, title: "跑步", progress: 0, status: "active", deadlineLocal: "2026-08-04", estimatedMinutes: 30, sessionMinutes: 30, priority: "low", sortOrder: 3, kind: "task" },
+    ],
+    executionSessions: [
+      { id: "cal-s1", taskId: "cal-t1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      { id: "cal-s2", taskId: "cal-t3", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "missed" },
+      { id: "cal-s3", taskId: "cal-t2", localDate: "2026-08-06", endLocalDate: "2026-08-06", startLocal: "20:00", endLocal: "21:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      { id: "cal-s4", taskId: "cal-t1", localDate: "2026-08-07", endLocalDate: "2026-08-07", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+    ],
+    executionRecords: [{ id: "cal-r1", sessionId: null, taskId: "cal-t3", actualStartUtc: anchorAt("2026-08-04", "20:00"), actualEndUtc: anchorAt("2026-08-04", "20:30"), note: "" }],
+    progressEvents: [
+      { id: "cal-e1", taskId: "cal-t2", fromProgress: 60, toProgress: 100, occurredAtUtc: anchorAt("2026-08-05", "11:00") },
+      { id: "cal-e2", taskId: "cal-t1", fromProgress: 20, toProgress: 40, occurredAtUtc: anchorAt("2026-08-04", "09:00") },
+    ],
+    timeBlocks: [{ id: "cal-b1", title: "组会", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "16:00", endLocal: "17:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
+  });
+}
 
 // ---------------------------------------------------------------- 场景
 
@@ -312,6 +355,31 @@ function scenarios(port) {
         await page.getByRole("dialog", { name: "确认恢复备份" }).waitFor();
       },
     },
+    // 日历页（P4-11 加）：改的是月／周的 ARIA 结构，视觉必须**一点不变**，所以
+    // 这两个场景要能逐像素对比改前／改后（见 docs/reports/phase-4-p4-11-implementation.md）。
+    ...[
+      { name: "calendar-week-1200", view: "week", width: 1200, selector: ".week-calendar-main" },
+      { name: "calendar-month-1200", view: "month", width: 1200, selector: ".month-calendar" },
+      { name: "calendar-week-960", view: "week", width: 960, selector: ".week-calendar-main" },
+      { name: "calendar-month-960", view: "month", width: 960, selector: ".month-calendar" },
+    ].map(({ name, view, width, selector }) => ({
+      name,
+      seed: {
+        port, clock, viewport: { width, height: 760 },
+        preferences: preference({
+          lastPage: "calendar", calendarView: view,
+          calendarAnchors: { day: ANCHOR_DAY, week: ANCHOR_DAY, month: ANCHOR_DAY },
+          calendarZoom: { day: "standard", week: "standard", month: "standard" },
+          calendarScale: { day: 48, week: 48, month: 82 },
+        }),
+        workspace: calendarWorkspace(),
+      },
+      act: async (page) => {
+        await page.getByRole("heading", { name: "日历", level: 1 }).waitFor();
+        await page.getByRole("button", { name: view === "week" ? "周" : "月", exact: true }).click();
+        await page.locator(selector).waitFor();
+      },
+    })),
     ...[
       { name: "zoom-960-200-light", width: 960, scale: 200, appearance: "light" },
       { name: "zoom-960-200-dark", width: 960, scale: 200, appearance: "dark" },
@@ -337,6 +405,7 @@ function scenarios(port) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  outputDirectory = args.out;
   await mkdir(outputDirectory, { recursive: true });
   if (!args.skipBuild) {
     console.log("[visual] npm run build（生产构建）…");
@@ -359,8 +428,8 @@ async function main() {
     await Promise.race([new Promise((resolve) => server.once("exit", resolve)), delay(3_000)]);
   }
 
-  console.log(`\n=== P4-09 视觉证据（生产构建 + 真实 Chromium）===`);
-  console.log(`共 ${written.length} 张，位于 output/visual-p4-09/：`);
+  console.log(`\n=== 视觉证据（生产构建 + 真实 Chromium）===`);
+  console.log(`共 ${written.length} 张，位于 ${outputDirectory}：`);
   for (const name of written) console.log(`  ${name}.png`);
 }
 

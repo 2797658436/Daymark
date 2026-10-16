@@ -583,7 +583,8 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
   await expect.poll(async () => Math.abs(((await stickyHeader.boundingBox())?.y ?? 0) - ((await viewport.boundingBox())?.y ?? 0))).toBeLessThanOrEqual(2);
   const header = page.getByRole("button", { name: /打开 2026-08-05/ }); await header.focus(); await page.keyboard.press("PageDown");
   await expect(page.getByRole("button", { name: /打开 2026-08-12/ })).toBeFocused();
-  const track = page.getByRole("gridcell", { name: "2026-08-12 09:00 空白时间" }); await track.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  // 周视图不是网格：时间光标是 `group`（P4-11 方案 B），键盘路径不变。
+  const track = page.getByRole("group", { name: "2026-08-12 09:00 空白时间" }); await track.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "空白时段操作" })).toContainText("09:15–09:45");
 });
 
@@ -1144,18 +1145,22 @@ test("phase 4 M12 has no automated accessibility violations on every page at 960
   await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
 
   /**
-   * 日历网格的**已记录缺陷**：周视图与月视图里的 `role="gridcell"` 都没有 `role="row"`
-   * 祖先（周视图的 `.day-track` 直接挂在 `role="region"` 下，月视图的 42 个格子直接挂在
-   * `role="grid"` 下），axe 报 `aria-required-parent`；月视图还额外报
-   * `aria-required-children`（`role="grid"` 的直接子元素里没有 `role="row"`）。
+   * 日历网格的 ARIA 结构：**P4-11 已修正，三条视图都零违规**。
    *
-   * 这是阶段 3 就存在的标记问题，不是 P4-09 引入的；修它要重排周／月网格的 DOM 结构
-   * （grid → row → rowheader／gridcell）并处理时间轴、全天区、拖拽预览这些非单元格
-   * 子节点，属于对已验证表面的重设计，超出本包范围。所以这里把它**逐条钉住**：
-   * 事实记在案，而任何**新增**的违规仍然会让用例失败。修复后这两行会红，届时改成 `[]`。
+   * 月视图是一张 6×7 的表 —— `role="grid"` → 7 个 `role="row"`（表头 1 行 + 日期 6 行）
+   * → `role="columnheader"`／`role="gridcell"`。此前 42 个格子与 7 个表头都是 `role="grid"`
+   * 的**直接子元素**，axe 报 `aria-required-children` + `aria-required-parent`（49 个节点）。
+   *
+   * 周视图**不是**网格：7 个日列各自是一条 24 小时连续时间轴，DOM 里没有「行」，
+   * 所以走方案 B —— 日列与列里的时间光标都是 `group` + 可访问名，不再声称
+   * `grid → row → gridcell`。此前 `.day-track` 挂着 `role="gridcell"` 却直接挂在
+   * `role="region"` 下，axe 报 `aria-required-parent`（7 个节点）。
+   *
+   * 这里不再保留任何「已记录缺陷」常量：三条视图一律断言零违规。日视图此前**从未**
+   * 被 axe 覆盖（只跑了周与月），P4-11 起一并纳入。方案与取舍见
+   * `docs/reports/phase-4-p4-11-implementation.md`。
    */
-  const KNOWN_CALENDAR_DEFECT = ["aria-required-parent"];
-  const KNOWN_CALENDAR_DEFECT_MONTH = ["aria-required-children", "aria-required-parent"];
+  const CALENDAR_VIEWS = [["日", "continuous-day-axis"], ["周", "week-calendar-main"], ["月", "month-calendar"]] as const;
   const violationIds = () => page.evaluate(async () => {
     const result = await (window as typeof window & { axe: { run(): Promise<{ violations: Array<{ id: string }> }> } }).axe.run();
     return Array.from(new Set(result.violations.map((violation) => violation.id))).sort();
@@ -1174,13 +1179,90 @@ test("phase 4 M12 has no automated accessibility violations on every page at 960
         continue;
       }
       // 视图是**持久化偏好**：上一轮切到「月」之后，这一轮进来还是月视图。
-      // 两种形态要分别断言，所以每次先显式回到「周」。
-      await page.getByRole("button", { name: "周", exact: true }).click();
-      await expect(page.locator(".week-calendar-main")).toBeVisible();
-      expect(await violationIds(), `${theme} · 日历（周）`).toEqual(KNOWN_CALENDAR_DEFECT);
-      await page.getByRole("button", { name: "月", exact: true }).click();
-      await expect(page.locator(".month-calendar")).toBeVisible();
-      expect(await violationIds(), `${theme} · 日历（月）`).toEqual(KNOWN_CALENDAR_DEFECT_MONTH);
+      // 三种形态要分别断言，所以每次都显式切换（日 → 周 → 月）。
+      for (const [label, selector] of CALENDAR_VIEWS) {
+        await page.getByRole("button", { name: label, exact: true }).click();
+        await expect(page.locator(`.${selector}`)).toBeVisible();
+        expect(await violationIds(), `${theme} · 日历（${label}）`).toEqual([]);
+      }
+    }
+  }
+});
+
+/**
+ * P4-11：日历页在**有状态图标、全天标记与时间块**时同样零违规。
+ *
+ * P4-09 的逐页 axe 用例跑在回顾样本上，日历里没有 `missed` 时段，也就不会渲染
+ * `.session-status-icon`。而那张卡片在 960×200% 下每列不足 100px，容器查询会把状态文字
+ * 隐藏，于是纯展示的 `<span aria-label>` 触发 `aria-prohibited-attr`（wcag2a／4.1.2）——
+ * 名字被丢弃，状态反而彻底读不到。P4-11 删掉了那个多余的 `aria-label`（状态本来就写在
+ * 卡片自己的可访问名里），这条用例把「有状态图标」这一态钉住。
+ *
+ * **不开启「显示实际记录」**：实际记录叠加层（`.calendar-actual-record`）的白字落在 accent
+ * 底色上，对比度 2.82（< 4.5）—— 那是 P4-11 探针发现的另一条既有缺陷，修它要改配色，
+ * 超出本包「不改视觉」的边界，记录在 docs/reports/phase-4-p4-11-implementation.md。
+ */
+function calendarAxeWorkspace() {
+  const session = (id: string, taskId: string, date: string, startLocal: string, endLocal: string, status: string) => ({
+    id, taskId, localDate: date, endLocalDate: date, startLocal, endLocal, timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status,
+  });
+  return {
+    projects: [{ id: "p-1", title: "毕业设计", deadlineLocal: "2026-08-05" }, { id: "p-2", title: "课程学习", deadlineLocal: "2026-08-20" }],
+    projectMilestones: [
+      { id: "ms-1", projectId: "p-1", title: "中期答辩", targetLocalDate: "2026-08-05", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 2, targetProgress: null },
+      { id: "ms-2", projectId: "p-2", title: "第一章", targetLocalDate: "2026-08-07", sortOrder: 1, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null },
+    ],
+    milestoneOutcomes: [],
+    tasks: [
+      { id: "t-1", projectId: "p-1", title: "写开题报告", progress: 40, status: "active", deadlineLocal: "2026-08-05", estimatedMinutes: 60, sessionMinutes: 60, priority: "high", sortOrder: 0, kind: "task" },
+      { id: "t-2", projectId: "p-1", title: "整理文献", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 45, sessionMinutes: 45, priority: "normal", sortOrder: 1, kind: "task" },
+      { id: "t-3", projectId: "p-2", title: "看第一章", progress: 20, status: "active", deadlineLocal: "2026-08-06", estimatedMinutes: 30, sessionMinutes: 30, priority: "normal", sortOrder: 2, kind: "task" },
+    ],
+    // `missed` 时段会渲染「本次未推进」状态图标 —— 正是 P4-09 的样本缺的那一态。
+    executionSessions: [
+      session("s-1", "t-1", "2026-08-05", "09:00", "10:30", "scheduled"),
+      session("s-2", "t-3", "2026-08-05", "14:00", "15:00", "missed"),
+      session("s-3", "t-2", "2026-08-06", "20:00", "21:00", "scheduled"),
+    ],
+    executionRecords: [], progressEvents: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+    timeBlocks: [{ id: "b-1", title: "组会", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "16:00", endLocal: "17:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
+  };
+}
+
+test("phase 4 M12 keeps the calendar page clean with session status icons and all-day markers", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week",
+      calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, calendarAxeWorkspace());
+  await page.reload();
+  await page.setViewportSize({ width: 960, height: 720 });
+  await setAppScale(page, 200);
+  await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
+
+  const violationIds = () => page.evaluate(async () => {
+    const result = await (window as typeof window & { axe: { run(): Promise<{ violations: Array<{ id: string }> }> } }).axe.run();
+    return Array.from(new Set(result.violations.map((violation) => violation.id))).sort();
+  });
+
+  for (const theme of ["浅色", "深色"] as const) {
+    await sidebar(page).getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("radio", { name: theme }).check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme === "深色" ? "dark" : "light");
+    await page.waitForTimeout(150);
+    await sidebar(page).getByRole("button", { name: "日历", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // 状态图标必须真的出现过，否则这条用例是空跑。
+    await page.getByRole("button", { name: "周", exact: true }).click();
+    await expect(page.locator(".week-calendar-main")).toBeVisible();
+    await expect(page.locator(".session-status-icon").first()).toBeVisible();
+    for (const [label, selector] of [["日", "continuous-day-axis"], ["周", "week-calendar-main"], ["月", "month-calendar"]] as const) {
+      await page.getByRole("button", { name: label, exact: true }).click();
+      await expect(page.locator(`.${selector}`)).toBeVisible();
+      expect(await violationIds(), `${theme} · 日历（${label}）· 状态图标`).toEqual([]);
     }
   }
 });
