@@ -15,11 +15,22 @@
   --accent-tint: #f5d8c2; /* 新增：用于节段高亮、文字 tint 等低饱和装饰 */
   --success: #39745a; --danger: #a83a35; --focus: #176d86;
   --action: #a94724; --action-hover: #873718; --action-text: #ffffff;
-  /* P4-12：实际记录叠加层的专用前景。它坐在 color-mix(--accent 82%, --panel) 上 ——
-     浅／深两主题混出来的底都是**中间调的橙**（浅 #da845e / 深 #cb794e），所以两主题
-     共用同一个深色前景，深色块里**故意不覆盖**它。不能沿用 --action-text：那是给
-     **实色** --action 按钮配的（浅色下是白字），落到被稀释过的底上只有 2.82:1。 */
+  /* P4-12 引入、P4-13 重做：实际记录叠加层**自带底色**，所以必须自带前景。
+     P4-13 把它从「满饱和橙（accent 82%）」减重成「淡底 + 左侧 4px 色条」，底色因此变淡，
+     而两个主题的 `--panel` 方向相反 —— 混出来的底也相反：
+       浅色 = 淡桃底（#f1d2c4）→ 配深字；
+       深色 = 深褐底（#624433）→ 必须配浅字。
+     所以这一对 token 是**成对**的：深色块里必须覆盖 `--actual-record-text`。
+     （P4-12 的「两主题同取深色」只在 82% 那个中间调橙底上成立；底色一淡就不成立了。）
+     不能沿用 --action-text：那是给**实色** --action 按钮配的（浅色下是白字），
+     落到被稀释过的底上只有 2.82:1。 */
+  --actual-record-surface: color-mix(in srgb, var(--accent) 30%, var(--panel));
   --actual-record-text: #23150d;
+  /* P4-13：去强调用的**显式语义色**（「计划变幽灵、实际凸显」）。UI-SPEC §视觉令牌基线
+     写着「禁用态使用满足对比度的专用语义色而不是整体降低透明度」—— 整卡 `opacity` 会把
+     卡片里的 --muted 一起稀释到门槛以下，所以这里用一对表面／文字色替代它。
+     表面只声明一次：`var(--accent-soft)` 与 `var(--panel)` 都随主题变，混色结果自动跟随。 */
+  --deemphasized-surface: color-mix(in srgb, var(--accent-soft) 22%, var(--panel));
   /* 阴影三级：low（卡片默认）、float（浮窗/按钮）、modal（模态/抽屉），新加 ring 给 hover 聚焦用 */
   --shadow-low: 0 1px 2px rgb(35 31 27 / 6%), 0 1px 1px rgb(35 31 27 / 4%);
   --shadow-float: 0 2px 6px rgb(35 31 27 / 8%), 0 8px 24px rgb(35 31 27 / 10%);
@@ -37,6 +48,10 @@
   --accent-tint: #5d3a26;
   --success: #86cda6; --danger: #ff9a91; --focus: #75c7de;
   --action: #ef9c6b; --action-hover: #ffc09a; --action-text: #23150d;
+  /* P4-13：深色主题的叠加层底是**深褐**（accent 30% 混进深色 panel），深字在上面只有
+     1.94:1，所以这一主题必须换成浅色前景 —— 见 `:root` 里那段说明。 */
+  --actual-record-text: #ffd9c2;
+  --deemphasized-surface: color-mix(in srgb, var(--accent-soft) 26%, var(--panel));
   --shadow-low: 0 1px 2px rgb(0 0 0 / 32%), 0 1px 1px rgb(0 0 0 / 22%);
   --shadow-float: 0 2px 6px rgb(0 0 0 / 36%), 0 10px 30px rgb(0 0 0 / 40%);
   --shadow-modal: 0 8px 24px rgb(0 0 0 / 46%), 0 28px 60px rgb(0 0 0 / 56%);
@@ -191,6 +206,29 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .button-quiet:hover:not(:disabled) { background: var(--panel-strong); }
 
 .calendar-page { --calendar-hour-height: 48px; --calendar-month-row-height: 82px; position: relative; min-width: 0; max-width: 1240px; height: 100%; margin: 0 auto; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 8px; }
+/* ---------------------------------------------------------------------------
+   P4-13 §1：日历内部的**图层表**。
+   整个日历的堆叠上下文由 `.calendar-viewport`（`container-type: inline-size` →
+   自带 layout containment）建立，所以下面这些 `z-index` 全是**同一个上下文里的数值
+   比大小** —— 不是「跨上下文」问题，加 `isolation: isolate` 一个像素都不会变。
+   （`.calendar-session`／`.calendar-actual-record`／`.calendar-time-block` 的
+   `container-type: size` 只让它们成为**自己子树**的上下文，不改变它们和兄弟的先后。）
+
+     0–10   轨道内容（past-region 0／时间块 1／卡片 2／hover 4／当前安排 5／
+             待回顾 6／实际记录 7／当前时间线·目标卡片·拖拽展开区 8／
+             折叠区间·重叠目标 9／展开按钮 10）
+     19     日视图吸顶日期头（`.calendar-day > header`、「今天」药丸在这里）
+            与时间轴那一侧的 `.day-head-spacer`
+     20     吸顶分隔条（`.continuous-day-separator`）与周视图吸顶头
+            （`.week-sticky-header`）—— 分隔线高于日期头，因为它压在日期头上面
+     22     覆盖式日期详情面板（窄容器下）
+     24–35  **临时层**：插入线／位移预览 24、拖拽预览与落点幽灵 35
+     30     浮动按钮（`.back-to-now`）
+   规则：**临时层永远高于吸顶头**（拖拽反馈不能被吸顶带挡住），**吸顶头永远高于轨道内容**
+   （否则内容滚到头部下方时会盖住日期与「今天」）。改任何一档都要同时检查这三条。
+   回归判据用 `document.elementFromPoint`（`toBeVisible()` 查不出遮挡），见
+   `e2e/phase1.spec.ts` 的 `phase 4 M13` 用例。
+   --------------------------------------------------------------------------- */
 .calendar-page[data-calendar-zoom="compact"] { --calendar-hour-height: 36px; --calendar-month-row-height: 64px; }
 .calendar-page[data-calendar-zoom="detailed"] { --calendar-hour-height: 64px; --calendar-month-row-height: 104px; }
 .calendar-toolbar { display: flex; justify-content: space-between; align-items: center; margin: 6px 0 4px; padding: 8px 12px; color: var(--muted); font-size: .8125rem; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); flex-wrap: wrap; gap: 10px; }
@@ -206,7 +244,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-viewport { min-height: 0; overflow: auto; container-type: inline-size; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); scrollbar-gutter: stable; }
 .calendar-grid { height: calc(52px + (var(--calendar-hour-height) * 24)); min-width: 720px; display: grid; grid-template-columns: 58px repeat(7, minmax(84px, 1fr)); background: var(--panel); }
 .calendar-grid.day { min-width: 520px; grid-template-columns: 58px minmax(400px, 1fr); }
-.week-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.week-calendar-layout.with-detail { grid-template-columns: minmax(720px, 1fr) minmax(260px, 320px); }.week-calendar-main { min-width: 720px; }.week-sticky-header { position: sticky; top: 0; z-index: 12; min-width: 720px; background: var(--panel); box-shadow: 0 1px 0 var(--line-soft); }.week-date-headers, .week-all-day { display: grid; grid-template-columns: 58px repeat(7, minmax(84px, 1fr)); background: var(--panel); }.week-date-headers { min-height: 52px; border-bottom: 1px solid var(--line-soft); }.week-date-spacer { border-right: 1px solid var(--line-soft); background: var(--panel-strong); }.week-date-headers button { min-width: 0; border: 0; border-right: 1px solid var(--line-soft); background: var(--panel); color: var(--text); display: flex; justify-content: center; align-items: center; gap: 6px; transition: background .12s ease; }.week-date-headers button:last-child { border-right: 0; }.week-date-headers button:hover { background: var(--panel-strong); }.week-date-headers strong { color: var(--muted); font-size: .75rem; }
+.week-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.week-calendar-layout.with-detail { grid-template-columns: minmax(720px, 1fr) minmax(260px, 320px); }.week-calendar-main { min-width: 720px; }.week-sticky-header { position: sticky; top: 0; z-index: 20; min-width: 720px; background: var(--panel); box-shadow: 0 1px 0 var(--line-soft); }.week-date-headers, .week-all-day { display: grid; grid-template-columns: 58px repeat(7, minmax(84px, 1fr)); background: var(--panel); }.week-date-headers { min-height: 52px; border-bottom: 1px solid var(--line-soft); }.week-date-spacer { border-right: 1px solid var(--line-soft); background: var(--panel-strong); }.week-date-headers button { min-width: 0; border: 0; border-right: 1px solid var(--line-soft); background: var(--panel); color: var(--text); display: flex; justify-content: center; align-items: center; gap: 6px; transition: background .12s ease; }.week-date-headers button:last-child { border-right: 0; }.week-date-headers button:hover { background: var(--panel-strong); }.week-date-headers strong { color: var(--muted); font-size: .75rem; }
 .week-all-day { min-width: 720px; border-bottom: 1px solid var(--line-soft); }
 .week-all-day-label { padding: 6px 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-right: 1px solid var(--line-soft); color: var(--muted); font-size: .68rem; background: var(--panel-strong); }
 .week-all-day-label > span { color: var(--muted-strong); font-weight: 600; font-size: .7rem; }
@@ -221,7 +259,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .day-viewport { overflow: hidden; }.month-viewport { overflow: auto; }
 .continuous-day-axis { height: 100%; overflow: auto; scrollbar-gutter: stable; position: relative; }
 .continuous-day-panel { min-width: 520px; border-bottom: 2px solid var(--line); }
-.continuous-day-separator { position: sticky; top: 0; z-index: 8; min-height: 40px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel-strong); color: var(--text); font-size: .8rem; font-weight: 600; }
+.continuous-day-separator { position: sticky; top: 0; z-index: 20; min-height: 40px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel-strong); color: var(--text); font-size: .8rem; font-weight: 600; }
 .continuous-day-panel .calendar-day > header, .continuous-day-panel .day-head-spacer { top: 40px; }
 .month-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.month-calendar-layout.with-detail { grid-template-columns: minmax(600px, 1fr) minmax(260px, 320px); }.month-calendar { height: 100%; min-height: calc(42px + (var(--calendar-month-row-height) * 6)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 42px repeat(6, minmax(var(--calendar-month-row-height), 1fr)); }
 /* 月历是 6×7 的表：`grid → row → columnheader／gridcell`。七列落在**行**上，外层只排 7 行
@@ -243,15 +281,15 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
    （绝对定位的包含块是 padding box，right: 0 即留白右缘）。 */
 @container (max-width: 1040px) {
   .week-calendar-layout.with-detail, .month-calendar-layout.with-detail { grid-template-columns: minmax(0, 1fr); min-width: 0; padding-right: min(320px, calc(100% - 58px)); }
-  .with-detail > .calendar-date-details { position: absolute; z-index: 18; inset: 0 0 0 auto; width: min(320px, calc(100% - 58px)); max-height: 100%; box-shadow: var(--shadow-float); }
+  .with-detail > .calendar-date-details { position: absolute; z-index: 22; inset: 0 0 0 auto; width: min(320px, calc(100% - 58px)); max-height: 100%; box-shadow: var(--shadow-float); }
   /* 让出宽度后日历只剩 content box；这些 min-width 会把内容顶回覆盖层下面，必须一并放开。 */
   .with-detail .month-calendar, .with-detail .week-calendar-main, .with-detail .week-sticky-header { min-width: 0; }
   .with-detail .month-calendar-row { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .with-detail .week-date-headers, .with-detail .week-all-day { grid-template-columns: 58px repeat(7, minmax(0, 1fr)); }
 }
-.time-axis, .calendar-day { min-width: 0; display: grid; grid-template-rows: 52px 1fr; }.time-axis { border-right: 1px solid var(--line); background: var(--panel-strong); }.day-head-spacer { position: sticky; top: 0; z-index: 5; background: var(--panel-strong); border-bottom: 1px solid var(--line); }.time-axis-track { position: relative; min-height: 0; }.time-axis-track > span { position: absolute; right: 7px; color: var(--muted); font-size: .78rem; line-height: 1rem; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
+.time-axis, .calendar-day { min-width: 0; display: grid; grid-template-rows: 52px 1fr; }.time-axis { border-right: 1px solid var(--line); background: var(--panel-strong); }.day-head-spacer { position: sticky; top: 0; z-index: 19; background: var(--panel-strong); border-bottom: 1px solid var(--line); }.time-axis-track { position: relative; min-height: 0; }.time-axis-track > span { position: absolute; right: 7px; color: var(--muted); font-size: .78rem; line-height: 1rem; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 .time-axis-track > span:first-child { transform: translateY(4px); }
-.calendar-day { border-right: 1px solid var(--line); }.calendar-day:last-child { border-right: 0; }.calendar-day.today { box-shadow: inset 0 0 0 1px var(--accent); }.calendar-day.selected { box-shadow: inset 0 0 0 2px var(--accent-strong); }.calendar-day > header { display: flex; justify-content: center; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 4; background: var(--panel); }.calendar-day > header strong { color: var(--muted); font-size: .75rem; }.calendar-day > header span { font-weight: 600; }.today-number { background: var(--accent); color: white; width: 27px; height: 27px; border-radius: 999px; display: grid; place-items: center; }
+.calendar-day { border-right: 1px solid var(--line); }.calendar-day:last-child { border-right: 0; }.calendar-day.today { box-shadow: inset 0 0 0 1px var(--accent); }.calendar-day.selected { box-shadow: inset 0 0 0 2px var(--accent-strong); }.calendar-day > header { display: flex; justify-content: center; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 19; background: var(--panel); }.calendar-day > header strong { color: var(--muted); font-size: .75rem; }.calendar-day > header span { font-weight: 600; }.today-number { background: var(--accent); color: white; width: 27px; height: 27px; border-radius: 999px; display: grid; place-items: center; }
 .day-track { position: relative; background: repeating-linear-gradient(to bottom, transparent 0, transparent calc((100% / 24) - 1px), var(--line) calc(100% / 24)); min-height: 0; }.hour-line { position: absolute; inset-inline: 0; border-top: 1px solid transparent; pointer-events: none; }
 .day-track.folded-timeline { background: none; }.folded-timeline .hour-line { border-top-color: var(--line); }
 .timeline-map-segment { position: absolute; inset-inline: 0; pointer-events: none; }
@@ -273,8 +311,13 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-session.current-schedule { z-index: 5; border-width: 2px; border-color: var(--accent-strong); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 24%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent); }
 .calendar-session.pending-review { z-index: 6; overflow: visible; border-width: 2px; border-color: color-mix(in srgb, var(--accent-strong) 70%, var(--line)); }
 .calendar-session.completed { border-color: color-mix(in srgb, var(--success) 58%, var(--line)); background: color-mix(in srgb, var(--success) 8%, var(--panel)); }
-.calendar-session.planned-outline { border-style: dashed; background: color-mix(in srgb, var(--accent-soft) 38%, var(--panel)); opacity: .62; }
-.calendar-session.planned-outline:focus-within, .calendar-session.planned-outline:hover { opacity: 1; }
+/* P4-13 §3：整卡 `opacity: .62` 换成**显式的去强调表面**。
+   整卡降透明度会把卡片里的 --muted 文字一起稀释（浅色实测 2.38–2.48、暗色 3.88），
+   与 UI-SPEC §视觉令牌基线「禁用态使用满足对比度的专用语义色而不是整体降低透明度」冲突。
+   现在由「表面变淡 + 虚线轮廓」承担「计划退居背景」，标题改用 --muted-strong
+   （与时间块共用同一个「浅底上的次要文字」语义色），正文里的 --muted 不再被稀释。 */
+.calendar-session.planned-outline { border-style: dashed; background: var(--deemphasized-surface); color: var(--muted-strong); }
+.calendar-session.planned-outline:focus-within, .calendar-session.planned-outline:hover { background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); color: var(--text); }
 .session-state, .session-status-icon { display: flex; align-items: center; gap: 3px; }
 /* 「待回顾」既是状态也是入口：卡片聚焦后 Tab 到这里按 Enter 就能打开动作气泡，
    不必把 Enter 从「编辑时间」上挪走（那是已定稿的键盘契约）。*/
@@ -298,11 +341,26 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .session-review-actions button { min-height: 44px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .72rem; }
 .session-review-actions button:hover { color: var(--accent-strong); }
 .session-review-actions .progress-control { flex-basis: 100%; min-width: 250px; }
-/* P4-12：前景走 --actual-record-text（两主题都取深色）。此前用 --action-text，浅色下白字
-   落在 color-mix(accent 82%, panel) 的浅橙底上只有 2.82:1（axe color-contrast）。 */
-.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 82%, var(--panel)); color: var(--actual-record-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
-.back-to-now { position: absolute; z-index: 16; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
-@container (max-height: 28px) { .calendar-actual-record { align-content: center; padding-block: 2px; } .calendar-actual-record span, .calendar-actual-record time { display: none; } }.resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
+/* P4-12：前景走 --actual-record-text（专用 token，不再借用给实色按钮配的 --action-text
+   —— 浅色下白字落在被稀释过的橙底上只有 2.82:1）。
+   P4-13：底色从「满饱和橙（accent 82%）」减重为「淡底 + 左侧 4px 色条」（accent 30%），
+   观感从「实体高亮」回到「记录层」；前景因此也按主题成对声明，见 `:root` 的说明。 */
+.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: var(--actual-record-surface); color: var(--actual-record-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.back-to-now { position: absolute; z-index: 30; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
+/* P4-13 §4：叠加层按可用高度**逐行**隐藏，不让某一行被单独压成 0。
+   P4-12 §6.3 的实测：200% 下正文行高 44px、三行要 132px，而 1 小时的叠加层只有 72px；
+   只有 `strong` 带 `overflow: hidden`（自动最小尺寸为 0），于是它独自吸收全部缺口，
+   `grid-template-rows` 变成 `44px 0px 44px`，标题被裁到看不见。
+   行高是 `1.375rem`（100% 下 22px、200% 下 44px），容器查询里的 `rem` 跟着**界面缩放**
+   走（界面缩放就是把根字号设成 100%–200%），所以这两个断点自动适配两档缩放：
+   同一段 1 小时的记录在 100% 下留两行、在 200% 下只留标题。
+   内容盒 = 容器高 − 8px 内边距 − 2px 边框，所以断点是「行高 × 行数 + 10px」再让 1px 容差。
+   优先级：标题 > 「实际」标签 > 起止时间（起止时间在计划卡上也有，「实际」才是这一层的身分）。
+   ⚠️ `@container` 只对**容器的后代**生效，所以这里不能写 `.calendar-actual-record { … }`
+   自身 —— 旧代码那句 `align-content: center` 因此一直是**死规则**（详见 P4-13 报告 §5）。 */
+@container (max-height: calc(4.125rem + 9px)) { .calendar-actual-record time { display: none; } }
+@container (max-height: calc(2.75rem + 9px)) { .calendar-actual-record span { display: none; } }
+.resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
 .session-edit-button { position: absolute; top: 3px; right: 3px; z-index: 2; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }.calendar-session[data-card-density="detailed"] .session-edit-button, .calendar-session:hover .session-edit-button, .calendar-session:focus-within .session-edit-button { opacity: 1; }.session-edit-button:hover { background: var(--panel-strong); color: var(--accent-strong); }
 .calendar-session.missed { border-style: dashed; border-left-style: solid; border-color: color-mix(in srgb, var(--muted) 70%, var(--line)); background: color-mix(in srgb, var(--muted) 16%, var(--panel)); }
 .drag-time-preview { position: fixed; z-index: 90; padding: 4px 10px; border-radius: 7px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); box-shadow: var(--shadow-float); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
@@ -410,7 +468,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-drag-preview.overlap > span { background: color-mix(in srgb, var(--accent) 32%, var(--panel-strong)); color: var(--accent-strong); }
 .calendar-drag-preview.insert-before, .calendar-drag-preview.insert-after { border-color: var(--accent); }
 .calendar-insert-line { position: absolute; z-index: 24; left: 1px; right: 1px; height: 2px; background: var(--accent-strong); pointer-events: none; }.calendar-insert-line::before, .calendar-insert-line::after { content: ""; position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-strong); }.calendar-insert-line::before { left: 0; }.calendar-insert-line::after { right: 0; }.calendar-insert-line span { position: absolute; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 5px; background: var(--accent-strong); color: var(--action-text); font-size: .65rem; white-space: nowrap; }
-.calendar-shift-preview { position: absolute; z-index: 18; inset-inline: 5px; display: grid; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel) 72%, transparent); opacity: .55; pointer-events: none; }.calendar-shift-preview strong, .calendar-shift-preview time { overflow: hidden; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-shift-preview { position: absolute; z-index: 24; inset-inline: 5px; display: grid; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel) 72%, transparent); opacity: .55; pointer-events: none; }.calendar-shift-preview strong, .calendar-shift-preview time { overflow: hidden; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 /* 拖动中的源卡片只能变「淡」，**绝不能**被设为不可命中。
    浏览器在拖拽持续期间会不断用指针位置去命中拖拽源：`dragstart` 里把源设成
    `pointer-events: none`（或任何让它不再可命中的写法），Chromium 会在 `dragstart`
@@ -452,7 +510,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .blank-task-text strong { font-size: .8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .blank-task-text small { font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .blank-task-picker > span.empty-inline { padding: 14px; text-align: center; border: 1px dashed var(--line); border-radius: 9px; }
-.calendar-time-block { container-type: size; position: absolute; z-index: 1; inset-inline: 7px; min-height: 28px; border: 1px dashed color-mix(in srgb, var(--muted) 60%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 88%, var(--muted)); padding: 6px 22px 8px 6px; display: grid; align-content: start; cursor: grab; transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), left .16s ease, box-shadow .12s ease, opacity .14s ease; }.calendar-time-block:active { cursor: grabbing; }.calendar-time-block time { color: var(--muted); font-size: .68rem; }.calendar-time-block strong { font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 时间块的 `min-height` **保持 px，不要换成 rem**。
+   换成 rem 后 200% 下内容盒会被抬过 `@container (max-height: 26px)` 的阈值 → `time` 显形 →
+   网格先把 44px 给它 → 带 `overflow: hidden`（最小尺寸 0）的标题只剩 0px（12 → 0，是回归）。
+   把那条阈值一起换成 rem 则会改变 100% 下的隐藏范围，属设计决策，不是单位换算。
+   三种取值的实测与代价见 P4-13 报告 §12.1。 */
+.calendar-time-block { container-type: size; position: absolute; z-index: 1; inset-inline: 7px; min-height: 28px; border: 1px dashed color-mix(in srgb, var(--muted) 60%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 88%, var(--muted)); padding: 6px 22px 8px 6px; display: grid; align-content: start; cursor: grab; transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), left .16s ease, box-shadow .12s ease, opacity .14s ease; }.calendar-time-block:active { cursor: grabbing; }.calendar-time-block time { color: var(--muted-strong); font-size: .68rem; }.calendar-time-block strong { font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calendar-time-block .time-block-delete { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; z-index: 3; }
 .calendar-time-block:hover .time-block-delete, .calendar-time-block:focus-within .time-block-delete { opacity: 1; }
 .calendar-time-block .time-block-delete:hover { background: var(--panel-strong); color: var(--danger); }
@@ -473,7 +536,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 落点那一份瞬时收到虚线框里：不做过渡，避免"先滑一半、数据回来再跳一下"。
    虚线框（`.calendar-time-block-drop`）负责动，卡片负责立刻到位。*/
 .calendar-time-block[data-landed="true"] { transition: none; }
-@container (max-height: 26px) { .calendar-time-block { padding-block: 2px; align-content: center; } .calendar-time-block time { display: none; } }
+/* ⚠️ 这里只能写**后代**：`.calendar-time-block` 自己就是那个容器（`container-type: size`），
+   所以针对自身的 `padding-block`／`align-content` 从来没生效过（P4-13 §5.3 记录、跟进包删除）。
+   剩下的 `.calendar-time-block time { display: none }` 是活的 —— `time` 是后代。
+   条件按**内容盒**判定（实测：100% 下短块高 28px、内容盒 12px ≤ 26px，`time` 确实被隐藏）。*/
+@container (max-height: 26px) { .calendar-time-block time { display: none; } }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
 /* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }

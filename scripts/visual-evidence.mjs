@@ -17,7 +17,8 @@
  * 用 `--out <dir>` 可以换目录 —— P4-11 就是靠它把日历页的改前／改后截图分开落盘
  * （`--only calendar --out output/visual-p4-11-before` 与 `…-after`）。P4-12 用同一招拍
  * 实际记录叠加层（`--only actual-record --out output/visual-p4-12-before`），场景里带
- * `crop` 的还会多出一张 `-crop.png` 元素近景。
+ * `crop` 的还会多出一张 `-crop.png` 元素近景；P4-13 起 `crop` 可以是数组（一次说清
+ * 「变了哪几处」），第二、三张依次落成 `-crop2.png`、`-crop3.png`。
  *
  * 用法：
  *   node scripts/visual-evidence.mjs                 # 全套
@@ -219,28 +220,49 @@ function calendarWorkspace() {
 }
 
 /**
- * 实际记录叠加层样本（P4-12 加）：一条 09:00–11:00 的已结束记录。
+ * 实际记录叠加层样本（P4-12 加，P4-13 扩充）。
  *
- * **为什么截图用 2 小时、而 axe 实测用 30 分钟**：两者量的都是同一处配色（前景 token 变了，
- * 底色没变）。200% 缩放下正文行高是 44px，30 分钟的叠加层只有 24px 高，标题那一行会被
- * `overflow: hidden` 裁掉一截，截图里看不出字形；2 小时的叠加层有 144px，三行（「实际」／
- * 标题／起止时间）都完整渲染。所以截图取 2 小时 + 默认 `calendarScale`（72px/小时），
- * axe 与 E2E 取 P4-11 §7.1 的原始状态（30 分钟 × 48px/小时 = 24px，只剩标题）。
+ * **为什么记录取 1.5 小时（09:00–10:30，108px）**：这一段长度让**两档缩放各自暴露一处**，
+ * 改前／改后才有得比 ——
+ *   - 100%（行高 22px，内容盒 98px）：三行 66px 放得下 → 改前／改后都显示三行，
+ *     差别只在「满饱和橙 vs 淡桃底」；
+ *   - 200%（行高 44px）：三行要 132px，超过 98px → 改前 `grid-template-rows` 塌成
+ *     `44px 10px 44px`（标题被压成一条缝），改后按优先级隐藏时间行、留下「实际」+ 标题。
+ * P4-12 用的是 2 小时（144px）：200% 下三行正好放得下，看不到塌陷。
  *
  * 时间避开 12:00：那是「现在」线的位置，它的时间徽标会正好盖住叠加层的标题行（实测过）。
+ *
+ * P4-13 在这里多放了**一张「待回顾」时段**（08:00–09:00，只计划、无记录）和**一个时间块**
+ * （11:30–12:30）：它们与叠加层同属这一包改到的配色区，放在同一个样本里才能用同一组
+ * 改前／改后截图说清「变了哪几处」。P4-12 归档的那 8 张来自**更早的**、没有这两项的样本。
+ *
+ * 跟进包（2026-10-17）再加**一个 15 分钟的短时间块**（10:45–11:00）：1 小时块的天然高是 72px，
+ * 两档缩放都够高，`min-height` 根本不参与；只有短块的天然高（18px）低于下限，才量得到
+ * 「px 下限 vs rem 下限」的差别。11:30 那个 1 小时块保留，仍在全页截图里。
  */
 function actualRecordWorkspace() {
   return workspace({
     tasks: [
       { id: "ar-t1", projectId: null, title: "写开题报告", progress: 40, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task" },
       { id: "ar-t2", projectId: null, title: "看第一章", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 30, sessionMinutes: 30, priority: "normal", sortOrder: 1, kind: "task" },
+      { id: "ar-t3", projectId: null, title: "整理文献", progress: 60, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 2, kind: "task" },
     ],
     executionSessions: [
-      { id: "ar-s1", taskId: "ar-t1", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "09:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      { id: "ar-s3", taskId: "ar-t3", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "08:00", endLocal: "09:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      { id: "ar-s1", taskId: "ar-t1", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "09:00", endLocal: "10:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
       { id: "ar-s2", taskId: "ar-t2", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "missed" },
     ],
     executionRecords: [
-      { id: "ar-r1", sessionId: "ar-s1", taskId: "ar-t1", actualStartUtc: anchorAt(ANCHOR_DAY, "09:00"), actualEndUtc: anchorAt(ANCHOR_DAY, "11:00"), note: "" },
+      { id: "ar-r1", sessionId: "ar-s1", taskId: "ar-t1", actualStartUtc: anchorAt(ANCHOR_DAY, "09:00"), actualEndUtc: anchorAt(ANCHOR_DAY, "10:30"), note: "" },
+    ],
+    // 跟进包（2026-10-17）加：一个**短**时间块（10:45–11:00，15 分钟，天然高 18px）。
+    // 1 小时块（11:30–12:30）天然高 72px，两档缩放都不触发 `min-height`，看不出「px 下限」
+    // 的问题；短块的天然高只有 18px，才会被 `min-height` 钳住 —— 这才是 §1 要拍的对照。
+    // 放在数组首位（日视图按数组顺序渲染），`crop` 里的 `.calendar-time-block`（`first()`）
+    // 取到的就是它。
+    timeBlocks: [
+      { id: "ar-b2", title: "短块", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "10:45", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 },
+      { id: "ar-b1", title: "组会", localDate: ANCHOR_DAY, endLocalDate: ANCHOR_DAY, startLocal: "11:30", endLocal: "12:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 },
     ],
   });
 }
@@ -269,6 +291,10 @@ const measureActualRecord = (nudge) => {
   }
   if (!scroller) return { ok: false, reason: "no-scroller" };
   const header = scroller.querySelector(".week-sticky-header")
+    // 日视图：真正压在上面的是**日期头**（`top: 40px`，在 40px 高的分隔条下面），
+    // 不是分隔条。P4-12 只避让了分隔条，于是叠加层的顶行（「实际」标签）一直被日期头
+    // 盖着 —— 近景截图的头几十像素拍到的其实是日期头。P4-13 起以日期头为准。
+    ?? overlay.closest(".continuous-day-panel")?.querySelector(".calendar-day > header")
     ?? overlay.closest(".continuous-day-panel")?.querySelector(".continuous-day-separator")
     ?? null;
   const scrollerRect = scroller.getBoundingClientRect();
@@ -298,7 +324,76 @@ async function frameActualRecord(page) {
   throw new Error(`实际记录叠加层没能滚进可见区（${JSON.stringify(last)}）`);
 }
 
+/**
+ * P4-13 §1 的取景：把**日视图的吸顶日期头**（含「今天」药丸）与一段实际记录同时留在视口里，
+ * 并且让记录**压在吸顶头部带下方** —— 这样「谁画在上面」才会出现在这一张图里。
+ *
+ * 与 `frameActualRecord` 相反：那个是把叠加层滚到吸顶头**下面**的空白区（为了拍清楚字形），
+ * 这个是把叠加层滚到吸顶头**底下**（为了拍遮挡）。收敛重试的理由同上：应用进入视图后还会
+ * 自己定位一次，一次设置不一定生效。
+ */
+const measureTodayPill = (nudge) => {
+  const scroller = document.querySelector(".continuous-day-axis");
+  const day = scroller?.querySelector(".calendar-day.today");
+  const header = day?.querySelector("header");
+  const overlay = day?.closest(".continuous-day-panel")?.querySelector(".calendar-actual-record")
+    ?? scroller?.querySelector(".calendar-actual-record");
+  if (!scroller || !day || !header || !overlay) return { ok: false, reason: "missing-element" };
+  const scrollerRect = scroller.getBoundingClientRect();
+  const headerRect = header.getBoundingClientRect();
+  const overlayRect = overlay.getBoundingClientRect();
+  const headerInView = headerRect.top >= scrollerRect.top - 1 && headerRect.bottom <= scrollerRect.bottom;
+  const overlaps = overlayRect.top < headerRect.bottom && overlayRect.bottom > headerRect.top;
+  if (!(headerInView && overlaps) && nudge) scroller.scrollTop += (overlayRect.top - scrollerRect.top) - 50;
+  return {
+    ok: headerInView && overlaps,
+    overlayTop: Math.round(overlayRect.top), headerTop: Math.round(headerRect.top),
+    headerBottom: Math.round(headerRect.bottom), scrollerTop: Math.round(scrollerRect.top),
+    scrollTop: Math.round(scroller.scrollTop),
+  };
+};
+
+async function frameTodayPill(page) {
+  let last = { ok: false, reason: "not-run" };
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    last = await page.evaluate(measureTodayPill, true);
+    await page.waitForTimeout(300);
+    if (last.ok) {
+      const confirm = await page.evaluate(measureTodayPill, false);
+      if (confirm.ok) return confirm;
+      last = confirm;
+    }
+  }
+  throw new Error(`吸顶日期头与实际记录没能同时取到（${JSON.stringify(last)}）`);
+}
+
 // ---------------------------------------------------------------- 场景
+
+/**
+ * 把某个元素滚到**吸顶头下方的安全区**再拍近景。
+ *
+ * `locator.screenshot()` 只保证元素「在视口里」，滚动量取最小 —— 在日历里这就意味着它常常
+ * 正好停在吸顶日期头**底下**，近景的上半截拍到的是吸顶头（P4-13 实测：计划卡与时间块的近景
+ * 都被日期头压掉了一半）。目标本身就是吸顶头时跳过（那时它已经在正确的位置上）。
+ */
+async function frameBelowHeader(locator) {
+  await locator.evaluate((element) => {
+    let scroller = element.parentElement;
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!scroller) return;
+    const panel = element.closest(".continuous-day-panel");
+    const header = scroller.querySelector(".week-sticky-header")
+      ?? panel?.querySelector(".calendar-day > header")
+      ?? panel?.querySelector(".continuous-day-separator")
+      ?? null;
+    if (!header || header === element || header.contains(element)) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const safeTop = Math.max(scrollerRect.top, header.getBoundingClientRect().bottom);
+    const rect = element.getBoundingClientRect();
+    if (rect.top < safeTop + 8) scroller.scrollTop += rect.top - safeTop - 8;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
 
 async function capture(browser, name, seed, act, crop) {
   const context = await browser.newContext({ viewport: seed.viewport ?? { width: 1200, height: 760 }, deviceScaleFactor: 1 });
@@ -324,9 +419,15 @@ async function capture(browser, name, seed, act, crop) {
     console.log(`[visual] ${name}.png`);
     // `crop`：再拍一张目标元素的近景。小色块（实际记录叠加层只有 24–72px 高）在全页
     // 截图里只有几个像素高，看不出文字，近景才是「改前白字 / 改后深字」的直接证据。
-    if (crop) {
-      await page.locator(crop).first().screenshot({ path: join(outputDirectory, `${name}-crop.png`) });
-      console.log(`[visual] ${name}-crop.png`);
+    // P4-13 起可以传数组：一组改前／改后要同时说清「变了哪几处」时，一次跑完更省事
+    // （第一张沿用 P4-12 的 `-crop.png` 名字，其余依次是 `-crop2.png`、`-crop3.png`）。
+    const crops = crop === undefined ? [] : Array.isArray(crop) ? crop : [crop];
+    for (const [index, selector] of crops.entries()) {
+      const suffix = index === 0 ? "-crop" : `-crop${index + 1}`;
+      const target = page.locator(selector).first();
+      await frameBelowHeader(target);
+      await target.screenshot({ path: join(outputDirectory, `${name}${suffix}.png`) });
+      console.log(`[visual] ${name}${suffix}.png`);
     }
   } finally {
     await context.close();
@@ -494,14 +595,19 @@ function scenarios(port) {
     // 一多半），而 2 小时的叠加层有 144px —— 放不下。日视图的可视窗口宽得多，三行文字都能
     // 完整渲染，是「白字 → 深字」最直接的对照。
     //
-    // 改前那组要先 `git checkout HEAD -- src/styles.css`（跑完立刻从备份拷回来）。
-    ...["day"].flatMap((view) => ["light", "dark"].map((appearance) => ({
-      name: `actual-record-${view}-1200-200-${appearance}`,
-      crop: ".calendar-actual-record",
+    // P4-13：`scale` 改成**场景参数**（100／200 各一组，不再硬编码 200），并一次多拍两张近景
+    // ——「待回顾」计划卡（§3 的去强调）与时间块（§5 的起止时间字色）。改前那组要先
+    // `git checkout HEAD -- src/styles.css`（跑完立刻从备份拷回来）。
+    ...["day"].flatMap((view) => ["light", "dark"].flatMap((appearance) => [100, 200].map((scale) => ({
+      name: `actual-record-${view}-1200-${scale}-${appearance}`,
+      crop: [".calendar-actual-record", ".calendar-session.planned-outline", ".calendar-time-block"],
       seed: {
-        port, clock, viewport: { width: 1200, height: 760 },
+        // 900 高而不是 P4-12 的 760：200% 缩放下日视图的可视窗口只有约 216px，
+        // 2 小时的叠加层（144px）放不进「日期头下方的安全区」；加高窗口才能让改前／改后
+        // 两组用同一套取景（取景必须一致，否则截图不可比）。
+        port, clock, viewport: { width: 1200, height: 900 },
         preferences: preference({
-          lastPage: "calendar", calendarView: view, appearance, scale: 200, showActualRecords: true,
+          lastPage: "calendar", calendarView: view, appearance, scale, showActualRecords: true,
           calendarAnchors: { day: ANCHOR_DAY, week: ANCHOR_DAY, month: ANCHOR_DAY },
           calendarZoom: { day: "standard", week: "standard", month: "standard" },
         }),
@@ -513,7 +619,31 @@ function scenarios(port) {
         await page.locator(view === "week" ? ".week-calendar-main" : ".continuous-day-axis").waitFor();
         await frameActualRecord(page);
       },
-    }))),
+    })))),
+    // P4-13 §1：日视图吸顶日期头（含「今天」药丸）与实际记录**同时**入镜，且记录压在吸顶头
+    // 底下 —— 改前药丸被盖住、改后药丸在最上面。近景取日期头本身。
+    ...["day"].flatMap((view) => ["light", "dark"].flatMap((appearance) => [100, 200].map((scale) => ({
+      name: `today-pill-${view}-1200-${scale}-${appearance}`,
+      crop: ".calendar-day.today > header",
+      seed: {
+        // 900 高而不是 P4-12 的 760：200% 缩放下日视图的可视窗口只有约 216px，
+        // 2 小时的叠加层（144px）放不进「日期头下方的安全区」；加高窗口才能让改前／改后
+        // 两组用同一套取景（取景必须一致，否则截图不可比）。
+        port, clock, viewport: { width: 1200, height: 900 },
+        preferences: preference({
+          lastPage: "calendar", calendarView: view, appearance, scale, showActualRecords: true,
+          calendarAnchors: { day: ANCHOR_DAY, week: ANCHOR_DAY, month: ANCHOR_DAY },
+          calendarZoom: { day: "standard", week: "standard", month: "standard" },
+        }),
+        workspace: actualRecordWorkspace(),
+      },
+      act: async (page) => {
+        await page.getByRole("heading", { name: "日历", level: 1 }).waitFor();
+        await page.getByRole("button", { name: view === "week" ? "周" : "日", exact: true }).click();
+        await page.locator(view === "week" ? ".week-calendar-main" : ".continuous-day-axis").waitFor();
+        await frameTodayPill(page);
+      },
+    })))),
   ];
 }
 

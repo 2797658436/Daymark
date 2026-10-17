@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 /**
@@ -1434,6 +1434,401 @@ test("phase 4 M12 keeps the calendar page clean with the actual-record overlay",
         expect(result.overlayEvaluated, `${theme} · 日历（${label}）· axe 必须真的评估过叠加层`).toBe(true);
       }
       expect(result.violationIds, `${theme} · 日历（${label}）· 实际记录叠加层`).toEqual([]);
+    }
+  }
+});
+
+/**
+ * P4-13 的日历样本：**同时**有「待回顾」计划卡、实际记录叠加层、时间块与 `missed` 时段。
+ *
+ * P4-12 的 `calendarActualRecordWorkspace()` 刻意**不含**「待回顾」—— 那一态带着
+ * `.planned-outline` 的整卡 `opacity: .62` 缺陷（P4-12 §6.2），当时不修也就不测。
+ * P4-13 把它修掉了（换成显式去强调色），所以这一包必须把它测上：夹具里真的有
+ * `.pending-review` 与 `.calendar-time-block`，断言才不是空跑（P4-09 的教训）。
+ *
+ * 时段安排：
+ *   - `s-4` 07:00–08:30（t-3，进行中、**没有**执行记录）→ 待回顾 → `.pending-review` + `.planned-outline`
+ *   - `s-1` 09:00–10:30（t-1，**有**一条已结束记录）→ 叠加层渲染
+ *   - `s-2` 14:00–15:00（`missed`）→ 状态图标
+ *   - 时间块 16:00–17:00
+ */
+function calendarDeemphasisedWorkspace() {
+  const at = (date: string, time: string) => new Date(`${date}T${time}:00`).toISOString();
+  const base = calendarAxeWorkspace();
+  return {
+    ...base,
+    executionSessions: [
+      ...base.executionSessions,
+      { id: "s-4", taskId: "t-3", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "07:00", endLocal: "08:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+    ],
+    executionRecords: [
+      { id: "ar-r1", sessionId: "s-1", taskId: "t-1", actualStartUtc: at("2026-08-05", "09:00"), actualEndUtc: at("2026-08-05", "10:30"), note: "" },
+    ],
+  };
+}
+
+/**
+ * 把某个元素滚进**吸顶头下方的安全区**（`scrollIntoViewIfNeeded()` 那种「最小滚动」会把它
+ * 停在吸顶头底下，近景／axe 都拍不到它）。两个方向都要处理：元素在安全区**上方**就往下滚，
+ * 在安全区**下方**（960×200% 下日视图只有约 3 小时窗口，下午的时段经常只露出三分之一）就往上滚。
+ *
+ * 循环到不动为止：日视图是三日缓冲，滚动可能触发应用自己的重新定位。
+ */
+async function scrollIntoCalendarSafeArea(page: Page, locator: Locator) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const moved = await locator.evaluate((element) => {
+      let scroller = element.parentElement;
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+      if (!scroller) return 0;
+      const panel = element.closest(".continuous-day-panel");
+      const header = scroller.querySelector(".week-sticky-header")
+        ?? panel?.querySelector(".calendar-day > header")
+        ?? panel?.querySelector(".continuous-day-separator")
+        ?? null;
+      if (!header || header === element || header.contains(element)) return 0;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const safeTop = Math.max(scrollerRect.top, header.getBoundingClientRect().bottom) + 8;
+      const safeBottom = scrollerRect.bottom - 8;
+      const rect = element.getBoundingClientRect();
+      let delta = 0;
+      if (rect.top < safeTop) delta = rect.top - safeTop;
+      else if (rect.bottom > safeBottom) delta = Math.min(rect.bottom - safeBottom, rect.top - safeTop);
+      if (!delta) return 0;
+      scroller.scrollTop += delta;
+      return Math.round(delta);
+    });
+    if (!moved) return;
+    await page.waitForTimeout(200);
+  }
+}
+
+/**
+ * 命中测试：**「谁画在最上面」只能这样量**。
+ *
+ * `toBeVisible()` 查不出遮挡 —— 被盖住的元素照样「可见」。`document.elementFromPoint`
+ * 才回答「这一点上最上面的是谁」。
+ *
+ * ⚠️ 实际记录叠加层平时是 `pointer-events: none`，命中测试会**直接跳过它**（P4-13 实测：
+ * 不打开它时 `elementFromPoint` 在药丸中心返回药丸，缺陷明明还在）。所以这里临时把它的
+ * `pointer-events` 打开再问一次 —— 只改样式，不动产品代码，也不影响绘制顺序。
+ */
+const hitTestAtCenterOf = ({ pointSelector, containerSelector, forceOverlayHit }: { pointSelector: string; containerSelector: string; forceOverlayHit: boolean }) => {
+  const describe = (element: Element | null) => element
+    ? `${element.tagName.toLowerCase()}.${(element.className || "").toString().split(" ").filter(Boolean).join(".")}`
+    : null;
+  const target = document.querySelector(pointSelector);
+  if (!target) return { ok: false, reason: `找不到 ${pointSelector}` };
+  const rect = target.getBoundingClientRect();
+  const point = { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+  const overlay = document.querySelector<HTMLElement>(".calendar-actual-record");
+  const restore = overlay ? overlay.style.pointerEvents : null;
+  if (overlay && forceOverlayHit) overlay.style.pointerEvents = "auto";
+  const hit = document.elementFromPoint(point.x, point.y);
+  const stack = document.elementsFromPoint(point.x, point.y).slice(0, 5).map(describe);
+  if (overlay && restore !== null) overlay.style.pointerEvents = restore;
+  const container = document.querySelector(containerSelector);
+  return {
+    ok: true, point, inViewport: point.y >= 0 && point.y <= window.innerHeight,
+    hit: describe(hit), container: describe(container),
+    inside: Boolean(container && hit && container.contains(hit)), stack,
+  };
+};
+
+/** 逐元素量对比度：把「祖先整卡 opacity」也算进来（只读 `color` 会假绿，见 P4-12 §6.2）。 */
+const measureCalendarContrast = (targets: Array<{ label: string; selector: string }>) => {
+  const toRgba = (color: string) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1; canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = "#000000";
+    context.fillStyle = color;
+    context.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+    return { r, g, b, a: a / 255 };
+  };
+  const luminance = ({ r, g, b }: { r: number; g: number; b: number }) => {
+    const channel = (value: number) => { const c = value / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const over = (front: { r: number; g: number; b: number }, back: { r: number; g: number; b: number }, alpha: number) => ({
+    r: front.r * alpha + back.r * (1 - alpha),
+    g: front.g * alpha + back.g * (1 - alpha),
+    b: front.b * alpha + back.b * (1 - alpha),
+  });
+  return targets.map(({ label, selector }) => {
+    const element = document.querySelector(selector);
+    if (!element) return { label, selector, found: false, opacity: 1, ratio: 0, threshold: 0, fontSize: "", fontWeight: "" };
+    const style = getComputedStyle(element);
+    // 文字所在的那一层不透明底（最近的卡片）与路径上的 opacity 乘积
+    let opacity = Number(style.opacity);
+    let surface: { r: number; g: number; b: number } | null = null;
+    for (let node = element.parentElement; node; node = node.parentElement) {
+      opacity *= Number(getComputedStyle(node).opacity);
+      if (surface === null) {
+        const background = toRgba(getComputedStyle(node).backgroundColor);
+        if (background.a > 0.95) surface = background;
+      }
+    }
+    // 卡片背后的底（找不到就当白底）
+    let backdrop = { r: 255, g: 255, b: 255 };
+    let cursor = element.parentElement;
+    while (cursor && toRgba(getComputedStyle(cursor).backgroundColor).a <= 0.95) cursor = cursor.parentElement;
+    for (cursor = cursor?.parentElement ?? null; cursor; cursor = cursor.parentElement) {
+      const background = toRgba(getComputedStyle(cursor).backgroundColor);
+      if (background.a > 0.95) { backdrop = background; break; }
+    }
+    if (!surface) surface = backdrop;
+    const textColor = toRgba(style.color);
+    const textInGroup = textColor.a < 1 ? over(textColor, surface, textColor.a) : textColor;
+    const surfaceRendered = over(surface, backdrop, opacity);
+    const textRendered = over(textInGroup, backdrop, opacity);
+    const [high, low] = luminance(textRendered) > luminance(surfaceRendered)
+      ? [luminance(textRendered), luminance(surfaceRendered)]
+      : [luminance(surfaceRendered), luminance(textRendered)];
+    const size = Number.parseFloat(style.fontSize);
+    const weight = Number(style.fontWeight);
+    const largeText = size >= 24 || (size >= 18.66 && weight >= 700);
+    return {
+      label, selector, found: true, opacity,
+      ratio: Math.round(((high + 0.05) / (low + 0.05)) * 1000) / 1000,
+      threshold: largeText ? 3 : 4.5,
+      fontSize: style.fontSize, fontWeight: style.fontWeight,
+    };
+  });
+};
+
+/** 这一包改到的每一处配色；`mustExist` 的那几条在对应视图／轮次里必须真的渲染出来。 */
+const CALENDAR_CONTRAST_TARGETS = [
+  { label: "实际记录叠加层 · 标题", selector: ".calendar-actual-record strong", mustExist: true },
+  { label: "待回顾计划卡 · 标题", selector: ".calendar-session.pending-review strong", mustExist: true },
+  { label: "待回顾计划卡 · 起止时间", selector: ".calendar-session.pending-review .session-time", mustExist: false },
+  { label: "待回顾计划卡 · 状态标签", selector: ".calendar-session.pending-review .session-review-trigger > span", mustExist: false },
+  { label: "待回顾计划卡 · 进度值", selector: ".calendar-session.pending-review .session-progress-value", mustExist: false },
+  { label: "待回顾计划卡 · 回顾摘要", selector: ".calendar-session.pending-review .review-summary", mustExist: false },
+  { label: "时间块 · 起止时间", selector: ".calendar-time-block time", mustExist: false },
+] as const;
+
+/**
+ * P4-13 §1：**吸顶日期头不能被轨道内容盖住**。
+ *
+ * 缺陷（用户报的「实际记录盖住『今天』药丸」，2026-09-02 `54c621b` 起就有）：日视图的
+ * `.calendar-day > header` 是 `z-index: 4`，而轨道里的内容从 5 一路排到 10
+ * （当前安排 5／待回顾 6／实际记录 7／当前时间线 8／折叠区间 9／展开按钮 10）—— 4 被全体压住。
+ * 周视图的吸顶头是 12 所以没事，只有日视图那一档给低了。
+ *
+ * 判据必须是**命中测试**：`toBeVisible()` 查不出遮挡。日视图与周视图各覆盖
+ * 「有叠加层／无叠加层」两种状态；月视图没有吸顶头（表头是普通网格行），只做一次
+ * 「表头行仍可命中」的冒烟断言。
+ */
+test("phase 4 M13 keeps the sticky calendar headers above the track content", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", showActualRecords: true,
+      calendarScale: { day: 48, week: 48, month: 82 },
+      calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, calendarDeemphasisedWorkspace());
+  await page.reload();
+  await page.setViewportSize({ width: 1200, height: 800 });
+
+  for (const scale of [100, 200] as const) {
+    await setAppScale(page, scale);
+    await sidebar(page).getByRole("button", { name: "日历", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+    // ---- 日视图：09:00 那一段（有计划、也有实际记录）滚到吸顶日期头底下 ----
+    await page.getByRole("button", { name: "日", exact: true }).click();
+    await expect(page.locator(".continuous-day-axis")).toBeVisible();
+    const daySession = page.locator('.calendar-day.today .calendar-session[data-session-id="s-1"]');
+    await expect(daySession, `${scale}% · 日视图 · 夹具里 09:00 那一段必须真的渲染出来`).toBeVisible();
+    // 让叠加层与卡片都压在吸顶头部带里（头部带在滚动容器顶部往下 40–92px）
+    await page.locator(".continuous-day-axis").evaluate((scroller) => { scroller.scrollTop = 0; });
+    await scrollIntoCalendarSafeArea(page, page.locator(".calendar-actual-record").first());
+    await page.locator(".continuous-day-axis").evaluate((scroller) => {
+      const overlay = document.querySelector(".calendar-actual-record");
+      if (!overlay) return;
+      const scrollerRect = scroller.getBoundingClientRect();
+      scroller.scrollTop += (overlay.getBoundingClientRect().top - scrollerRect.top) - 50;
+    });
+    await page.waitForTimeout(400);
+
+    for (const state of ["有叠加层", "无叠加层"] as const) {
+      if (state === "无叠加层") {
+        await page.getByRole("checkbox", { name: "显示实际记录" }).uncheck();
+        await page.waitForTimeout(400);
+      }
+      for (const forceOverlayHit of [false, true]) {
+        const result = await page.evaluate(hitTestAtCenterOf, {
+          pointSelector: ".calendar-day.today .today-number", containerSelector: ".calendar-day.today > header", forceOverlayHit,
+        });
+        const hint = `${scale}% · 日视图 · ${state}${forceOverlayHit ? "（叠加层 pointer-events 临时打开）" : ""}`;
+        expect(result.ok, `${hint} · 找不到「今天」药丸：${result.reason ?? ""}`).toBe(true);
+        expect(result.inViewport, `${hint} · 药丸中心必须落在视口里`).toBe(true);
+        expect(result.inside, `${hint} · 药丸中心命中的是 ${result.hit}，而不是日期头 ${result.container}；堆叠顺序 ${JSON.stringify(result.stack)}`).toBe(true);
+      }
+    }
+    await page.getByRole("checkbox", { name: "显示实际记录" }).check();
+    await page.waitForTimeout(300);
+
+    // ---- 周视图：09:00 那一段滚到周吸顶头底下 ----
+    await page.getByRole("button", { name: "周", exact: true }).click();
+    await expect(page.locator(".week-calendar-main")).toBeVisible();
+    await page.locator(".calendar-viewport").evaluate((scroller) => {
+      const card = document.querySelector(".calendar-session");
+      if (!card) return;
+      scroller.scrollTop += (card.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - 20;
+    });
+    await page.waitForTimeout(400);
+    const weekResult = await page.evaluate(hitTestAtCenterOf, {
+      pointSelector: ".week-sticky-header .week-date-headers button", containerSelector: ".week-sticky-header", forceOverlayHit: true,
+    });
+    expect(weekResult.ok, `${scale}% · 周视图 · 找不到吸顶头里的日期按钮`).toBe(true);
+    expect(weekResult.inViewport, `${scale}% · 周视图 · 日期按钮中心必须落在视口里`).toBe(true);
+    expect(weekResult.inside, `${scale}% · 周视图 · 日期按钮中心命中的是 ${weekResult.hit}，而不是吸顶头；堆叠顺序 ${JSON.stringify(weekResult.stack)}`).toBe(true);
+
+    // ---- 月视图：没有吸顶头（表头是普通网格行），只断言表头行仍可命中 ----
+    await page.getByRole("button", { name: "月", exact: true }).click();
+    await expect(page.locator(".month-calendar")).toBeVisible();
+    const monthResult = await page.evaluate(hitTestAtCenterOf, {
+      pointSelector: '.month-calendar [role="columnheader"]', containerSelector: ".month-calendar", forceOverlayHit: false,
+    });
+    expect(monthResult.ok, `${scale}% · 月视图 · 找不到表头行`).toBe(true);
+    expect(monthResult.inside, `${scale}% · 月视图 · 表头行被 ${monthResult.hit} 盖住了；堆叠顺序 ${JSON.stringify(monthResult.stack)}`).toBe(true);
+  }
+});
+
+/**
+ * P4-13 §2／§3／§4／§5：开启「显示实际记录」后，日历页在 960×200% 的浅／深两色下零违规，
+ * 并且这一包改到的**每一处**配色都给出实测比值。
+ *
+ * 与 P4-12 那条 `actual-record overlay` 用例的关系：那条只盯叠加层（夹具刻意不含「待回顾」，
+ * 因为当时 `.planned-outline` 的整卡 `opacity: .62` 是另一条独立缺陷）。P4-13 把它修掉了，
+ * 于是这条用例的夹具里**真的有** `.pending-review` 与 `.calendar-time-block`。
+ *
+ * 两条硬约束（§10 与 P4-12 §3）在这里都照做：
+ *   ① `color-contrast` 只评估**已渲染且在屏幕上**的元素 —— 每一轮都先断言这一轮的焦点元素
+ *      `toBeVisible()` + `toBeInViewport()`，再跑 axe；否则「零违规」可能只是「没看过」。
+ *   ② 元素**没渲染**（夹具太穷）时规则同样不跑 —— 所以夹具里必须有待回顾时段、时间块与
+ *      `missed` 时段（P4-09 的教训）。
+ * 另外每一轮都按 WCAG 公式自己算一次比值（axe 常把叠加层里的文字判成 `incomplete`：
+ * 「背景色无法确定，被别的元素盖住」—— `incomplete` 既不是通过也不是违规）。
+ *
+ * **第二轮起是「滚到有内容的时段」**：P4-12 §6.1 记着「axe 不评估屏幕外的元素」，
+ * 而 960×200% 下日视图的可视窗口只有约 3 小时 —— 不加滚动轮，日历下半天的状态永远不会
+ * 被检查。月视图同样滚到底部再跑一次（6 行日期在 200% 下远超视口）。
+ */
+test("phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the actual record and the time block", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((workspace) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", showActualRecords: true,
+      calendarScale: { day: 48, week: 48, month: 82 },
+      calendarAnchors: { day: "2026-08-05", week: "2026-08-05", month: "2026-08-05" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
+  }, calendarDeemphasisedWorkspace());
+  await page.reload();
+  await page.setViewportSize({ width: 960, height: 720 });
+  await setAppScale(page, 200);
+  await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
+
+  const axeAudit = () => page.evaluate(async () => {
+    type AxeRule = { id: string; nodes: Array<{ target: string[] }> };
+    const outcome = await (window as unknown as { axe: { run(): Promise<{ violations: AxeRule[]; incomplete: AxeRule[]; passes: AxeRule[]; inapplicable: AxeRule[] }> } }).axe.run();
+    const targetsIn = (bucket: AxeRule[]) => bucket
+      .filter((entry) => entry.id === "color-contrast")
+      .flatMap((entry) => entry.nodes.map((node) => node.target.join(" ")));
+    const seen = [
+      ...targetsIn(outcome.violations), ...targetsIn(outcome.incomplete),
+      ...targetsIn(outcome.passes), ...targetsIn(outcome.inapplicable),
+    ];
+    return {
+      violationIds: Array.from(new Set(outcome.violations.map((violation) => violation.id))).sort(),
+      overlayEvaluated: seen.some((target) => target.includes("calendar-actual-record")),
+      planEvaluated: seen.some((target) => target.includes("pending-review")),
+      timeBlockEvaluated: seen.some((target) => target.includes("calendar-time-block")),
+    };
+  });
+
+  const VIEWS = [
+    { label: "日", selector: ".continuous-day-axis" },
+    { label: "周", selector: ".week-calendar-main" },
+    { label: "月", selector: ".month-calendar" },
+  ] as const;
+  /**
+   * 每一轮都**先滚到一段有内容的时段**再断言：960×200% 下日视图只有约 3 小时的可视窗口，
+   * 「初始位置」本身就会漏掉大半天。日／周的每一轮都用 `scrollBelowStickyHeader` 把焦点元素
+   * 放到吸顶头下方的安全区（`scrollIntoViewIfNeeded` 那种最小滚动会把它停在吸顶头底下）；
+   * 月视图没有吸顶头，直接滚到底部。
+   */
+  const ROUNDS = {
+    日: [
+      { label: "滚到 14:00（未推进 + 现在线）", focus: ".calendar-session.missed", evaluated: [] },
+      { label: "滚到 07:00（计划卡 + 实际记录）", focus: ".calendar-session.pending-review", evaluated: ["overlay", "plan"] },
+      { label: "滚到 16:00（时间块）", focus: ".calendar-time-block", evaluated: ["timeBlock"] },
+    ],
+    周: [
+      { label: "滚到 16:00（时间块）", focus: ".calendar-time-block", evaluated: ["timeBlock"] },
+      { label: "滚到 07:00（计划卡 + 实际记录）", focus: ".calendar-session.pending-review", evaluated: ["overlay", "plan"] },
+    ],
+    月: [
+      { label: "初始位置（上半月）", focus: '.month-calendar [role="gridcell"]', evaluated: [] },
+      { label: "滚到底部（下半月）", focus: '.month-calendar [role="gridcell"]', evaluated: [] },
+    ],
+  } as const;
+
+  for (const theme of ["浅色", "深色"] as const) {
+    await sidebar(page).getByRole("button", { name: "设置", exact: true }).click();
+    await page.getByRole("radio", { name: theme }).check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme === "深色" ? "dark" : "light");
+    await sidebar(page).getByRole("button", { name: "日历", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+    for (const view of VIEWS) {
+      // 视图是持久化偏好：每次都要显式切回去。
+      await page.getByRole("button", { name: view.label, exact: true }).click();
+      await expect(page.locator(`.${view.selector.slice(1)}`)).toBeVisible();
+      await page.waitForTimeout(200);
+
+      for (const [index, round] of ROUNDS[view.label].entries()) {
+        const hint = `${theme} · 日历（${view.label}）· ${round.label}`;
+        if (view.label === "月") {
+          if (index > 0) await page.locator(".calendar-viewport").evaluate((scroller) => { scroller.scrollTop = scroller.scrollHeight; });
+        } else {
+          const focus = page.locator(round.focus).first();
+          await expect(focus, `${hint} · 这一轮的焦点元素必须存在`).toBeVisible();
+          await scrollIntoCalendarSafeArea(page, focus);
+        }
+        await page.waitForTimeout(300);
+        // 硬约束 ①：先证明这一轮真的把内容放进了屏幕，再谈「零违规」。
+        // 月视图滚到底部那一轮要看的是**最后一行**的格子（`first()` 在上半月的第 1 行）。
+        const focus = view.label === "月" && index > 0 ? page.locator(round.focus).last() : page.locator(round.focus).first();
+        await expect(focus, `${hint} · 焦点元素必须真的渲染出来`).toBeVisible();
+        await expect(focus, `${hint} · 焦点元素必须在屏幕上，否则 axe 根本不会评估它`).toBeInViewport({ ratio: 0.5 });
+
+        const rows = await page.evaluate(measureCalendarContrast, CALENDAR_CONTRAST_TARGETS.map((target) => ({ label: target.label, selector: target.selector })));
+        for (const row of rows) {
+          if (!row.found) continue;
+          expect(row.ratio, `${hint} · ${row.label}（opacity×${Math.round(row.opacity * 1000) / 1000}，${row.fontSize}/${row.fontWeight}）`)
+            .toBeGreaterThanOrEqual(row.threshold);
+        }
+        const audited = await axeAudit();
+        // 只断言这一轮**真的把元素放进了屏幕**的那几项：「零违规」不等于「量过了」，
+        // 反过来也不该要求 axe 评估屏幕外的元素（它本来就看不见）。
+        if ((round.evaluated as readonly string[]).includes("overlay")) {
+          expect(audited.overlayEvaluated, `${hint} · axe 必须真的评估过实际记录叠加层`).toBe(true);
+        }
+        if ((round.evaluated as readonly string[]).includes("plan")) {
+          expect(audited.planEvaluated, `${hint} · axe 必须真的评估过待回顾计划卡`).toBe(true);
+        }
+        if ((round.evaluated as readonly string[]).includes("timeBlock")) {
+          expect(audited.timeBlockEvaluated, `${hint} · axe 必须真的评估过时间块`).toBe(true);
+        }
+        expect(audited.violationIds, `${hint} · 开启「显示实际记录」后的日历页`).toEqual([]);
+      }
     }
   }
 });
