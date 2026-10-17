@@ -1,0 +1,14 @@
+db: C:\Users\ZZT\AppData\Roaming\com.daymark.desktop\daymark.db
+schema_version: 7
+  projects: 0
+  tasks: 0
+  execution_sessions: 0
+  execution_records: 0
+  progress_events: 0
+  time_blocks: 0
+  recurring_habits: 0
+  habit_occurrences: 0
+  project_milestones: 0
+  milestone_outcomes: 0
+db_sha256: f871803be586e3e835e293eae0e93ce28a8f4b3baa453679d62394e30e8264d4
+db_size: 126976

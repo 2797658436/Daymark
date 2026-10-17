@@ -1,0 +1,15 @@
+schema_version: 7
+  projects: 2
+  tasks: 101
+  execution_sessions: 18
+  progress_events: 18
+pre-restore backups: 3
+   pre-restore-2026-10-17T22-51-39-f5b7e8a288fd4c64994210c498cd6480.db 131072
+   pre-restore-2026-10-17T22-52-51-c7f23ee87a9f4f32baf67f0d399c5467.db 184320
+   pre-restore-2026-10-17T22-54-27-dc723b2750124a0f80e6f3df6904211d.db 167936
+settings.json readonly: True
+
+== 对照（tasks/sessions/progress） ==
+尝试恢复的来源 p410-zzz-fewer-sessions.db: (101, 23, 27)
+本次恢复前备份 pre-restore-2026-10-17T22-54-27-dc723b2750124a0f80e6f3df6904211d.db : (101, 18, 18)
+live daymark.db: (101, 18, 18)

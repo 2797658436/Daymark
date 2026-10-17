@@ -1,0 +1,12 @@
+schema_version: 7
+  projects: 2
+  tasks: 101
+  execution_sessions: 19
+  execution_records: 0
+  progress_events: 18
+  time_blocks: 1
+  recurring_habits: 1
+  habit_occurrences: 9
+progress sum: 230
+db_sha256: e1ce109a4a9e26264be956705da4455fef444ef80461f550b1c64c4dc41735b4
+settings keys: 27 | has calendarPositions: True | lastPage: today

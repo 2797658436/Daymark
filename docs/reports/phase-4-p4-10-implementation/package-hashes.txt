@@ -1,0 +1,4 @@
+111e662177a723f952e28d7e502875468c79216fb4e3e37c03710c482e88b186 *src-tauri/target/release/bundle/nsis/Daymark_0.1.1_x64-setup.exe
+e69df8fe2961664307c8b41debf1e98f609be63eb7de3f72f5021a11a2a23e03 *src-tauri/target/release/daymark.exe
+15c03f1c2cb3acc06acce0bba0953613a967b42bf3b205e5c40422ccf2cc03b3 *artifacts/Daymark_0.1.0_x64-setup.exe
+111e662177a723f952e28d7e502875468c79216fb4e3e37c03710c482e88b186 *artifacts/Daymark_0.1.1_x64-setup.exe

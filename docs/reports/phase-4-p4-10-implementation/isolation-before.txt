@@ -1,0 +1,22 @@
+recorded_at: 2026-10-17T22:30:19+08:00
+
+== %APPDATA%/com.daymark.desktop ==
+daymark.db 180224
+settings.json 1536
+
+== hashes ==
+\6a54156b6b44e983dd978030f7675e89e998efa957a3068fb2b9a85d2e22ca74 *C:\\Users\\ZZT\\AppData\\Roaming/com.daymark.desktop/daymark.db
+\f6e3021cb503f9b55b3ad4653319464b1f1ea129bf0ae928dedd10eb5495daa5 *C:\\Users\\ZZT\\AppData\\Roaming/com.daymark.desktop/settings.json
+
+== backups count / size ==
+7
+8.0M	C:\Users\ZZT\AppData\Roaming/com.daymark.desktop/backups
+
+== backup db names (last 5) ==
+daymark-2026-09-14.db 167936
+daymark-2026-09-20.db 176128
+daymark-2026-09-21.db 176128
+daymark-2026-10-15.db 184320
+daymark-2026-10-16.db 184320
+\6a54156b6b44e983dd978030f7675e89e998efa957a3068fb2b9a85d2e22ca74 *C:\\Users\\ZZT\\AppData\\Roaming/com.daymark.desktop.hold-p4-10-20261017/daymark.db
+\f6e3021cb503f9b55b3ad4653319464b1f1ea129bf0ae928dedd10eb5495daa5 *C:\\Users\\ZZT\\AppData\\Roaming/com.daymark.desktop.hold-p4-10-20261017/settings.json

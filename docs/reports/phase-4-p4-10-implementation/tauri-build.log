@@ -1,0 +1,34 @@
+
+> daymark@0.1.1 tauri
+> tauri build
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> daymark@0.1.1 build
+> tsc --noEmit && vite build
+
+[36mvite v8.1.5 [32mbuilding client environment for production...[36m[39m
+[2Ktransforming...✓ 1818 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.35 kB
+dist/assets/index-DmUbaGUH.css   81.61 kB │ gzip:  15.27 kB
+dist/assets/index-BYlzs2wk.js   465.79 kB │ gzip: 137.57 kB
+
+[33m[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugins. Here is a breakdown:
+  - vite:build-html (37%)
+  - vite:prepare-out-dir (25%)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+[39m
+[32m✓ built in 5.62s[39m
+   Compiling daymark v0.1.1 (F:\PythonProject\Daymark\src-tauri)
+    Finished `release` profile [optimized] target(s) in 1m 46s
+       Built application at: F:\PythonProject\Daymark\src-tauri\target\release\daymark.exe
+        Info Patching F:\PythonProject\Daymark\src-tauri\target\release\daymark.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce F:\PythonProject\Daymark\src-tauri\target\release\bundle\nsis\Daymark_0.1.1_x64-setup.exe
+    Finished 1 bundle at:
+        F:\PythonProject\Daymark\src-tauri\target\release\bundle\nsis\Daymark_0.1.1_x64-setup.exe
+
+EXIT=0

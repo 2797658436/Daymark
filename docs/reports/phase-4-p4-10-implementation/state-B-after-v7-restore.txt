@@ -1,0 +1,18 @@
+schema_version: 7
+  projects: 2
+  tasks: 101
+  execution_sessions: 73
+  execution_records: 0
+  progress_events: 27
+  time_blocks: 1
+  recurring_habits: 1
+  habit_occurrences: 22
+  project_milestones: 0
+  milestone_outcomes: 0
+tables has backup_preferences: False
+db_sha256: 3ce0db413a721a87e5da23b72ff5903ae2177a0d310d987e127ebb2ad3f1bda4
+settings keys: 27
+appearance: light | lastPage: review
+calendarPositions: {'day': {'date': '2026-10-15', 'minute': 39.84433814864536, 'viewportRatio': 0.5}, 'week': {'date': '2026-10-15', 'minute': 1359.693804949031, 'viewportRatio': 0.5}}
+reviewPeriod: week | reviewAnchorDate: None
+backups: ['daymark-2026-10-17.db', 'p410-corrupt.db', 'p410-old-prefs.db', 'p410-old-v7.db', 'pre-restore-2026-10-17T22-51-39-f5b7e8a288fd4c64994210c498cd6480.db']

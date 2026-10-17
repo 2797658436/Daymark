@@ -1,0 +1,13 @@
+schema_version: 7
+  projects: 2
+  tasks: 101
+  execution_sessions: 19
+  execution_records: 0
+  progress_events: 18
+  time_blocks: 1
+  recurring_habits: 1
+  habit_occurrences: 9
+sample titles: ['你好', '你好', '不好！']
+progress sum: 230
+db_sha256: e1ce109a4a9e26264be956705da4455fef444ef80461f550b1c64c4dc41735b4
+settings_sha256: 2d2c794b3a2c7a5067b98260b5222c902109ba83ac33c5672a8cf956cf69c75a

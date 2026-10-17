@@ -1,0 +1,8 @@
+settings keys: 24
+['appearance', 'autoScheduleAssist', 'calendarAnchors', 'calendarDayMode', 'calendarScale', 'calendarView', 'calendarZoom', 'checkInEnabled', 'checkInGraceMinutes', 'defaultSessionMinutes', 'defaultTimeSlots', 'lastPage', 'lastStartupSummaryLocalDate', 'minimumSessionMinutes', 'motion', 'reminderLeadMinutes', 'remindersEnabled', 'rescuePromptsEnabled', 'scale', 'showActualRecords', 'showActualRecordsControl', 'snapMinutes', 'startupSummary', 'taskPoolWidth']
+  calendarPositions: MISSING -> 前端按默认值补齐
+  reviewPeriod: MISSING -> 前端按默认值补齐
+  reviewAnchorDate: MISSING -> 前端按默认值补齐
+appearance: light lastPage: today
+schema_version: 7
+tasks: 101 projects: 2
