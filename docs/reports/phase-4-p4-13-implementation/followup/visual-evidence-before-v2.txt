@@ -1,0 +1,23 @@
+[visual] actual-record-day-1200-100-light.png
+[visual] actual-record-day-1200-100-light-crop.png
+[visual] actual-record-day-1200-100-light-crop2.png
+[visual] actual-record-day-1200-100-light-crop3.png
+[visual] actual-record-day-1200-200-light.png
+[visual] actual-record-day-1200-200-light-crop.png
+[visual] actual-record-day-1200-200-light-crop2.png
+[visual] actual-record-day-1200-200-light-crop3.png
+[visual] actual-record-day-1200-100-dark.png
+[visual] actual-record-day-1200-100-dark-crop.png
+[visual] actual-record-day-1200-100-dark-crop2.png
+[visual] actual-record-day-1200-100-dark-crop3.png
+[visual] actual-record-day-1200-200-dark.png
+[visual] actual-record-day-1200-200-dark-crop.png
+[visual] actual-record-day-1200-200-dark-crop2.png
+[visual] actual-record-day-1200-200-dark-crop3.png
+
+=== 视觉证据（生产构建 + 真实 Chromium）===
+共 4 张，位于 output/visual-p4-13-followup-before-v2：
+  actual-record-day-1200-100-light.png
+  actual-record-day-1200-200-light.png
+  actual-record-day-1200-100-dark.png
+  actual-record-day-1200-200-dark.png

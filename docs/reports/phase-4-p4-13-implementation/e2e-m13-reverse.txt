@@ -1,0 +1,51 @@
+[run-e2e] parked previous test-results at _quarantine/2026-10-16_playwright-residue/run-2026-10-16T17-03-37-412Z
+
+Running 2 tests using 1 worker
+
+  x  1 e2e\phase1.spec.ts:1624:1 › phase 4 M13 keeps the sticky calendar headers above the track content (7.7s)
+  x  2 e2e\phase1.spec.ts:1723:1 › phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the actual record and the time block (2.0s)
+
+
+  1) e2e\phase1.spec.ts:1624:1 › phase 4 M13 keeps the sticky calendar headers above the track content 
+
+    Error: 100% · 日视图 · 有叠加层 · 药丸中心命中的是 span.review-summary，而不是日期头 header.；堆叠顺序 ["span.review-summary","span.today-number","header.","time.session-time","article.calendar-session.planned-outline"]
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+      1668 |         expect(result.ok, `${hint} · 找不到「今天」药丸：${result.reason ?? ""}`).toBe(true);
+      1669 |         expect(result.inViewport, `${hint} · 药丸中心必须落在视口里`).toBe(true);
+    > 1670 |         expect(result.inside, `${hint} · 药丸中心命中的是 ${result.hit}，而不是日期头 ${result.container}；堆叠顺序 ${JSON.stringify(result.stack)}`).toBe(true);
+           |                                                                                                                                   ^
+      1671 |       }
+      1672 |     }
+      1673 |     await page.getByRole("checkbox", { name: "显示实际记录" }).check();
+        at F:\PythonProject\Daymark\e2e\phase1.spec.ts:1670:131
+
+    Error Context: test-results\phase1-phase-4-M13-keeps-t-c57d3-ers-above-the-track-content\error-context.md
+
+  2) e2e\phase1.spec.ts:1723:1 › phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the actual record and the time block 
+
+    Error: 浅色 · 日历（日）· 滚到 14:00（未推进 + 现在线） · 待回顾计划卡 · 起止时间（opacity×0.62，24px/400）
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 3
+    Received:    2.375
+
+      1814 |           if (!row.found) continue;
+      1815 |           expect(row.ratio, `${hint} · ${row.label}（opacity×${Math.round(row.opacity * 1000) / 1000}，${row.fontSize}/${row.fontWeight}）`)
+    > 1816 |             .toBeGreaterThanOrEqual(row.threshold);
+           |              ^
+      1817 |         }
+      1818 |         const audited = await axeAudit();
+      1819 |         // 只断言这一轮**真的把元素放进了屏幕**的那几项：「零违规」不等于「量过了」，
+        at F:\PythonProject\Daymark\e2e\phase1.spec.ts:1816:14
+
+    Error Context: test-results\phase1-phase-4-M13-keeps-t-8665f-l-record-and-the-time-block\error-context.md
+
+  2 failed
+    e2e\phase1.spec.ts:1624:1 › phase 4 M13 keeps the sticky calendar headers above the track content 
+    e2e\phase1.spec.ts:1723:1 › phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the actual record and the time block 

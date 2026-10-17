@@ -1,0 +1,229 @@
+
+=== P4-13 §1 图层探针（scale=200%，日视图，锚点日=今天）===
+收敛定位： {"ok":true,"reason":"3 panels · today=#1 · scrollTop=2522","inView":true,"overlapping":true}
+
+--- A. 开启「显示实际记录」：叠加层 pointer-events 保持原样（none）---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 454,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 494,
+    "bottom": 546,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 506,
+    "bottom": 533,
+    "left": 492,
+    "right": 519
+  },
+  "card": {
+    "top": 504,
+    "bottom": 612,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": {
+    "top": 504,
+    "bottom": 612,
+    "left": 171,
+    "right": 794
+  },
+  "point": {
+    "x": 506,
+    "y": 519
+  },
+  "hit": "span.today-number",
+  "hitIsPillOrInsideHeader": true,
+  "stack": [
+    "span.today-number",
+    "header.",
+    "time.session-time",
+    "article.calendar-session.planned-outline",
+    "div.day-track",
+    "div.calendar-day.today"
+  ],
+  "zIndex": {
+    "dayHeader": "4",
+    "dayHeadSpacer": "5",
+    "continuousDaySeparator": "8",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "7",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- B. 同上，但临时把叠加层的 pointer-events 打开，让命中测试能看见它 ---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 454,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 494,
+    "bottom": 546,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 506,
+    "bottom": 533,
+    "left": 492,
+    "right": 519
+  },
+  "card": {
+    "top": 504,
+    "bottom": 612,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": {
+    "top": 504,
+    "bottom": 612,
+    "left": 171,
+    "right": 794
+  },
+  "point": {
+    "x": 506,
+    "y": 519
+  },
+  "hit": "span.",
+  "hitIsPillOrInsideHeader": false,
+  "stack": [
+    "span.",
+    "article.calendar-actual-record.ended",
+    "span.today-number",
+    "header.",
+    "time.session-time",
+    "article.calendar-session.planned-outline"
+  ],
+  "zIndex": {
+    "dayHeader": "4",
+    "dayHeadSpacer": "5",
+    "continuousDaySeparator": "8",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "7",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- C. 关闭「显示实际记录」（无叠加层）---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 454,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 494,
+    "bottom": 546,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 506,
+    "bottom": 533,
+    "left": 492,
+    "right": 519
+  },
+  "card": {
+    "top": 504,
+    "bottom": 612,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": null,
+  "point": {
+    "x": 506,
+    "y": 519
+  },
+  "hit": "span.today-number",
+  "hitIsPillOrInsideHeader": true,
+  "stack": [
+    "span.today-number",
+    "header.",
+    "time.session-time",
+    "article.calendar-session",
+    "div.day-track",
+    "div.calendar-day.today"
+  ],
+  "zIndex": {
+    "dayHeader": "4",
+    "dayHeadSpacer": "5",
+    "continuousDaySeparator": "8",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "（无此元素）",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- D. §6.3 叠加层行分配（1 小时记录）---
+{
+  "ok": true,
+  "overlayHeight": 108,
+  "gridTemplateRows": "44px 10px 44px",
+  "alignContent": "start",
+  "lineHeight": "44px",
+  "rootFontSize": "32px",
+  "rows": [
+    {
+      "tag": "span",
+      "height": 44,
+      "display": "block",
+      "fontSize": "21.76px"
+    },
+    {
+      "tag": "strong",
+      "height": 10,
+      "display": "block",
+      "fontSize": "23.04px"
+    },
+    {
+      "tag": "time",
+      "height": 44,
+      "display": "block",
+      "fontSize": "21.76px"
+    }
+  ]
+}

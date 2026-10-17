@@ -1,0 +1,8 @@
+[run-e2e] parked previous test-results at _quarantine/2026-10-16_playwright-residue/run-2026-10-16T17-02-49-593Z
+
+Running 2 tests using 1 worker
+
+  ok 1 e2e\phase1.spec.ts:1624:1 › phase 4 M13 keeps the sticky calendar headers above the track content (13.8s)
+  ok 2 e2e\phase1.spec.ts:1723:1 › phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the actual record and the time block (19.2s)
+
+  2 passed (36.0s)

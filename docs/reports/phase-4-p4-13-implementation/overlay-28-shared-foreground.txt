@@ -1,0 +1,40 @@
+[contrast] npm run build …
+[36mvite v8.1.5 [32mbuilding client environment for production...[36m[39m
+[2Ktransforming...✓ 1818 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.35 kB
+dist/assets/index-CUz_2Y3V.css   81.64 kB │ gzip:  15.27 kB
+dist/assets/index-BOvP6Nji.js   465.79 kB │ gzip: 137.57 kB
+
+[33m[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugins. Here is a breakdown:
+  - vite:css (39%)
+  - vite:build-html (28%)
+  - vite:prepare-out-dir (28%)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+[39m
+[32m✓ built in 3.32s[39m
+
+=== P4-13 对比度探针（960×720 + 200% 界面缩放，日视图，开启「显示实际记录」）===
+
+--- 浅色（data-theme=light）---
+  实际记录叠加层 · 标题：12.77（门槛 4.5）OK · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.950588 0.835294 0.784784) → rgb(242, 213, 200) · opacity×1 · 23.04px/600
+  实际记录叠加层 · 「实际」标签：12.77（门槛 4.5）OK · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.950588 0.835294 0.784784) → rgb(242, 213, 200) · opacity×1 · 21.76px/400
+  实际记录叠加层 · 起止时间：12.77（门槛 4.5）OK · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.950588 0.835294 0.784784) → rgb(242, 213, 200) · opacity×1 · 21.76px/400
+  计划（去强调）卡 · 标题：7.383（门槛 3）OK · 前景 rgb(86, 83, 77) → rgb(86, 83, 77) / 底色 color(srgb 0.996549 0.980157 0.968078) → rgb(254, 250, 247) · opacity×1 · 24px/600（大字号）
+  计划（去强调）卡 · 起止时间：4.973（门槛 3）OK · 前景 rgb(112, 109, 102) → rgb(112, 109, 102) / 底色 color(srgb 0.996549 0.980157 0.968078) → rgb(254, 250, 247) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 状态标签：4.973（门槛 3）OK · 前景 rgb(112, 109, 102) → rgb(112, 109, 102) / 底色 rgba(0, 0, 0, 0) → rgb(254, 250, 247) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 进度值：4.973（门槛 3）OK · 前景 rgb(112, 109, 102) → rgb(112, 109, 102) / 底色 rgba(0, 0, 0, 0) → rgb(254, 250, 247) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 回顾摘要：4.973（门槛 4.5）OK · 前景 rgb(112, 109, 102) → rgb(112, 109, 102) / 底色 color(srgb 0.996549 0.980157 0.968078) → rgb(254, 250, 247) · opacity×1 · 21.76px/400
+  时间块 · 起止时间：6.255（门槛 4.5）OK · 前景 rgb(86, 83, 77) → rgb(86, 83, 77) / 底色 color(srgb 0.915451 0.910588 0.896941) → rgb(233, 232, 229) · opacity×1 · 21.76px/400
+
+--- 深色（data-theme=dark）---
+  实际记录叠加层 · 标题：1.943（门槛 4.5）**不达标** · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.366902 0.257098 0.195451) → rgb(94, 66, 50) · opacity×1 · 23.04px/600
+  实际记录叠加层 · 「实际」标签：1.943（门槛 4.5）**不达标** · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.366902 0.257098 0.195451) → rgb(94, 66, 50) · opacity×1 · 21.76px/400
+  实际记录叠加层 · 起止时间：1.943（门槛 4.5）**不达标** · 前景 rgb(35, 21, 13) → rgb(35, 21, 13) / 底色 color(srgb 0.366902 0.257098 0.195451) → rgb(94, 66, 50) · opacity×1 · 21.76px/400
+  计划（去强调）卡 · 标题：8.855（门槛 3）OK · 前景 rgb(205, 202, 191) → rgb(205, 202, 191) / 底色 color(srgb 0.181804 0.157333 0.140314) → rgb(46, 40, 36) · opacity×1 · 24px/600（大字号）
+  计划（去强调）卡 · 起止时间：7.264（门槛 3）OK · 前景 rgb(187, 183, 174) → rgb(187, 183, 174) / 底色 color(srgb 0.181804 0.157333 0.140314) → rgb(46, 40, 36) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 状态标签：7.264（门槛 3）OK · 前景 rgb(187, 183, 174) → rgb(187, 183, 174) / 底色 rgba(0, 0, 0, 0) → rgb(46, 40, 36) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 进度值：7.264（门槛 3）OK · 前景 rgb(187, 183, 174) → rgb(187, 183, 174) / 底色 rgba(0, 0, 0, 0) → rgb(46, 40, 36) · opacity×1 · 24px/400（大字号）
+  计划（去强调）卡 · 回顾摘要：7.264（门槛 4.5）OK · 前景 rgb(187, 183, 174) → rgb(187, 183, 174) / 底色 color(srgb 0.181804 0.157333 0.140314) → rgb(46, 40, 36) · opacity×1 · 21.76px/400
+  时间块 · 起止时间：6.625（门槛 4.5）OK · 前景 rgb(205, 202, 191) → rgb(205, 202, 191) / 底色 color(srgb 0.243294 0.237961 0.223373) → rgb(62, 61, 57) · opacity×1 · 21.76px/400

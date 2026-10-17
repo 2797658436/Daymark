@@ -1,0 +1,21 @@
+P4-13 跟进包 · 第三轮（回退后）校验记录
+日期：2026-10-17
+执行方式：`npm run check` 的四个命令分步执行；E2E 按仓库惯例加 `--workers=1`。
+
+[1/4] npm run build（tsc --noEmit + vite build）
+  dist/index.html                   0.53 kB │ gzip:   0.35 kB
+  dist/assets/index-DmUbaGUH.css   81.61 kB │ gzip:  15.27 kB
+  dist/assets/index-BYlzs2wk.js   465.79 kB │ gzip: 137.57 kB
+  ✓ built in 5.00s
+
+[2/4] npm run test（Vitest）
+  第一次执行：1 failed | 292 passed（1 个用例 5s 超时，@testing-library waitFor）
+  立即重跑：  Test Files 24 passed (24) / Tests 293 passed (293)
+  （该用例与本轮样式改动无关，首次为既有 flaky；报告 §12.4 记的是重跑结果）
+
+[3/4] node scripts/run-e2e.mjs --workers=1（Playwright）
+  43 passed (2.0m)
+
+[4/4] npm run test:native（Rust）
+  test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s
+  （main.rs 单元测试 0 条，符合基线）

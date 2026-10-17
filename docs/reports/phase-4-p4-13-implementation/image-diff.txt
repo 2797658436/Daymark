@@ -1,0 +1,25 @@
+=== 逐像素对比：output/visual-p4-13-before → output/visual-p4-13-after ===
+actual-record-day-1200-100-dark-crop.png（623×108）：65551 px 不同（97.42%）· 最大通道差 220 · 差异区域 x 0–622, y 0–107
+actual-record-day-1200-100-dark-crop2.png（631×73）：45402 px 不同（98.57%）· 最大通道差 81 · 差异区域 x 0–630, y 1–72
+actual-record-day-1200-100-dark-crop3.png（625×72）：400 px 不同（0.89%）· 最大通道差 81 · 差异区域 x 0–624, y 14–41
+actual-record-day-1200-100-dark.png（1200×900）：159086 px 不同（14.73%）· 最大通道差 220 · 差异区域 x 162–798, y 229–732
+actual-record-day-1200-100-light-crop.png（623×108）：65351 px 不同（97.13%）· 最大通道差 129 · 差异区域 x 0–622, y 0–107
+actual-record-day-1200-100-light-crop2.png（631×73）：45418 px 不同（98.6%）· 最大通道差 85 · 差异区域 x 0–630, y 1–72
+actual-record-day-1200-100-light-crop3.png（625×72）：383 px 不同（0.85%）· 最大通道差 134 · 差异区域 x 0–624, y 14–41
+actual-record-day-1200-100-light.png（1200×900）：160408 px 不同（14.85%）· 最大通道差 139 · 差异区域 x 101–798, y 185–734
+actual-record-day-1200-200-dark-crop.png（623×109）：66171 px 不同（97.44%）· 最大通道差 220 · 差异区域 x 0–622, y 0–108
+actual-record-day-1200-200-dark-crop2.png（631×73）：45402 px 不同（98.57%）· 最大通道差 81 · 差异区域 x 0–630, y 1–72
+actual-record-day-1200-200-dark-crop3.png（625×73）：865 px 不同（1.9%）· 最大通道差 81 · 差异区域 x 0–624, y 15–64
+actual-record-day-1200-200-dark.png（1200×900）：113235 px 不同（10.48%）· 最大通道差 220 · 差异区域 x 162–1182, y 21–813
+actual-record-day-1200-200-light-crop.png（623×109）：66068 px 不同（97.29%）· 最大通道差 207 · 差异区域 x 0–622, y 0–108
+actual-record-day-1200-200-light-crop2.png（631×73）：45411 px 不同（98.58%）· 最大通道差 85 · 差异区域 x 0–630, y 1–72
+actual-record-day-1200-200-light-crop3.png（625×73）：845 px 不同（1.85%）· 最大通道差 127 · 差异区域 x 0–624, y 15–64
+actual-record-day-1200-200-light.png（1200×900）：113561 px 不同（10.51%）· 最大通道差 207 · 差异区域 x 162–798, y 499–813
+today-pill-day-1200-100-dark-crop.png（639×52）：32653 px 不同（98.27%）· 最大通道差 218 · 差异区域 x 3–636, y 0–51
+today-pill-day-1200-100-dark.png（1200×900）：120516 px 不同（11.16%）· 最大通道差 220 · 差异区域 x 162–798, y 225–666
+today-pill-day-1200-100-light-crop.png（639×52）：32571 px 不同（98.02%）· 最大通道差 242 · 差异区域 x 3–635, y 0–51
+today-pill-day-1200-100-light.png（1200×900）：121835 px 不同（11.28%）· 最大通道差 242 · 差异区域 x 162–798, y 225–668
+today-pill-day-1200-200-dark-crop.png（639×53）：29488 px 不同（87.07%）· 最大通道差 218 · 差异区域 x 3–636, y 6–52
+today-pill-day-1200-200-dark.png（1200×900）：72464 px 不同（6.71%）· 最大通道差 220 · 差异区域 x 160–1182, y 21–862
+today-pill-day-1200-200-light-crop.png（639×53）：29406 px 不同（86.83%）· 最大通道差 243 · 差异区域 x 3–635, y 6–52
+today-pill-day-1200-200-light.png（1200×900）：72384 px 不同（6.7%）· 最大通道差 243 · 差异区域 x 162–798, y 499–747

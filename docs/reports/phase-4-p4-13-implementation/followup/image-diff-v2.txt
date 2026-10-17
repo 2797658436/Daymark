@@ -1,0 +1,17 @@
+=== 逐像素对比：output/visual-p4-13-followup-before-v2 → output/visual-p4-13-followup-after-v2 ===
+actual-record-day-1200-100-dark-crop.png（623×108）：**逐字节相同**
+actual-record-day-1200-100-dark-crop2.png（631×73）：**逐字节相同**
+actual-record-day-1200-100-dark-crop3.png（625×28）：**逐字节相同**
+actual-record-day-1200-100-dark.png（1200×900）：**逐字节相同**
+actual-record-day-1200-100-light-crop.png（623×108）：**逐字节相同**
+actual-record-day-1200-100-light-crop2.png（631×73）：**逐字节相同**
+actual-record-day-1200-100-light-crop3.png（625×28）：**逐字节相同**
+actual-record-day-1200-100-light.png（1200×900）：**逐字节相同**
+actual-record-day-1200-200-dark-crop.png（623×109）：**逐字节相同**
+actual-record-day-1200-200-dark-crop2.png（631×73）：**逐字节相同**
+actual-record-day-1200-200-dark-crop3.png：尺寸不同（625x29 vs 625x57）
+actual-record-day-1200-200-dark.png（1200×900）：17280 px 不同（1.6%）· 最大通道差 165 · 差异区域 x 166–1182, y 341–750
+actual-record-day-1200-200-light-crop.png（623×109）：**逐字节相同**
+actual-record-day-1200-200-light-crop2.png（631×73）：**逐字节相同**
+actual-record-day-1200-200-light-crop3.png：尺寸不同（625x29 vs 625x57）
+actual-record-day-1200-200-light.png（1200×900）：17272 px 不同（1.6%）· 最大通道差 175 · 差异区域 x 166–790, y 696–750

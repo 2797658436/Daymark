@@ -1,0 +1,274 @@
+[probe] npm run build …
+[36mvite v8.1.5 [32mbuilding client environment for production...[36m[39m
+[2Ktransforming...✓ 1818 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.53 kB │ gzip:   0.35 kB
+dist/assets/index-DmUbaGUH.css   81.61 kB │ gzip:  15.27 kB
+dist/assets/index-BYlzs2wk.js   465.79 kB │ gzip: 137.57 kB
+
+[32m✓ built in 4.45s[39m
+
+=== P4-13 §1 图层探针（scale=100%，日视图，锚点日=今天）===
+收敛定位： {"ok":true,"reason":"3 panels · today=#1 · scrollTop=2512","inView":true,"overlapping":true}
+
+--- A. 开启「显示实际记录」：叠加层 pointer-events 保持原样（none）---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 185,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 225,
+    "bottom": 277,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 237,
+    "bottom": 264,
+    "left": 480,
+    "right": 507
+  },
+  "card": {
+    "top": 235,
+    "bottom": 343,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": {
+    "top": 235,
+    "bottom": 343,
+    "left": 171,
+    "right": 794
+  },
+  "point": {
+    "x": 494,
+    "y": 251
+  },
+  "hit": "span.today-number",
+  "hitIsPillOrInsideHeader": true,
+  "stack": [
+    "span.today-number",
+    "header.",
+    "time.session-time",
+    "article.calendar-session.planned-outline",
+    "div.day-track",
+    "div.calendar-day.today"
+  ],
+  "zIndex": {
+    "dayHeader": "19",
+    "dayHeadSpacer": "19",
+    "continuousDaySeparator": "20",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "7",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- B. 同上，但临时把叠加层的 pointer-events 打开，让命中测试能看见它 ---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 185,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 225,
+    "bottom": 277,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 237,
+    "bottom": 264,
+    "left": 480,
+    "right": 507
+  },
+  "card": {
+    "top": 235,
+    "bottom": 343,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": {
+    "top": 235,
+    "bottom": 343,
+    "left": 171,
+    "right": 794
+  },
+  "point": {
+    "x": 494,
+    "y": 251
+  },
+  "hit": "span.today-number",
+  "hitIsPillOrInsideHeader": true,
+  "stack": [
+    "span.today-number",
+    "header.",
+    "span.",
+    "article.calendar-actual-record.ended",
+    "time.session-time",
+    "article.calendar-session.planned-outline"
+  ],
+  "zIndex": {
+    "dayHeader": "19",
+    "dayHeadSpacer": "19",
+    "continuousDaySeparator": "20",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "7",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- C. 关闭「显示实际记录」（无叠加层）---
+{
+  "viewport": {
+    "width": 1200,
+    "height": 760
+  },
+  "axis": {
+    "top": 185,
+    "bottom": 723,
+    "left": 101,
+    "right": 813
+  },
+  "header": {
+    "top": 225,
+    "bottom": 277,
+    "left": 159,
+    "right": 798
+  },
+  "pill": {
+    "top": 237,
+    "bottom": 264,
+    "left": 480,
+    "right": 507
+  },
+  "card": {
+    "top": 235,
+    "bottom": 343,
+    "left": 163,
+    "right": 794
+  },
+  "overlay": null,
+  "point": {
+    "x": 494,
+    "y": 251
+  },
+  "hit": "span.today-number",
+  "hitIsPillOrInsideHeader": true,
+  "stack": [
+    "span.today-number",
+    "header.",
+    "time.session-time",
+    "article.calendar-session",
+    "div.day-track",
+    "div.calendar-day.today"
+  ],
+  "zIndex": {
+    "dayHeader": "19",
+    "dayHeadSpacer": "19",
+    "continuousDaySeparator": "20",
+    "weekStickyHeader": "（无此元素）",
+    "session": "2",
+    "actualRecord": "（无此元素）",
+    "collapsedGap": "（无此元素）",
+    "expandedGapToggle": "（无此元素）",
+    "shiftPreview": "（无此元素）",
+    "insertLine": "（无此元素）",
+    "dragPreview": "（无此元素）",
+    "backToNow": "（无此元素）",
+    "dateDetails": "（无此元素）"
+  }
+}
+
+--- D. §6.3 叠加层行分配（1 小时记录）---
+{
+  "ok": true,
+  "overlayHeight": 108,
+  "gridTemplateRows": "22px 22px 22px",
+  "alignContent": "start",
+  "lineHeight": "22px",
+  "rootFontSize": "16px",
+  "rows": [
+    {
+      "tag": "span",
+      "height": 22,
+      "display": "block",
+      "fontSize": "10.88px"
+    },
+    {
+      "tag": "strong",
+      "height": 22,
+      "display": "block",
+      "fontSize": "11.52px"
+    },
+    {
+      "tag": "time",
+      "height": 22,
+      "display": "block",
+      "fontSize": "10.88px"
+    }
+  ]
+}
+
+--- E. 跟进包 §1／§2 时间块的盒子与行分配（短块 15min + 1 小时块）---
+{
+  "ok": true,
+  "rootFontSize": "16px",
+  "hourHeightVar": "72px",
+  "blocks": [
+    {
+      "title": "短块",
+      "boxHeight": 28,
+      "inlineHeight": "1.25%",
+      "minHeight": "28px",
+      "paddingBlock": "6px / 8px",
+      "alignContent": "start",
+      "gridTemplateRows": "12px",
+      "lineHeight": "22px",
+      "timeDisplay": "none",
+      "timeHeight": 0,
+      "strongHeight": 12
+    },
+    {
+      "title": "组会",
+      "boxHeight": 71.98,
+      "inlineHeight": "4.16667%",
+      "minHeight": "28px",
+      "paddingBlock": "6px / 8px",
+      "alignContent": "start",
+      "gridTemplateRows": "22px 22px",
+      "lineHeight": "22px",
+      "timeDisplay": "block",
+      "timeHeight": 22,
+      "strongHeight": 22
+    }
+  ]
+}
