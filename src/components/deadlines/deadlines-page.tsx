@@ -2,6 +2,7 @@ import { Check, Eraser, ListFilter, RotateCcw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
+import { SelectField } from "../ui/select-field";
 import { DeadlineRow } from "./deadline-row";
 import {
   DEADLINE_KIND_LABEL, DEADLINE_KIND_ORDER, DEFAULT_DEADLINE_FILTER, buildDeadlineItemsFromIndex, deadlineGroupOf, deadlineItemSourceExists,
@@ -119,10 +120,7 @@ export function DeadlinesPage({ index, filter, onFilterChange, focusKey, onFocus
           <input aria-label="按标题搜索" placeholder="输入关键字" value={filter.query} onChange={(event) => patchFilter({ query: event.target.value })} />
         </label>
         <label className="deadline-field">项目
-          <select aria-label="按项目筛选" value={filter.projectId ?? ""} onChange={(event) => patchFilter({ projectId: event.target.value || null })}>
-            <option value="">全部项目</option>
-            {index.workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-          </select>
+          <SelectField value={filter.projectId ?? ""} onChange={(value) => patchFilter({ projectId: value || null })} options={[{ value: "", label: "全部项目" }, ...index.workspace.projects.map((project) => ({ value: project.id, label: project.title }))]} />
         </label>
       </div>
       <label className="deadline-switch"><input type="checkbox" className="switch" checked={filter.includeReachedMilestones} onChange={(event) => patchFilter({ includeReachedMilestones: event.target.checked })} />含已达成</label>

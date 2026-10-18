@@ -1175,8 +1175,8 @@ describe("phase 1 manual alpha", () => {
     await user.click(screen.getByRole("radio", { name: "减少" }));
     await user.click(screen.getByRole("button", { name: /添加时段/ }));
     expect(screen.getByRole("dialog", { name: "编辑默认时段" })).toBeVisible();
-    const weekdayBoxes = screen.getAllByRole("checkbox", { name: "一" });
-    await user.click(weekdayBoxes[0]);
+    // 星期改成「一个字就是整格」的按钮（aria-pressed），不再是勾选框。
+    await user.click(screen.getByRole("button", { name: "周一" }));
     await user.click(screen.getByRole("button", { name: "保存时段" }));
     await waitFor(() => expect(backend.value).toMatchObject({ motion: "reduce" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots).toHaveLength(2));

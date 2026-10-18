@@ -71,6 +71,44 @@ h2 { margin-bottom: .55rem; font-size: 1rem; line-height: 1.5rem; font-weight: 6
 strong { font-weight: 600; }
 p { color: var(--muted); line-height: 1.55; }
 input, textarea, select { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: .65rem .75rem; transition: border-color .12s ease, box-shadow .12s ease; }
+/* 原生下拉弹层：Chromium 135+ 的 base-select 才允许给弹层本身做圆角、内边距和选中态。
+   不支持的浏览器会忽略这条（连同下面几条），退回系统弹层，外观不变。
+   `::picker(select)` 自己也要声明 base-select —— 只给 select 加不够（实测弹层仍是系统样式）。 */
+select, select::picker(select) { appearance: base-select; }
+/* base-select 下 select 是 flex 容器、option 是被拉满高度的 flex 项：
+   不写 align-items 的话文字会贴在框的**上边**（这是「字不对」的真正原因）。 */
+select { align-items: center; }
+/* 箭头：先用 content 把原生三角换掉，再**绝对定位**到右边。
+   - 只写 margin / transform / position 而**不换内容**的话，这些样式一律不生效；
+   - 为什么不用 `margin-inline-start: auto` 让 flex 把它顶到右边：原生文字虽然透明，
+     仍然参与排版，长项目名会把箭头挤出框外（实测「编辑任务」气泡里箭头直接看不见）；
+   - 绝对定位之后 `right` 是从 padding box 量起的，所以右内边距只负责给文字让位，
+     不再影响箭头位置 —— 两者各管一件事，不会再互相加法叠成 46px。
+   右内边距取 `--select-text-end`（与文字层同一个变量），保证文字永远不钻到箭头底下。 */
+select { position: relative; padding-right: var(--select-text-end, 1.75rem); }
+select::picker-icon { content: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23706d66%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); position: absolute; right: .65rem; top: 50%; translate: 0 -50%; width: .75rem; height: .75rem; }
+:root[data-theme="dark"] select::picker-icon { content: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23bbb7ae%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); }
+select::picker(select) { margin-top: .375rem; padding: .3rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel); box-shadow: 0 18px 44px rgb(35 31 27 / 16%); max-height: 18rem; }
+/* 不要给 option 加 display:flex —— 它会把选中项的内容顶到框的上边，收起态也跟着错位。 */
+select option { padding: .45rem .6rem; border-radius: .5rem; color: var(--text); align-items: center; }
+/* 选中态只靠底色，不要原生那个勾。 */
+select option::checkmark { display: none; }
+select option:hover { background: var(--panel-strong); }
+select option:checked { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+
+/* 下拉 = 原生 select（只管交互、键盘与弹层）+ 一层自绘文字。
+   为什么非得多这一层：`appearance: base-select` 下浏览器把 select 的 overflow 强制成
+   `visible`（作者写 overflow: hidden / clip / contain / mask 都无效，实测），
+   于是 `text-overflow: ellipsis` 永远不生效 —— 长文案只能换行撑破固定高度，
+   或者横向溢出去压住箭头和右边的控件。省略号只能画在 select 外面。
+   文字层只做显示：`aria-hidden` + `pointer-events: none`，读屏和点击仍然落在原生 select 上。 */
+.select-shell { position: relative; display: inline-flex; align-items: stretch; min-width: 0; max-width: 100%; }
+/* `white-space: nowrap` 是**布局**刚需：原生文字虽然透明，仍然参与排版，
+   长项目名会让 select 自己换行、把 45px 的框撑成 67px（实测）。 */
+.select-shell > select { width: 100%; min-width: 0; color: transparent; white-space: nowrap; }
+.select-display { position: absolute; inset: 0; display: flex; align-items: center; padding-inline: var(--select-text-start, .75rem) var(--select-text-end, 1.75rem); color: var(--text); pointer-events: none; }
+.select-display > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-shell > select:disabled + .select-display { color: var(--muted-strong); }
 input:hover:not(:focus):not(:disabled), textarea:hover:not(:focus):not(:disabled), select:hover:not(:focus):not(:disabled) { border-color: var(--line-strong); }
 input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: var(--ring-accent); outline: none; }
 textarea { resize: vertical; }
@@ -78,11 +116,13 @@ textarea { resize: vertical; }
    结构：track（浅底 + 描边）→ inner（4px 内间隙）→ fill（实心块）+ dot（吸附点）。
    原生 input 透明铺在上面，键盘/拖动/读屏都还是原生的；焦点环画在 track 上。 */
 .range-bar { position: relative; display: inline-flex; align-items: center; width: 100%; height: 2.25rem; }
-.range-track { position: absolute; inset: 0; padding: .25rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel-strong); }
+/* z-index 0 让整条轨道成为独立的层叠上下文：内部的 fill(z-index 1) 只在轨道内生效，
+   不会盖住上面那层透明的 input —— 否则填充块左侧点不到，只有右侧能命中。 */
+.range-track { position: absolute; inset: 0; z-index: 0; padding: .25rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--panel-strong); }
 .range-inner { position: relative; height: 100%; }
 .range-fill { position: relative; z-index: 1; display: block; height: 100%; border-radius: .4375rem; background: var(--accent); }
 .range-dot { position: absolute; z-index: 0; top: 50%; width: .25rem; height: .25rem; border-radius: 50%; background: var(--line-strong); transform: translate(-50%, -50%); }
-.range-input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; appearance: none; opacity: 0; cursor: pointer; }
+.range-input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: transparent; appearance: none; opacity: 0; cursor: pointer; }
 .range-input:focus { outline: none; box-shadow: none; }
 .range-bar:focus-within .range-track { outline: 2px solid var(--focus); outline-offset: 2px; }
 .range-bar.is-compact { height: 1.25rem; }
@@ -103,14 +143,19 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .spinner { width: 24px; height: 24px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.app-shell { height: 100%; display: grid; grid-template-columns: 70px minmax(0, 1fr); background: var(--bg); }
-.app-shell.with-task-pool { grid-template-columns: 70px minmax(0, 1fr) 6px var(--pool-width, 320px); }
-.sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 12px 7px; z-index: 3; }
-.brand { display: grid; justify-items: center; gap: 4px; font-size: .75rem; margin-bottom: 20px; }
-.brand-mark { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: white; display: grid; place-items: center; font: 600 1.125rem Georgia, serif; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-strong) 36%, transparent); }
+/* 行高必须锁死：200% 下侧栏内容比窗口高，auto 行会被撑开，整个应用跟着比窗口高，
+   日历页因此溢出窗口（axe 与 toBeInViewport 都按窗口算）。 */
+.app-shell { height: 100%; display: grid; grid-template-columns: 4.375rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); background: var(--bg); }
+.app-shell.with-task-pool { grid-template-columns: 4.375rem minmax(0, 1fr) 6px var(--pool-width, 320px); }
+.sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: .75rem .4375rem; z-index: 3; }
+/* 侧栏宽度封顶 96px：品牌字（Daymark）不再跟着放大，否则 200% 下会溢出被裁；导航文字仍然缩放。 */
+.brand { display: grid; justify-items: center; gap: 4px; font-size: min(.75rem, 12px); margin-bottom: 1.25rem; }
+.brand-mark { width: 2.25rem; height: 2.25rem; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: white; display: grid; place-items: center; font: 600 1.125rem Georgia, serif; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-strong) 36%, transparent); }
 /* 入口变多（阶段 4 起 7 项）后导航自身可滚动：最小窗口与 200% 缩放下不能隐藏关键入口。 */
 .sidebar nav { width: 100%; display: grid; gap: 4px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.nav-item { border: 0; background: transparent; min-height: 52px; border-radius: 10px; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: .75rem; transition: background .12s ease, color .12s ease; }
+.nav-item { border: 0; background: transparent; min-height: 3.25rem; border-radius: 10px; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: .75rem; transition: background .12s ease, color .12s ease; }
+/* 图标跟着界面缩放走：lucide 的 size 是 px，不转 rem 就永远 20px。 */
+.nav-item svg { width: 1.25rem; height: 1.25rem; }
 .nav-item:hover { background: var(--panel-strong); color: var(--text); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
 .sidebar-foot { margin-top: auto; display: grid; justify-items: center; }
@@ -207,7 +252,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .task-card-top { display: flex; justify-content: space-between; align-items: start; gap: 8px; cursor: grab; }.task-card-top:active { cursor: grabbing; }.task-card-top strong { line-height: 1.35; }
 .deadline-chip { flex: none; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 999px; padding: 3px 7px; font-size: .72rem; font-weight: 600; }
 .task-meta, .task-card small, .drop-hint, .empty-inline { color: var(--muted); font-size: .75rem; }.drop-hint { text-align: center; margin: auto 0 0; }
-.task-editor { border-top: 1px solid var(--line-soft); padding-top: 8px; }.task-editor summary { color: var(--accent-strong); font-size: .75rem; cursor: pointer; padding: 4px 0; font-weight: 600; }.task-editor[open] { display: grid; gap: 7px; }.task-editor label { display: grid; gap: 3px; color: var(--muted); font-size: .75rem; }.task-editor input, .task-editor select { min-width: 0; width: 100%; padding: .45rem .55rem; }
+.task-editor { border-top: 1px solid var(--line-soft); padding-top: 8px; }.task-editor summary { color: var(--accent-strong); font-size: .75rem; cursor: pointer; padding: 4px 0; font-weight: 600; }.task-editor[open] { display: grid; gap: 7px; }.task-editor label { display: grid; gap: 3px; color: var(--muted); font-size: .75rem; }.task-editor input, .task-editor select { min-width: 0; width: 100%; padding: .45rem .25rem .45rem .55rem; }
+.task-editor select { padding-right: var(--select-text-end, 1.6rem); }
+/* 文字层要与旁边输入框同一个左内边距，否则标签和输入的字不同轴。 */
+.task-editor .select-shell { width: 100%; --select-text-start: .55rem; --select-text-end: 1.6rem; }
 .progress-control { display: grid; grid-template-columns: 1fr 38px; gap: 8px; align-items: center; font-size: .75rem; }.progress-control input { width: 100%; }.progress-control span { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .progress-control.has-complete { grid-template-columns: 1fr auto; gap: 6px; }
 .progress-side { display: grid; justify-items: end; gap: 3px; }
@@ -440,11 +488,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .settings-label > small { color: var(--muted); font-size: .78rem; line-height: 1.45; }
 .settings-row.is-muted .settings-label > strong, .settings-row.is-muted .settings-label > label { color: var(--muted-strong); }
 .settings-control { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
-/* 下拉与分段共用同一个槽：同高 46、同底 panel-strong、同 10px 圆角，箭头自绘。 */
-.settings-control > select { width: 13rem; height: 2.875rem; appearance: none; padding: 0 2.25rem 0 .75rem; border-radius: .625rem; background-color: var(--panel-strong); background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23706d66%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .75rem center; background-size: .75rem; }
-.settings-control > select:hover:not(:disabled) { border-color: var(--line-strong); }
-.settings-control > select:disabled { color: var(--muted-strong); }
-:root[data-theme="dark"] .settings-control > select { background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23bbb7ae%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); }
+/* 下拉与分段共用同一个槽：同高 46、同底 panel-strong、同 10px 圆角。
+   宽度 9.5rem：短值不空一大截，四个下拉同宽、右边缘才对齐。
+   右内边距只留 4px —— 图标位置由 `::picker-icon` 的 margin 控制（见文件开头）。 */
+.settings-control > .select-shell > select { width: 9.5rem; height: 2.875rem; padding: 0 var(--select-text-end, 1.75rem) 0 .75rem; border-radius: .625rem; background-color: var(--panel-strong); }
+.settings-control > .select-shell { --select-text-end: 1.75rem; }
+.settings-control > .select-shell > select:hover:not(:disabled) { border-color: var(--line-strong); }
 .settings-control > input[type="number"] { width: 6.5rem; }
 .settings-control > .range-bar { width: 12.5rem; }
 .settings-value { font-size: .8rem; font-variant-numeric: tabular-nums; color: var(--muted-strong); min-width: 3.2em; text-align: right; }
@@ -475,13 +524,13 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* 默认时段：行内编辑／删除，删除不再是只有一个 24px 的 ×。 */
-.settings-slot-list { display: grid; }
-.settings-slot { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.settings-slot-list { display: grid; gap: .375rem; padding: .25rem 0 .5rem; }
+.settings-slot { display: flex; align-items: center; gap: 14px; padding: .5rem .625rem; border: 1px solid var(--line-soft); border-radius: .625rem; background: var(--panel-strong); }
 .settings-slot > div:first-child { flex: 1; display: grid; gap: 2px; min-width: 0; }
 .settings-slot strong { font-size: .84rem; }
 .settings-slot span { color: var(--muted); font-size: .78rem; }
 .settings-slot-actions { display: flex; gap: 6px; }
-.settings-slot-actions button { min-height: 2.125rem; min-width: 2.75rem; padding: .3rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted-strong); font-size: .75rem; }
+.settings-slot-actions button { display: inline-grid; place-items: center; width: 2.125rem; height: 2.125rem; padding: 0; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); color: var(--muted-strong); }
 .settings-slot-actions button:hover { border-color: var(--line-strong); color: var(--text); }
 .settings-slot-actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 .settings-empty { margin: 0; padding: 12px 0; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: .8rem; }
@@ -490,7 +539,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 @container (max-width: 34rem) {
   .settings-row { grid-template-columns: 1fr; gap: 8px; align-items: start; }
   .settings-control { justify-content: flex-start; width: 100%; }
-  .settings-control > select { width: 100%; max-width: 22rem; }
+  .settings-control > .select-shell { width: 100%; max-width: 22rem; }
+  .settings-control > .select-shell > select { width: 100%; }
   .settings-control > .range-bar { flex: 1; width: auto; max-width: 22rem; }
   .settings-section-head { flex-wrap: wrap; }
   .settings-section-head p { margin-left: 0; width: 100%; text-align: left; }
@@ -499,8 +549,55 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .slot-editor { display: grid; gap: 8px; margin: 0; padding: 11px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel-strong); }
 .slot-editor > legend { padding: 0 6px; color: var(--muted); font-size: .75rem; display: flex; align-items: center; gap: 6px; }
 .slot-editor .slot-remove { min-width: 30px; min-height: 30px; }
-.weekday-picker { border: 0; margin: 0; padding: 0; }
-.weekday-picker legend { margin-bottom: 4px; color: var(--muted); font-size: .75rem; }
+/* 默认时段编辑器（气泡）：与其它气泡表单同一套 —— 标签在上、控件铺满、行间 12px。
+   之前这个表单没有类名，label 是行内元素，字和输入框直接贴在一起，宽度也各按内容走。 */
+.slot-form { display: grid; gap: 12px; }
+.slot-form > label, .slot-form .time-row > label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: .75rem; }
+.slot-form input { width: 100%; }
+.slot-form fieldset { margin: 0; padding: 0; border: 0; }
+.slot-form legend { margin-bottom: 5px; padding: 0; color: var(--muted); font-size: .75rem; }
+/* 开始／结束一行两列，中间一个「至」：用 end 对齐，分隔符贴着输入框底边而不是标签行。 */
+.slot-form .time-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 8px; }
+.slot-form .time-row > span { padding-bottom: .75rem; color: var(--muted); font-size: .75rem; }
+
+/* 时间字段：长得像输入框，但整块是按钮 —— 点一下弹滚轮（不再依赖原生 time 的「点中某一段」）。 */
+.time-field { display: flex; align-items: center; width: 100%; height: 2.8125rem; padding: 0 .75rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font-size: .875rem; font-variant-numeric: tabular-nums; text-align: left; transition: border-color .12s ease, box-shadow .12s ease; }
+.time-field:hover:not(:disabled) { border-color: var(--line-strong); }
+.time-field:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring-accent); }
+
+/* 时间滚轮：两列数字 + 中间的冒号（不写成 `:00`）。选中行底色画在两列后面。
+   行高与内边距必须成对：9.375rem 高、1.875rem 行高、上下各 3.75rem —— 缩放时一起走。 */
+/* 选择器必须带上 .floating-panel：它自己的 `width: min(23rem…)` / `padding: 16px`
+   在文件更后面，同权重会把它压回来（实测浮层仍是 368 宽）。 */
+.floating-panel.time-picker-popover { width: 12rem; padding: .625rem; }
+.time-wheel { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); height: 9.375rem; }
+.time-wheel-band { position: absolute; inset-inline: 0; top: 3.75rem; height: 1.875rem; border-radius: .375rem; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); pointer-events: none; }
+.time-wheel-colon { position: relative; z-index: 1; display: flex; align-items: center; color: var(--muted-strong); font-size: 1rem; font-weight: 600; }
+.wheel-column { position: relative; z-index: 1; height: 100%; padding-block: 3.75rem; overflow-y: auto; scroll-snap-type: y mandatory; scrollbar-width: none; }
+.wheel-column::-webkit-scrollbar { display: none; }
+.wheel-column:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: .5rem; }
+.wheel-item { display: flex; align-items: center; justify-content: center; height: 1.875rem; scroll-snap-align: center; color: var(--muted); font-size: .8125rem; font-variant-numeric: tabular-nums; cursor: pointer; }
+.wheel-item:hover { color: var(--text); }
+.wheel-item.is-active { color: var(--accent-strong); font-size: 1rem; font-weight: 600; }
+
+/* 时长快选：点一下就把「结束」定好，比先改开始再改结束少一半操作。
+   5 个按钮必须在 336px 内排成一行（加「时长」前缀或总计都会把「自定义」顶到第二行）。 */
+.duration-row { display: flex; flex-wrap: wrap; align-items: center; gap: .375rem; }
+.duration-chip { height: 1.75rem; padding: 0 .5rem; border: 1px solid var(--line); border-radius: .4375rem; background: var(--panel); color: var(--muted-strong); font-size: .75rem; }
+.duration-chip:hover { border-color: var(--line-strong); color: var(--text); }
+.duration-chip.is-active { border-color: var(--accent); color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.duration-total { margin-left: auto; color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.duration-custom { display: flex; align-items: center; gap: .375rem; }
+.duration-custom input { width: 5rem; height: 1.875rem; padding: 0 .5rem; border-radius: .4375rem; font-size: .75rem; }
+.duration-custom span { color: var(--muted); font-size: .75rem; }
+
+/* 星期：一排等宽按钮，一个字就是整格。启用与否**只看边框和字色** ——
+   不填底色、没有勾选框；选中再叠一层 1px 内描边，让「已启用」一眼能扫出来。 */
+.weekday-picker { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.weekday-button { height: 2.125rem; padding: 0; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); color: var(--muted-strong); font-size: .8rem; font-weight: 500; transition: border-color .12s ease, color .12s ease; }
+.weekday-button:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
+.weekday-button.is-active { border-color: var(--accent); color: var(--accent-strong); font-weight: 600; box-shadow: inset 0 0 0 1px var(--accent); }
+.weekday-button:disabled { color: var(--muted); cursor: not-allowed; }
 .data-card { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 18px 20px; }
 .data-card > svg { color: var(--accent); }
 .data-card p { margin: 0; }
@@ -537,7 +634,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .schedule-assist:active { transform: translateY(1px); }
 .schedule-assist span { display: grid; gap: 2px; }
 .schedule-assist small { color: var(--muted); font-size: .72rem; }
-.habit-form { display: grid; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.habit-form label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }.habit-form fieldset { border: 0; padding: 0; margin: 0; }.habit-form legend { margin-bottom: 5px; color: var(--muted); font-size: .75rem; }.weekday-checks { display: flex; flex-wrap: wrap; gap: 4px; }.weekday-checks label { display: inline-flex; align-items: center; gap: 2px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 6px; }
+.habit-form { display: grid; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.habit-form label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }.habit-form fieldset { border: 0; padding: 0; margin: 0; }.habit-form legend { margin-bottom: 5px; color: var(--muted); font-size: .75rem; }
 .habit-popover { position: fixed; z-index: 200; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-float); }
 .session-edit-fields > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 6px; border-bottom: 1px dashed var(--line-soft); }
 .session-edit-fields > header strong { min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
@@ -702,7 +799,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .import-source { color: var(--muted); font-size: .8rem; }
 
 @media (max-width: 1199px) {
-  .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
+  .app-shell { grid-template-columns: 4rem minmax(0, 1fr); }
   .app-shell.with-task-pool { grid-template-columns: 64px minmax(0, 1fr); }
   .app-shell > .pool-splitter-region { display: none; }
   .workspace-main { padding-inline: 18px; }
@@ -732,7 +829,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .floating-panel label { min-width: 0; }
 .settings-page label, .settings-page fieldset { min-width: 0; }
 .settings-page .settings-label > label { font-size: .84rem; }
-.floating-panel input, .floating-panel select, .floating-panel textarea { max-width: 100%; min-width: 0; }
+.floating-panel input, .floating-panel select, .floating-panel textarea, .floating-panel .select-shell { max-width: 100%; min-width: 0; }
+.floating-panel .select-shell { --select-text-end: 1.7rem; }
 .summary-pills { display: flex !important; flex-wrap: wrap; }
 .page-header { flex-wrap: wrap; }
 .backup-list span { overflow-wrap: anywhere; }
@@ -744,8 +842,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .project-list-tools > input { flex: 1; min-width: 10rem; }
 .project-list-tools label { display: flex; gap: 8px; align-items: center; }
 .project-task-progress summary { color: var(--muted); cursor: pointer; padding-block: 6px; }
-html[data-scale=large] .nav-item span { font-size: 12px; }
-html[data-scale=large] .sidebar-foot { font-size: 11px; }
+
 .floating-panel > form { display: grid; gap: 12px; }
 .floating-panel h2, .floating-panel .section-heading, .floating-panel header { position: sticky; top: -16px; background: var(--panel); z-index: 2; }
 
@@ -762,10 +859,12 @@ html[data-scale=large] .sidebar-foot { font-size: 11px; }
 .deadline-filters > .button { min-height: 2rem; padding: 0 .75rem; font-size: .78rem; gap: 6px; }
 .deadline-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .78rem; white-space: nowrap; }
 /* 筛选条的字段统一 32px 高（原来 input 45 / select 41，比上面的 chip 高一截）。 */
-.deadline-field > input, .deadline-field > select { height: 2rem; padding: 0 .6rem; border-radius: .625rem; }
-/* 项目下拉：宽度下限对齐上一行 chip 的右边缘；箭头自绘，右侧留出空隙。 */
-.deadline-field > select { min-width: 12.25rem; padding-right: 1.75rem; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23706d66%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .55rem center; background-size: .75rem; }
-:root[data-theme="dark"] .deadline-field > select { background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 12 12%27%3E%3Cpath d=%27M2.5 4.5 6 8 9.5 4.5%27 fill=%27none%27 stroke=%27%23bbb7ae%27 stroke-width=%271.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E"); }
+.deadline-field > input { height: 2rem; padding: 0 .6rem; border-radius: .625rem; }
+.deadline-field > .select-shell > select { height: 2rem; padding: 0 var(--select-text-end, 1.6rem) 0 .6rem; border-radius: .625rem; }
+/* 项目下拉：宽度下限对齐上一行 chip 的右边缘；箭头位置只由 ::picker-icon 的 margin 决定。 */
+.deadline-field > .select-shell > select { min-width: 12.25rem; }
+.deadline-field > .select-shell { --select-text-start: .6rem; --select-text-end: 1.6rem; }
+
 
 /* 筛选 chip：类型与状态两组共用同一种切换按钮（多选，aria-pressed）。
    选中态与设置页的分段一致：浅橙底 + 橙边 + 深橙字。 */

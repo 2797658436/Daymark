@@ -11,7 +11,7 @@ import { useOptionalOverlayHost, type OverlayKind } from "./overlay-host";
  * 几何（12px 边距、翻转避让、ResizeObserver、视口内滚动）不在本组件内改动范围内：
  * AC01 已通过，属 P4-01 基线。
  */
-export function FloatingPanel({ children, label, onClose, wide = false, anchor: suppliedAnchor, anchorElement, busy = false, titleId, kind = "editor", dismissible, closeOnOutsideClick = false }: {
+export function FloatingPanel({ children, label, onClose, wide = false, anchor: suppliedAnchor, anchorElement, busy = false, titleId, kind = "editor", dismissible, closeOnOutsideClick = false, className }: {
   children: ReactNode;
   /** 可访问名。`titleId` 存在时改用 `aria-labelledby`，否则回退到 `aria-label`。 */
   label: string;
@@ -34,6 +34,8 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
    * 可以显式打开，让"点别处"直接取消。
    */
   closeOnOutsideClick?: boolean;
+  /** 额外类名。用来收紧宽度（时间选择浮层比编辑气泡窄）。 */
+  className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [trigger] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -49,10 +51,19 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
   const reactId = useId();
   const layerId = `floating-panel-${reactId.replace(/[:]/g, "")}`;
   const isTop = host?.isTop(layerId) ?? true;
+  const isTopRef = useRef(isTop);
+  isTopRef.current = isTop;
+
+  // 依赖必须落在**稳定的函数**上，不能直接依赖 `host`：
+  // 宿主的 context 值随 `layers.length` 每次变化都换新，用它做依赖会让每一层
+  // 「注销 → 重注册」，栈顺序在父子之间来回翻（实测两层都以为自己不是栈顶，
+  // 于是点外面谁都不关）。`register` / `update` 本身是 useCallback([])，永远稳定。
+  const registerOverlay = host?.register;
+  const updateOverlay = host?.update;
 
   useLayoutEffect(() => {
-    if (!host) return;
-    return host.register({
+    if (!registerOverlay) return;
+    return registerOverlay({
       id: layerId,
       kind,
       dismissible: dismissibleRef.current,
@@ -62,11 +73,11 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
       },
       returnFocusTo: trigger,
     });
-  }, [host, layerId, kind, trigger]);
+  }, [registerOverlay, layerId, kind, trigger]);
 
   useEffect(() => {
-    host?.update(layerId, { dismissible: dismissible ?? !busy, kind });
-  }, [host, layerId, dismissible, busy, kind]);
+    updateOverlay?.(layerId, { dismissible: dismissible ?? !busy, kind });
+  }, [updateOverlay, layerId, dismissible, busy, kind]);
 
   useLayoutEffect(() => {
     const panel = ref.current!;
@@ -125,6 +136,9 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
     const panel = ref.current!;
     const outside = (event: MouseEvent) => {
       if (panel.contains(event.target as Node)) return;
+      // 只有栈顶才响应「点外面」。否则内层浮层（例如时间选择轮）里的一次点击
+      // 会被下层的编辑气泡当成「点在了自己外面」，连带把它关掉。
+      if (!isTopRef.current) return;
       event.preventDefault(); event.stopPropagation();
       if (outsideClosesRef.current && dismissibleRef.current && event.type === "pointerdown") close.current();
     };
@@ -138,7 +152,7 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
 
   const labelled = titleId ? { "aria-labelledby": titleId } : { "aria-label": label };
   return createPortal(
-    <div id={layerId} ref={ref} className={`floating-panel${wide ? " floating-panel-wide" : ""}`} role="dialog" aria-modal={kind === "action" ? undefined : "true"} {...labelled}>{children}</div>,
+    <div id={layerId} ref={ref} className={["floating-panel", wide ? "floating-panel-wide" : "", className ?? ""].filter(Boolean).join(" ")} role="dialog" aria-modal={kind === "action" ? undefined : "true"} {...labelled}>{children}</div>,
     document.body,
   );
 }

@@ -1522,6 +1522,10 @@ async function scrollIntoCalendarSafeArea(page: Page, locator: Locator) {
         ?? panel?.querySelector(".continuous-day-separator")
         ?? null;
       if (!header || header === element || header.contains(element)) return 0;
+      // 960×200% 下整页会比窗口高：只滚内层容器的话，元素仍然落在窗口之外
+      // （toBeInViewport 与 axe 都按**窗口**算）。先让浏览器把元素连同所有祖先滚到窗口里。
+      const inWindow = element.getBoundingClientRect();
+      if (inWindow.top < 0 || inWindow.bottom > window.innerHeight) element.scrollIntoView({ block: "center" });
       const scrollerRect = scroller.getBoundingClientRect();
       const safeTop = Math.max(scrollerRect.top, header.getBoundingClientRect().bottom) + 8;
       const safeBottom = scrollerRect.bottom - 8;
@@ -1832,7 +1836,11 @@ test("phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the
       for (const [index, round] of ROUNDS[view.label].entries()) {
         const hint = `${theme} · 日历（${view.label}）· ${round.label}`;
         if (view.label === "月") {
-          if (index > 0) await page.locator(".calendar-viewport").evaluate((scroller) => { scroller.scrollTop = scroller.scrollHeight; });
+          if (index > 0) await page.locator(".calendar-viewport").evaluate((scroller) => {
+            scroller.scrollTop = scroller.scrollHeight;
+            // 200% 下整页比窗口高：容器本身也要挪进窗口，否则格子仍在窗口外。
+            scroller.scrollIntoView({ block: "nearest" });
+          });
         } else {
           const focus = page.locator(round.focus).first();
           await expect(focus, `${hint} · 这一轮的焦点元素必须存在`).toBeVisible();
@@ -1844,6 +1852,15 @@ test("phase 4 M13 keeps the calendar page clean with the de-emphasised plan, the
         const focus = view.label === "月" && index > 0 ? page.locator(round.focus).last() : page.locator(round.focus).first();
         await expect(focus, `${hint} · 焦点元素必须真的渲染出来`).toBeVisible();
         await expect(focus, `${hint} · 焦点元素必须在屏幕上，否则 axe 根本不会评估它`).toBeInViewport({ ratio: 0.5 });
+        // 要断言「axe 评估过叠加层」，就得先让它进屏幕：叠加层和焦点卡不在同一列时，
+        // 只滚焦点卡是够不到它的。放在焦点断言**之后**，免得这次滚动把焦点卡顶出去。
+        if ((round.evaluated as readonly string[]).includes("overlay")) {
+          const overlay = page.locator(".calendar-actual-record").first();
+          if (await overlay.count()) {
+            await scrollIntoCalendarSafeArea(page, overlay);
+            await page.waitForTimeout(200);
+          }
+        }
 
         const rows = await page.evaluate(measureCalendarContrast, CALENDAR_CONTRAST_TARGETS.map((target) => ({ label: target.label, selector: target.selector })));
         for (const row of rows) {

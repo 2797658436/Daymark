@@ -1,7 +1,7 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
   Clock3, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
-  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag,
+  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -16,6 +16,9 @@ import { placementSettled, setPendingPlacement, usePendingPlacement } from "./li
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
 import { RangeBar } from "./components/ui/range-bar";
+import { SelectField } from "./components/ui/select-field";
+import { WeekdayPicker } from "./components/ui/weekday-picker";
+import { TimeField } from "./components/ui/time-picker";
 import { SettingsChoice, SettingsRow, SettingsSection, SettingsToggleRow } from "./components/settings/settings-ui";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
@@ -1524,8 +1527,8 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
   const { draft, patchDraft, busy, error } = session;
   return <form aria-busy={busy} className="habit-form habit-popover" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <label>习惯名称<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
-    <label>重复规则<select value={draft.pattern} onChange={(event) => patchDraft({ pattern: event.target.value as RecurringHabit["pattern"] })}><option value="daily">每天</option><option value="weekdays">工作日</option><option value="weekly">每周选择</option></select></label>
-    {draft.pattern === "weekly" && <fieldset><legend>选择星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={draft.weekdays.includes(day)} onChange={(event) => patchDraft({ weekdays: event.target.checked ? [...draft.weekdays, day] : draft.weekdays.filter((value) => value !== day) })} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>}
+    <label>重复规则<SelectField value={draft.pattern} onChange={(value) => patchDraft({ pattern: value as RecurringHabit["pattern"] })} options={[{ value: "daily", label: "每天" }, { value: "weekdays", label: "工作日" }, { value: "weekly", label: "每周选择" }]} /></label>
+    {draft.pattern === "weekly" && <fieldset><legend>选择星期</legend><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></fieldset>}
     <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes} onChange={(event) => patchDraft({ sessionMinutes: Number(event.target.value) })} /></label>
     <label>固定开始（可选）<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建习惯"}</Button></div>
@@ -1552,12 +1555,28 @@ function DefaultTimeSlotEditor({ slot, onCancel, onSave, onPhase }: {
     onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
   });
   const { draft, patchDraft, busy } = session;
-  return <form onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+  const [customDuration, setCustomDuration] = useState(false);
+  const duration = clockDuration(draft.start, draft.end);
+  // 时长按钮＝「从开始往后推 N 分钟」：比先改开始再改结束少一半操作。
+  const setDuration = (minutes: number) => patchDraft({ end: minutesTime(timeMinutes(draft.start) + Math.min(1440, Math.max(5, minutes))) });
+  return <form className="slot-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <h2>默认时段</h2>
     <label>名称<input required value={draft.label} onChange={(event) => patchDraft({ label: event.target.value })} /></label>
-    <label>开始<input required type="time" value={draft.start} onChange={(event) => patchDraft({ start: event.target.value })} /></label>
-    <label>结束<input required type="time" value={draft.end} onChange={(event) => patchDraft({ end: event.target.value })} /></label>
-    <fieldset><legend>适用星期</legend><div className="weekday-checks">{[1, 2, 3, 4, 5, 6, 0].map((day) => <label key={day}><input type="checkbox" checked={draft.weekdays.includes(day)} onChange={(event) => patchDraft({ weekdays: event.target.checked ? [...draft.weekdays, day] : draft.weekdays.filter((value) => value !== day) })} />{["日", "一", "二", "三", "四", "五", "六"][day]}</label>)}</div></fieldset>
+    <div className="time-row">
+      <label>开始<TimeField label="开始时间" value={draft.start} onChange={(start) => patchDraft({ start })} /></label>
+      <span aria-hidden="true">至</span>
+      <label>结束<TimeField label="结束时间" value={draft.end} onChange={(end) => patchDraft({ end })} /></label>
+    </div>
+    <div className="duration-row">
+      {SLOT_DURATION_CHOICES.map(([minutes, text]) => <button key={minutes} type="button" className={duration === minutes ? "duration-chip is-active" : "duration-chip"} aria-pressed={duration === minutes} onClick={() => setDuration(minutes)}>{text}</button>)}
+      <button type="button" className={customDuration ? "duration-chip is-active" : "duration-chip"} aria-pressed={customDuration} onClick={() => setCustomDuration((value) => !value)}>自定义</button>
+    </div>
+    {customDuration && <div className="duration-custom">
+      <input aria-label="自定义时长（分钟）" type="number" min={5} max={1440} value={duration} onChange={(event) => setDuration(Number(event.target.value) || 5)} />
+      <span>分钟</span>
+      <span className="duration-total">{durationLabel(duration)}</span>
+    </div>}
+    <fieldset><legend>适用星期</legend><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></fieldset>
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在保存…" : "保存时段"}</Button></div>
   </form>;
 }
@@ -1786,8 +1805,8 @@ function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false,
     {continuing && <small>保留原累计目标并顺延日期；当前差额会随后续进度继续减少。</small>}
     <label>里程碑名称<input value={draft.title} onChange={(event) => patchDraft({ title: event.target.value } as Partial<ProjectMilestone>)} /></label>
     <label>目标日期<input type="date" value={draft.targetLocalDate} onChange={(event) => patchDraft({ targetLocalDate: event.target.value } as Partial<ProjectMilestone>)} /></label>
-    <label>达成条件<select value={draft.criterionKind} onChange={(event) => setCriterion(patchDraft, event.target.value as ProjectMilestone["criterionKind"])}><option disabled={!tasks.length} value="orderedTask">按顺序完成至指定任务</option><option disabled={!tasks.length} value="taskCount">完成任务数量</option><option value="projectProgress">项目进度达到</option></select></label>
-    {draft.criterionKind === "orderedTask" && <label>顺序目标任务<select value={draft.targetTaskId ?? ""} onChange={(event) => patchDraft({ targetTaskId: event.target.value } as Partial<ProjectMilestone>)}><option value="">选择项目内任务</option>{tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
+    <label>达成条件<SelectField value={draft.criterionKind} onChange={(value) => setCriterion(patchDraft, value as ProjectMilestone["criterionKind"])} options={[{ value: "orderedTask", label: "按顺序完成至指定任务", disabled: !tasks.length }, { value: "taskCount", label: "完成任务数量", disabled: !tasks.length }, { value: "projectProgress", label: "项目进度达到" }]} /></label>
+    {draft.criterionKind === "orderedTask" && <label>顺序目标任务<SelectField value={draft.targetTaskId ?? ""} onChange={(value) => patchDraft({ targetTaskId: value } as Partial<ProjectMilestone>)} options={[{ value: "", label: "选择项目内任务" }, ...tasks.map((task) => ({ value: task.id, label: task.title }))]} /></label>}
     {draft.criterionKind === "taskCount" && <label>完成任务数（项目内共 {tasks.length} 个）<input type="number" min="1" value={draft.targetCount ?? 1} onChange={(event) => patchDraft({ targetCount: Math.max(1, Number(event.target.value) || 1) } as Partial<ProjectMilestone>)} /></label>}
     {draft.criterionKind === "projectProgress" && <label>项目加权进度（%）<input type="number" min="1" max="100" value={draft.targetProgress ?? 50} onChange={(event) => patchDraft({ targetProgress: Math.min(100, Math.max(1, Number(event.target.value) || 1)) } as Partial<ProjectMilestone>)} /></label>}
     {!tasks.length && <small>项目还没有任务。添加任务后即可设置按任务或数量达成。</small>}<small>保存后：{summaryText}</small>
@@ -1838,7 +1857,7 @@ function AutoScheduleDialog({ workspace, preferences, onClose, onApply, initialT
     const occurrences = plan.allocations.flatMap((allocation, index) => allocation.habitId ? [{ id: crypto.randomUUID(), habitId: allocation.habitId, localDate: allocation.localDate, status: "scheduled" as const, sessionId: sessions[index].id }] : []);
     try { await onApply(sessions, occurrences); } catch (reason) { setError(readError(reason)); setBusySaving(false); }
   };
-  return <ConfirmDialog id="schedule-dialog" className="schedule-modal" labelledBy="schedule-title" busy={busySaving} onClose={onClose}><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {formatDuration(plan.usedMinutes)} / 可用 {formatDuration(recommended.availableMinutes)}</div>{preview ? <SchedulePreview allocations={plan.allocations} /> : <div className="schedule-candidates"><label>按项目选择<select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">全部项目与习惯</option>{workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label><input aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="form-actions"><Button onClick={() => setSelected(new Set(items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => item.key)))}>选择搜索结果</Button><Button onClick={() => setSelected(new Set())}>清空选择</Button></div>{items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions">{preview && <Button disabled={busySaving} onClick={onClose}>取消</Button>}<Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></ConfirmDialog>;
+  return <ConfirmDialog id="schedule-dialog" className="schedule-modal" labelledBy="schedule-title" busy={busySaving} onClose={onClose}><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {formatDuration(plan.usedMinutes)} / 可用 {formatDuration(recommended.availableMinutes)}</div>{preview ? <SchedulePreview allocations={plan.allocations} /> : <div className="schedule-candidates"><label>按项目选择<SelectField value={projectFilter} onChange={setProjectFilter} options={[{ value: "", label: "全部项目与习惯" }, ...workspace.projects.map((project) => ({ value: project.id, label: project.title }))]} /></label><input aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="form-actions"><Button onClick={() => setSelected(new Set(items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => item.key)))}>选择搜索结果</Button><Button onClick={() => setSelected(new Set())}>清空选择</Button></div>{items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions">{preview && <Button disabled={busySaving} onClick={onClose}>取消</Button>}<Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></ConfirmDialog>;
 }
 
 function scheduleDeadlineForTask(workspace: WorkspaceSnapshot, task: Task, today: string) {
@@ -1922,7 +1941,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
         <SettingsChoice label="动态效果" name="motion" value={preferences.motion} onChange={(motion) => onChange({ motion })} options={MOTION_OPTIONS} />
       </SettingsRow>
       <SettingsRow label="界面缩放" note="只影响界面密度，不改变日历时间轴的纵向比例。" htmlFor="settings-scale" modified={changed("scale")} onReset={() => onChange({ scale: DEFAULT_SETTINGS.scale })}>
-        <RangeBar id="settings-scale" label="界面缩放" min={100} max={200} step={25} value={preferences.scale} ariaValueText={`${preferences.scale}%`} dots={[0.25, 0.5, 0.75]} onChange={(scale) => onChange({ scale })} />
+        <RangeBar id="settings-scale" label="界面缩放" min={100} max={200} step={25} value={preferences.scale} formatValue={(value) => `${value}%`} dots={[0.25, 0.5, 0.75]} commitOnRelease onChange={(scale) => onChange({ scale })} />
         <strong className="settings-value">{preferences.scale}%</strong>
       </SettingsRow>
       <SettingsToggleRow label="在日历工具栏显示实际记录开关" note="隐藏入口不会删除实际记录，也不会改变已保存的叠加状态。" checked={preferences.showActualRecordsControl} modified={changed("showActualRecordsControl")} onReset={() => onChange({ showActualRecordsControl: DEFAULT_SETTINGS.showActualRecordsControl })} onChange={(checked) => onChange({ showActualRecordsControl: checked })} />
@@ -1930,9 +1949,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
     <SettingsSection icon={<Bell />} title="提醒与行动">
       <SettingsToggleRow label="记录开始／结束本次" note="默认关闭；只有主动开始才形成实际执行记录。" checked={preferences.checkInEnabled} modified={changed("checkInEnabled")} onReset={() => onChange({ checkInEnabled: DEFAULT_SETTINGS.checkInEnabled })} onChange={(checked) => onChange({ checkInEnabled: checked })} />
       <SettingsRow label="开始宽限期" note="超过这个时间仍未开始时，记为错过。" htmlFor="settings-grace" dependent muted={!preferences.checkInEnabled} modified={changed("checkInGraceMinutes")} onReset={() => onChange({ checkInGraceMinutes: DEFAULT_SETTINGS.checkInGraceMinutes })}>
-        <select id="settings-grace" disabled={!preferences.checkInEnabled} value={preferences.checkInGraceMinutes} onChange={(event) => onChange({ checkInGraceMinutes: Number(event.target.value) as AppSettings["checkInGraceMinutes"] })}>
-          {[3, 5, 10, 15].map((value) => <option key={value} value={value}>{value} 分钟</option>)}
-        </select>
+        <SelectField id="settings-grace" disabled={!preferences.checkInEnabled} value={String(preferences.checkInGraceMinutes)} onChange={(value) => onChange({ checkInGraceMinutes: Number(value) as AppSettings["checkInGraceMinutes"] })} options={[3, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} 分钟` }))} />
       </SettingsRow>
       <SettingsToggleRow label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} dependent muted={!preferences.checkInEnabled} modified={changed("rescuePromptsEnabled")} onReset={() => onChange({ rescuePromptsEnabled: DEFAULT_SETTINGS.rescuePromptsEnabled })} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} />
       <SettingsToggleRow label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} modified={changed("remindersEnabled")} onReset={() => onChange({ remindersEnabled: DEFAULT_SETTINGS.remindersEnabled })} onChange={(checked) => onChange({ remindersEnabled: checked })} />
@@ -1940,19 +1957,12 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
         <input id="settings-lead" type="number" min="0" max="120" disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(event) => onChange({ reminderLeadMinutes: Number(event.target.value) })} />
       </SettingsRow>
       <SettingsRow label="启动摘要" note="应用启动后汇总临近与逾期任务。" htmlFor="settings-startup" modified={changed("startupSummary")} onReset={() => onChange({ startupSummary: DEFAULT_SETTINGS.startupSummary })}>
-        <select id="settings-startup" value={preferences.startupSummary} onChange={(event) => onChange({ startupSummary: event.target.value as AppSettings["startupSummary"] })}>
-          <option value="never">从不提醒</option>
-          <option value="daily">每天首次启动</option>
-          <option value="everyLaunch">每次启动</option>
-        </select>
+        <SelectField id="settings-startup" value={preferences.startupSummary} onChange={(value) => onChange({ startupSummary: value as AppSettings["startupSummary"] })} options={[{ value: "never", label: "从不提醒" }, { value: "daily", label: "每天首次启动" }, { value: "everyLaunch", label: "每次启动" }]} />
       </SettingsRow>
     </SettingsSection>
     <SettingsSection icon={<Clock3 />} title="时间与排程">
       <SettingsRow label="日视图默认显示" note="选择「默认时段」时，其他时间会折叠起来。" htmlFor="settings-day-mode" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
-        <select id="settings-day-mode" value={preferences.calendarDayMode} onChange={(event) => onChange({ calendarDayMode: event.target.value as AppSettings["calendarDayMode"] })}>
-          <option value="fullDay">全天</option>
-          <option value="defaultSlots">默认时段（折叠其他时间）</option>
-        </select>
+        <SelectField id="settings-day-mode" value={preferences.calendarDayMode} onChange={(value) => onChange({ calendarDayMode: value as AppSettings["calendarDayMode"] })} options={[{ value: "fullDay", label: "全天" }, { value: "defaultSlots", label: "默认时段" }]} />
       </SettingsRow>
       <SettingsRow label="默认时段" note="自动排程只使用这些窗口，并避开已有安排和时间块。" modified={JSON.stringify(slots) !== JSON.stringify(DEFAULT_SETTINGS.defaultTimeSlots)} onReset={() => onChange({ defaultTimeSlots: structuredClone(DEFAULT_SETTINGS.defaultTimeSlots) })}>
         <Button variant="secondary" onClick={addSlot}><Plus size={16} />添加时段</Button>
@@ -1962,22 +1972,30 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
         : <div className="settings-slot-list">{slots.map((slot, index) => <div key={slot.id} className="settings-slot">
           <div><strong>{slot.label}</strong><span>{slot.start}–{slot.end} · {weekdaySummary(slot.weekdays)}</span></div>
           <div className="settings-slot-actions">
-            <button aria-label={`编辑时段 ${slot.label}`} onClick={() => setSlotDraft(structuredClone(slot))}>编辑</button>
-            <button className="danger" aria-label={`删除时段 ${slot.label}`} onClick={() => removeSlot(index)}>删除</button>
+            <button aria-label={`编辑时段 ${slot.label}`} onClick={() => setSlotDraft(structuredClone(slot))}><Pencil size={14} aria-hidden="true" /></button>
+            <button className="danger" aria-label={`删除时段 ${slot.label}`} onClick={() => removeSlot(index)}><Trash2 size={14} aria-hidden="true" /></button>
           </div>
         </div>)}</div>}
-      {slotDraft && <FloatingPanel label="编辑默认时段" busy={slotBusy} onClose={() => setSlotDraft(null)}><DefaultTimeSlotEditor slot={slotDraft} onCancel={() => setSlotDraft(null)} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); setSlotDraft(null); }} /></FloatingPanel>}
+      {slotDraft && <FloatingPanel label="编辑默认时段" busy={slotBusy} onClose={() => setSlotDraft(null)} closeOnOutsideClick><DefaultTimeSlotEditor slot={slotDraft} onCancel={() => setSlotDraft(null)} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); setSlotDraft(null); }} /></FloatingPanel>}
       <SettingsRow label="全局单次投入（分钟）" note="新建任务时的默认单次投入时长。" htmlFor="settings-session" modified={changed("defaultSessionMinutes")} onReset={() => onChange({ defaultSessionMinutes: DEFAULT_SETTINGS.defaultSessionMinutes })}>
         <input id="settings-session" type="number" min="5" max="240" value={preferences.defaultSessionMinutes} onChange={(event) => onChange({ defaultSessionMinutes: Number(event.target.value) })} />
       </SettingsRow>
       <SettingsRow label="最低有效时长" note="短于该阈值的空档不用于自动排程，仍可手动放置。" htmlFor="settings-minimum" modified={changed("minimumSessionMinutes")} onReset={() => onChange({ minimumSessionMinutes: DEFAULT_SETTINGS.minimumSessionMinutes })}>
-        <select id="settings-minimum" value={preferences.minimumSessionMinutes} onChange={(event) => onChange({ minimumSessionMinutes: Number(event.target.value) as AppSettings["minimumSessionMinutes"] })}>
-          {[5, 10, 15, 20, 30].map((value) => <option key={value} value={value}>{value} 分钟</option>)}
-        </select>
+        <SelectField id="settings-minimum" value={String(preferences.minimumSessionMinutes)} onChange={(value) => onChange({ minimumSessionMinutes: Number(value) as AppSettings["minimumSessionMinutes"] })} options={[5, 10, 15, 20, 30].map((value) => ({ value: String(value), label: `${value} 分钟` }))} />
       </SettingsRow>
       <SettingsToggleRow label="自动排程辅助" note="只提示可以安排的任务，仍需你预览确认。" checked={preferences.autoScheduleAssist} modified={changed("autoScheduleAssist")} onReset={() => onChange({ autoScheduleAssist: DEFAULT_SETTINGS.autoScheduleAssist })} onChange={(checked) => onChange({ autoScheduleAssist: checked })} />
     </SettingsSection>
   </section>;
+}
+
+/** 默认时段的常用时长（分钟）。最后一档之外的走「自定义」。 */
+const SLOT_DURATION_CHOICES = [[30, "30 分"], [60, "1 小时"], [90, "1.5 小时"], [120, "2 小时"]] as const;
+
+function durationLabel(minutes: number) {
+  if (minutes === 1440) return "共 24 小时";
+  if (minutes % 60 === 0) return `共 ${minutes / 60} 小时`;
+  if (minutes > 60) return `共 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+  return `共 ${minutes} 分钟`;
 }
 
 /** 「工作日／每天／周一、周三」——比把数字翻成「一、二、三」更好读，也避免把 0 当成周一。 */
@@ -2031,11 +2049,11 @@ function TaskEditorFields({ task, projects, onUpdate, onCancel, onPhase }: { tas
   const { draft, patchDraft, busy, error, phase } = session;
   return <form aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <label>标题<input required value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
-    <label>项目<select value={draft.projectId ?? ""} onChange={(event) => patchDraft({ projectId: event.target.value || null })}><option value="">独立任务</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+    <label>项目<SelectField value={draft.projectId ?? ""} onChange={(value) => patchDraft({ projectId: value || null })} options={[{ value: "", label: "独立任务" }, ...projects.map((project) => ({ value: project.id, label: project.title }))]} /></label>
     <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => patchDraft({ deadlineLocal: event.target.value || null })} /></label>
     <label>预计耗时（分钟）<input type="number" min="1" max="1440" value={draft.estimatedMinutes ?? ""} onChange={(event) => patchDraft({ estimatedMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
     <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes ?? ""} onChange={(event) => patchDraft({ sessionMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
-    <label>优先级<select value={draft.priority ?? "normal"} onChange={(event) => patchDraft({ priority: event.target.value as Task["priority"] })}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option></select></label>
+    <label>优先级<SelectField value={draft.priority ?? "normal"} onChange={(value) => patchDraft({ priority: value as Task["priority"] })} options={[{ value: "low", label: "低" }, { value: "normal", label: "普通" }, { value: "high", label: "高" }]} /></label>
     {error && phase === "error" && <p role="alert">{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !draft.title.trim()}>{busy ? "正在保存…" : "保存任务"}</Button></div>
   </form>;
 }
