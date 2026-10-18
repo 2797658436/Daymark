@@ -242,6 +242,8 @@ export interface CalendarViewportApi {
   captureZoomAnchor: (measurement: ZoomAnchorMeasurement) => void;
   /** 优先级 4：应用自己刚程序化写入过位置（三日缓冲平移等），这次 scroll 不是用户滚动。 */
   noteProgrammaticPosition: () => void;
+  /** 只读：当前这次 scroll 是否仍落在应用自己刚写下的位置上。 */
+  isProgrammaticPosition: () => boolean;
   /** 只读：当前内存中的逻辑位置。 */
   positions: () => CalendarPositions;
 }
@@ -288,6 +290,8 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const zoomAnchorRef = useRef<ZoomAnchorMeasurement | null>(null);
   /** 应用自己刚写过的程序化滚动位置：只有落在这个位置上的 scroll 事件才算「不是用户滚动」。 */
   const programmaticTopRef = useRef<number | null>(null);
+  /** 最近一次程序化写入的位置；按**位置**失效，而不是按时间窗（滚动事件可能被推迟很多帧）。 */
+  const programmaticWriteRef = useRef<number | null>(null);
   /**
    * 应用自己刚写下的程序化位置（恢复记忆、三日缓冲平移、进入视图定位、缩放锚点补偿）。
    *
@@ -336,6 +340,11 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
    */
   const markProgrammaticSettle = useCallback((scroller: HTMLElement | null) => {
     programmaticSettleTopRef.current = scroller ? scroller.scrollTop : null;
+    // 同一个位置也用来回答「这次 scroll 是不是应用自己写的」：三日缓冲的平移
+    // 判据必须跳过它，否则刚过午夜时的初次居中会被当成用户滚到了前一天。
+    programmaticTopRef.current = scroller ? scroller.scrollTop : null;
+    programmaticWriteRef.current = scroller ? scroller.scrollTop : null;
+    requestAnimationFrame(() => requestAnimationFrame(() => { programmaticTopRef.current = null; }));
   }, []);
 
   const pump = useCallback(() => {
@@ -591,14 +600,26 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
    * 与之争抢的恢复请求（日期变化本来也不会排队恢复）。
    */
   const noteProgrammaticPosition = useCallback(() => {
-    const scroller = scrollerFor(viewRef.current as TimelineView);
-    programmaticTopRef.current = scroller ? scroller.scrollTop : null;
     // 同一次写入也是「不写偏好」的判据：三日缓冲平移不是用户在挑位置。
-    markProgrammaticSettle(scroller);
-    // 浏览器的同一个渲染帧里先派发 scroll 事件、再跑 rAF 回调；两帧足以覆盖
-    // 「写入发生在 rAF 回调内、事件被推迟到下一帧」的情况。
-    requestAnimationFrame(() => requestAnimationFrame(() => { programmaticTopRef.current = null; }));
+    markProgrammaticSettle(scrollerFor(viewRef.current as TimelineView));
   }, [markProgrammaticSettle, scrollerFor]);
+
+  /**
+   * 这次 scroll 是否仍停在应用自己写下的位置上。
+   *
+   * 不能用「两帧时间窗」：scroll 事件由浏览器在渲染步骤里派发，机器繁忙时可能被推迟到
+   * 好几帧之后，窗口一过就把它当成用户滚动了（实测第二遍全量跑时 00:55 的日视图
+   * 仍然退到了昨天）。这里改成**按位置**失效 —— 只要位置还等于写入值就算应用自己的，
+   * 一旦用户把它滚走，标记立刻作废。
+   */
+  const isProgrammaticPosition = useCallback(() => {
+    const scroller = scrollerFor(viewRef.current as TimelineView);
+    const written = programmaticWriteRef.current;
+    if (!scroller || written === null) return false;
+    if (Math.abs(scroller.scrollTop - written) < 1) return true;
+    programmaticWriteRef.current = null;
+    return false;
+  }, [scrollerFor]);
 
   const readGeneration = useCallback(() => generationRef.current, []);
 
@@ -609,6 +630,7 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     revealSession,
     captureZoomAnchor,
     noteProgrammaticPosition,
+    isProgrammaticPosition,
     positions: readCalendarPositions,
   };
 }

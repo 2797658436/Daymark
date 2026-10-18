@@ -274,6 +274,42 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   await expect(currentTrack.locator(".calendar-session", { hasText: "跨日安排" })).toHaveCount(1);
 });
 
+/**
+ * 回归：刚过午夜打开日视图，锚点不能退到昨天。
+ *
+ * 三日缓冲以「今天」为中段，初始定位把「现在」居中。00:55 时视口上半部分落在
+ * 前一天，scrollTop 会低于中段起点 —— 旧实现把它当成「用户滚到了前一天」，
+ * 于是把锚点改成昨天，标题显示错日期（见 docs/reports 里的 S 记录）。
+ * 修复后只有**用户**滚动才触发平移，应用自己的定位不算。
+ */
+test("phase 3 day view opened just after midnight keeps today instead of shifting to yesterday", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.clock.setFixedTime(new Date("2026-09-20T00:55:00"));
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", calendarAnchors: { day: null, week: null, month: null },
+      calendarZoom: { day: "compact", week: "compact", month: "compact" }, calendarScale: { day: 48, week: 48, month: 120 },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], projectMilestones: [], milestoneOutcomes: [], tasks: [], executionSessions: [],
+      executionRecords: [], progressEvents: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+    }));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "日", exact: true }).click();
+  const period = page.getByLabel("当前日历日期");
+  await expect(period).toHaveText("9月20日星期日");
+  // 等过应用自己那两帧定位窗口，锚点不能被写成昨天。
+  await page.waitForTimeout(600);
+  await expect(period).toHaveText("9月20日星期日");
+  const anchors = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarAnchors ?? {});
+  expect(anchors.day === null || anchors.day === "2026-09-20").toBe(true);
+  // 三日缓冲仍以今天为中段。
+  await expect(page.locator("[data-calendar-date]").nth(1)).toHaveAttribute("data-calendar-date", "2026-09-20");
+});
+
 test("phase 3 M2 keeps planned and actual time separate and returns to the live time", async ({ page }) => {
   await page.evaluate(() => {
     const now = new Date();
