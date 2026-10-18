@@ -114,10 +114,10 @@ describe("deadlines page", () => {
       }),
     });
 
-    await user.type(screen.getByLabelText("按关键字筛选"), "alpha");
+    await user.type(screen.getByLabelText("按标题搜索"), "alpha");
     expect(rowTitles()).toEqual(["Alpha 一", "Alpha 二"]);
 
-    await user.clear(screen.getByLabelText("按关键字筛选"));
+    await user.clear(screen.getByLabelText("按标题搜索"));
     expect(rowTitles()).toEqual(["Alpha 一", "Beta", "Alpha 二"]);
     // 类型筛选是可切换的：关掉「任务」后这一页只剩项目与里程碑（这里都没有）。
     await user.click(screen.getByRole("button", { name: "任务" }));
@@ -134,7 +134,7 @@ describe("deadlines page", () => {
     const harness = renderPage({ workspace: workspace({ tasks: [task("t-1", { title: "暂停中的任务", status: "paused" })] }) });
 
     expect(screen.queryByText("暂停中的任务")).toBeNull();
-    await user.click(screen.getByLabelText("显示已暂停的任务"));
+    await user.click(screen.getByRole("button", { name: "已暂停" }));
     const row = rowOf("task:t-1");
     expect(within(row).getByText("已暂停，不能重新安排")).toBeVisible();
     expect(within(row).queryByRole("button", { name: /安排任务/ })).toBeNull();
@@ -157,7 +157,7 @@ describe("deadlines page", () => {
       }),
     });
     expect(screen.queryByText("已达成目标")).toBeNull();
-    await user.click(screen.getByLabelText("显示当前已达成的里程碑"));
+    await user.click(screen.getByLabelText("含已达成"));
     expect(within(rowOf("milestone:m-1")).getByText("当前已达成")).toBeVisible();
     // 当前达成项不是冻结历史，因此没有续排入口。
     expect(within(rowOf("milestone:m-1")).queryByRole("button", { name: /续排里程碑/ })).toBeNull();

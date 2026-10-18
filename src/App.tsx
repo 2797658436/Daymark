@@ -1,7 +1,7 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Moon, Palette, Pencil, Play, Plus, RotateCcw,
-  Settings2, Square, Sun, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag,
+  Clock3, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -15,6 +15,8 @@ import { DRAG_TARGET_MIN_PX, snapDelta, snapMinutesFor, snapTo } from "./lib/tim
 import { placementSettled, setPendingPlacement, usePendingPlacement } from "./lib/pendingPlacement";
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
+import { RangeBar } from "./components/ui/range-bar";
+import { SettingsChoice, SettingsRow, SettingsSection, SettingsToggleRow } from "./components/settings/settings-ui";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
@@ -47,7 +49,7 @@ interface ProjectFocusRequest { projectId: string; milestoneId: string | null; a
 const pages: Array<{ id: PageId; label: string; icon: typeof Home }> = [
   { id: "today", label: "今日", icon: Home },
   { id: "calendar", label: "日历", icon: CalendarDays },
-  { id: "deadlines", label: "截止事项", icon: Flag },
+  { id: "deadlines", label: "截止", icon: Flag },
   { id: "projects", label: "项目", icon: FolderKanban },
   { id: "review", label: "回顾", icon: ChartNoAxesColumnIncreasing },
   { id: "data", label: "数据", icon: Database },
@@ -423,6 +425,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     updatePreferences({ taskPoolWidth: width });
   };
 
+  const saveLabel = saveState === "saved" ? "已保存到本机" : saveState === "saving" ? "正在保存…" : "未保存，点击重试";
   return (
     <div className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"} ${dayViewPool && showTaskPool ? "day-view-pool" : ""}`} style={preferences.taskPoolWidth ? ({ "--pool-width": `${preferences.taskPoolWidth}px` } as CSSProperties) : undefined}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
@@ -434,7 +437,12 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
               onClick={() => updatePreferences({ lastPage: id })}><Icon aria-hidden="true" size={20} /><span>{label}</span></button>
           ))}
         </nav>
-        <div className="sidebar-foot"><span className={`save-dot ${saveState}`} />{saveState === "saved" ? "已保存到本机" : saveState === "saving" ? "正在保存" : "未保存"}</div>
+        <div className="sidebar-foot">
+          <button type="button" className="save-light" aria-label={saveLabel} aria-disabled={saveState !== "unsaved"} onClick={saveState === "unsaved" ? () => void retryAction.current?.() : undefined}>
+            <span className={`save-dot ${saveState}`} aria-hidden="true" />
+            <span className="save-tip" aria-hidden="true">{saveLabel}</span>
+          </button>
+        </div>
       </aside>
 
       <main id="main-content" ref={mainRef} className={`workspace-main ${page === "calendar" ? "calendar-workspace" : ""}`}>
@@ -1674,7 +1682,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, onCreate, onUpd
       {importDraft.mode !== "bilibili" && projectImport.error && <p role="alert">{projectImport.error}</p>}{!importTitle.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={importBusy} onClick={() => patchImport({ mode: "none" })}>取消</Button><Button type="submit" variant="primary" disabled={importBusy || !projectImport.canSave}>{importBusy ? "正在写入…" : "创建"}</Button></div>
     </form></FloatingPanel>}
     {newProjectTask && <FloatingPanel label="添加项目任务" busy={newProjectTaskBusy} onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></FloatingPanel>}
-    <div className="project-list-tools"><input aria-label="搜索项目任务" placeholder="搜索项目或任务" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} /><label><input type="checkbox" checked={incompleteOnly} onChange={(event) => setIncompleteOnly(event.target.checked)} />只看未完成</label></div>
+    <div className="project-list-tools"><input aria-label="搜索项目任务" placeholder="搜索项目或任务" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} /><label><input type="checkbox" className="switch" checked={incompleteOnly} onChange={(event) => setIncompleteOnly(event.target.checked)} />只看未完成</label></div>
     <div className="project-grid">{workspace.projects.length === 0 ? <article className="surface-card project-card-empty"><span className="eyebrow">还没有项目</span><h2>把长期目标拆成可执行的任务</h2><p>在项目里集中管理一组相关任务，能更快看到推进和截止。</p><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />创建第一个项目</Button></article> : workspace.projects.map((project) => {
       const tasks = projectTasksOf(index, project.id);
       const weighted = projectProgress(tasks);
@@ -1877,6 +1885,18 @@ function BackupRow({ backup, native, disabled, onPreview }: { backup: BackupInfo
   return <div><Database /><div><strong>{backup.kind === "daily" ? "每日备份" : backup.kind === "manual" ? "手动备份" : "恢复前备份"}</strong>{preview ? <p>{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB · 检查通过</p> : <p>{error || "正在检查备份…"}</p>}<details><summary>文件位置</summary><span>{backup.path}</span></details><Button disabled={disabled || !preview} onClick={() => preview && onPreview(preview)}>检查并预览</Button></div></div>;
 }
 
+
+const APPEARANCE_OPTIONS: Array<{ value: AppSettings["appearance"]; label: string }> = [
+  { value: "system", label: "跟随系统" },
+  { value: "light", label: "浅色" },
+  { value: "dark", label: "深色" },
+];
+const MOTION_OPTIONS: Array<{ value: AppSettings["motion"]; label: string }> = [
+  { value: "system", label: "跟随系统" },
+  { value: "reduce", label: "减少" },
+  { value: "full", label: "完整" },
+];
+
 function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
   const slots = preferences.defaultTimeSlots;
   const [slotDraft, setSlotDraft] = useState<DefaultTimeSlot | null>(null);
@@ -1884,16 +1904,89 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
   const [slotBusy, setSlotBusy] = useState(false);
   const addSlot = () => { const start = slots.at(-1)?.end ?? "19:00"; setSlotDraft({ id: crypto.randomUUID(), label: "新的专注时段", start, end: minutesTime(timeMinutes(start) + 120), weekdays: [1, 2, 3, 4, 5] }); };
   const removeSlot = (index: number) => onChange({ defaultTimeSlots: slots.filter((_, at) => at !== index) });
-  return <section className="page-stack"><PageHeader eyebrow="按你的习惯调整" title="设置" /><div className="settings-grid"><section className="surface-card"><h2><Palette />外观与无障碍</h2><div className="radio-grid"><RadioOption label="跟随系统" checked={preferences.appearance === "system"} onChange={() => onChange({ appearance: "system" })} icon={<Palette />} /><RadioOption label="浅色" checked={preferences.appearance === "light"} onChange={() => onChange({ appearance: "light" })} icon={<Sun />} /><RadioOption label="深色" checked={preferences.appearance === "dark"} onChange={() => onChange({ appearance: "dark" })} icon={<Moon />} /></div><label>动态效果<select value={preferences.motion} onChange={(event) => onChange({ motion: event.target.value as AppSettings["motion"] })}><option value="system">跟随系统</option><option value="reduce">减少</option><option value="full">完整</option></select></label><label>界面缩放 <strong>{preferences.scale}%</strong><input type="range" min="100" max="200" step="25" value={preferences.scale} onChange={(event) => onChange({ scale: Number(event.target.value) })} /></label><Toggle label="在日历工具栏显示实际记录开关" note="隐藏入口不会删除实际记录，也不会改变已保存的叠加状态。" checked={preferences.showActualRecordsControl} onChange={(checked) => onChange({ showActualRecordsControl: checked })} /></section>
-    <section className="surface-card"><h2><Bell />提醒与行动</h2><Toggle label="记录开始／结束本次" note="默认关闭；只有主动开始才形成实际执行记录。" checked={preferences.checkInEnabled} onChange={(checked) => onChange({ checkInEnabled: checked })} /><label>开始宽限期<select disabled={!preferences.checkInEnabled} value={preferences.checkInGraceMinutes} onChange={(event) => onChange({ checkInGraceMinutes: Number(event.target.value) as AppSettings["checkInGraceMinutes"] })}>{[3, 5, 10, 15].map((value) => <option key={value} value={value}>{value} 分钟</option>)}</select></label><Toggle label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} /><Toggle label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} onChange={(checked) => onChange({ remindersEnabled: checked })} /><label>提前分钟数<input type="number" min="0" max="120" disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(event) => onChange({ reminderLeadMinutes: Number(event.target.value) })} /></label><label>启动摘要<select value={preferences.startupSummary} onChange={(event) => onChange({ startupSummary: event.target.value as AppSettings["startupSummary"] })}><option value="never">从不提醒</option><option value="daily">每天首次启动</option><option value="everyLaunch">每次启动</option></select></label></section>
-    <section className="surface-card"><h2><Clock3 />时间与排程</h2><p>自动排程只使用这些偏好窗口，并避开已有安排和时间块。</p><label>日视图默认显示<select value={preferences.calendarDayMode} onChange={(event) => onChange({ calendarDayMode: event.target.value as AppSettings["calendarDayMode"] })}><option value="fullDay">全天</option><option value="defaultSlots">默认时段（折叠其他时间）</option></select></label>{slots.map((slot, index) => <div key={slot.id} className="slot-summary"><button onClick={() => setSlotDraft(structuredClone(slot))}><strong>{slot.label}</strong><span>{slot.start}–{slot.end} · {slot.weekdays.map((day) => ["日", "一", "二", "三", "四", "五", "六"][day]).join("、")}</span></button><button className="icon-action" aria-label={`删除时段 ${slot.label}`} onClick={() => removeSlot(index)}><X size={14} /></button></div>)}{slotDraft && <FloatingPanel label="编辑默认时段" busy={slotBusy} onClose={() => setSlotDraft(null)}><DefaultTimeSlotEditor slot={slotDraft} onCancel={() => setSlotDraft(null)} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); setSlotDraft(null); }} /></FloatingPanel>}<div className="form-actions"><Button variant="secondary" onClick={addSlot}><Plus size={16} />添加时段</Button></div><label>全局单次投入（分钟）<input type="number" min="5" max="240" value={preferences.defaultSessionMinutes} onChange={(event) => onChange({ defaultSessionMinutes: Number(event.target.value) })} /></label><label>最低有效时长<select value={preferences.minimumSessionMinutes} onChange={(event) => onChange({ minimumSessionMinutes: Number(event.target.value) as AppSettings["minimumSessionMinutes"] })}>{[5, 10, 15, 20, 30].map((value) => <option key={value} value={value}>{value} 分钟</option>)}</select></label><Toggle label="自动排程辅助" note="只提示可以安排的任务，仍需你预览确认。" checked={preferences.autoScheduleAssist} onChange={(checked) => onChange({ autoScheduleAssist: checked })} /></section></div></section>;
+  // 单项重置只比较值本身；数组项没有稳定标识，用「是否为空」判断（默认值就是空数组）。
+  const changed = (key: Exclude<keyof AppSettings, "defaultTimeSlots">) => preferences[key] !== DEFAULT_SETTINGS[key];
+  return <section className="page-stack settings-page">
+    <PageHeader eyebrow="按你的习惯调整" title="设置" />
+    <SettingsSection icon={<Palette />} title="外观与无障碍">
+      <SettingsRow label="主题" note="跟随系统会随 Windows 的深浅色设置切换。" modified={changed("appearance")} onReset={() => onChange({ appearance: DEFAULT_SETTINGS.appearance })}>
+        <SettingsChoice label="主题" name="appearance" value={preferences.appearance} onChange={(appearance) => onChange({ appearance })} options={APPEARANCE_OPTIONS} />
+      </SettingsRow>
+      <SettingsRow label="动态效果" note="减少动态时仍保留文字与图标的状态反馈。" modified={changed("motion")} onReset={() => onChange({ motion: DEFAULT_SETTINGS.motion })}>
+        <SettingsChoice label="动态效果" name="motion" value={preferences.motion} onChange={(motion) => onChange({ motion })} options={MOTION_OPTIONS} />
+      </SettingsRow>
+      <SettingsRow label="界面缩放" note="只影响界面密度，不改变日历时间轴的纵向比例。" htmlFor="settings-scale" modified={changed("scale")} onReset={() => onChange({ scale: DEFAULT_SETTINGS.scale })}>
+        <RangeBar id="settings-scale" label="界面缩放" min={100} max={200} step={25} value={preferences.scale} ariaValueText={`${preferences.scale}%`} dots={[0.25, 0.5, 0.75]} onChange={(scale) => onChange({ scale })} />
+        <strong className="settings-value">{preferences.scale}%</strong>
+      </SettingsRow>
+      <SettingsToggleRow label="在日历工具栏显示实际记录开关" note="隐藏入口不会删除实际记录，也不会改变已保存的叠加状态。" checked={preferences.showActualRecordsControl} modified={changed("showActualRecordsControl")} onReset={() => onChange({ showActualRecordsControl: DEFAULT_SETTINGS.showActualRecordsControl })} onChange={(checked) => onChange({ showActualRecordsControl: checked })} />
+    </SettingsSection>
+    <SettingsSection icon={<Bell />} title="提醒与行动">
+      <SettingsToggleRow label="记录开始／结束本次" note="默认关闭；只有主动开始才形成实际执行记录。" checked={preferences.checkInEnabled} modified={changed("checkInEnabled")} onReset={() => onChange({ checkInEnabled: DEFAULT_SETTINGS.checkInEnabled })} onChange={(checked) => onChange({ checkInEnabled: checked })} />
+      <SettingsRow label="开始宽限期" note="超过这个时间仍未开始时，记为错过。" htmlFor="settings-grace" dependent muted={!preferences.checkInEnabled} modified={changed("checkInGraceMinutes")} onReset={() => onChange({ checkInGraceMinutes: DEFAULT_SETTINGS.checkInGraceMinutes })}>
+        <select id="settings-grace" disabled={!preferences.checkInEnabled} value={preferences.checkInGraceMinutes} onChange={(event) => onChange({ checkInGraceMinutes: Number(event.target.value) as AppSettings["checkInGraceMinutes"] })}>
+          {[3, 5, 10, 15].map((value) => <option key={value} value={value}>{value} 分钟</option>)}
+        </select>
+      </SettingsRow>
+      <SettingsToggleRow label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} dependent muted={!preferences.checkInEnabled} modified={changed("rescuePromptsEnabled")} onReset={() => onChange({ rescuePromptsEnabled: DEFAULT_SETTINGS.rescuePromptsEnabled })} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} />
+      <SettingsToggleRow label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} modified={changed("remindersEnabled")} onReset={() => onChange({ remindersEnabled: DEFAULT_SETTINGS.remindersEnabled })} onChange={(checked) => onChange({ remindersEnabled: checked })} />
+      <SettingsRow label="提前分钟数" note="在执行时段开始前多久发出提醒。" htmlFor="settings-lead" dependent muted={!preferences.remindersEnabled} modified={changed("reminderLeadMinutes")} onReset={() => onChange({ reminderLeadMinutes: DEFAULT_SETTINGS.reminderLeadMinutes })}>
+        <input id="settings-lead" type="number" min="0" max="120" disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(event) => onChange({ reminderLeadMinutes: Number(event.target.value) })} />
+      </SettingsRow>
+      <SettingsRow label="启动摘要" note="应用启动后汇总临近与逾期任务。" htmlFor="settings-startup" modified={changed("startupSummary")} onReset={() => onChange({ startupSummary: DEFAULT_SETTINGS.startupSummary })}>
+        <select id="settings-startup" value={preferences.startupSummary} onChange={(event) => onChange({ startupSummary: event.target.value as AppSettings["startupSummary"] })}>
+          <option value="never">从不提醒</option>
+          <option value="daily">每天首次启动</option>
+          <option value="everyLaunch">每次启动</option>
+        </select>
+      </SettingsRow>
+    </SettingsSection>
+    <SettingsSection icon={<Clock3 />} title="时间与排程">
+      <SettingsRow label="日视图默认显示" note="选择「默认时段」时，其他时间会折叠起来。" htmlFor="settings-day-mode" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
+        <select id="settings-day-mode" value={preferences.calendarDayMode} onChange={(event) => onChange({ calendarDayMode: event.target.value as AppSettings["calendarDayMode"] })}>
+          <option value="fullDay">全天</option>
+          <option value="defaultSlots">默认时段（折叠其他时间）</option>
+        </select>
+      </SettingsRow>
+      <SettingsRow label="默认时段" note="自动排程只使用这些窗口，并避开已有安排和时间块。" modified={JSON.stringify(slots) !== JSON.stringify(DEFAULT_SETTINGS.defaultTimeSlots)} onReset={() => onChange({ defaultTimeSlots: structuredClone(DEFAULT_SETTINGS.defaultTimeSlots) })}>
+        <Button variant="secondary" onClick={addSlot}><Plus size={16} />添加时段</Button>
+      </SettingsRow>
+      {slots.length === 0
+        ? <p className="settings-empty">还没有默认时段。添加后，自动排程才会给出候选草案。</p>
+        : <div className="settings-slot-list">{slots.map((slot, index) => <div key={slot.id} className="settings-slot">
+          <div><strong>{slot.label}</strong><span>{slot.start}–{slot.end} · {weekdaySummary(slot.weekdays)}</span></div>
+          <div className="settings-slot-actions">
+            <button aria-label={`编辑时段 ${slot.label}`} onClick={() => setSlotDraft(structuredClone(slot))}>编辑</button>
+            <button className="danger" aria-label={`删除时段 ${slot.label}`} onClick={() => removeSlot(index)}>删除</button>
+          </div>
+        </div>)}</div>}
+      {slotDraft && <FloatingPanel label="编辑默认时段" busy={slotBusy} onClose={() => setSlotDraft(null)}><DefaultTimeSlotEditor slot={slotDraft} onCancel={() => setSlotDraft(null)} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); setSlotDraft(null); }} /></FloatingPanel>}
+      <SettingsRow label="全局单次投入（分钟）" note="新建任务时的默认单次投入时长。" htmlFor="settings-session" modified={changed("defaultSessionMinutes")} onReset={() => onChange({ defaultSessionMinutes: DEFAULT_SETTINGS.defaultSessionMinutes })}>
+        <input id="settings-session" type="number" min="5" max="240" value={preferences.defaultSessionMinutes} onChange={(event) => onChange({ defaultSessionMinutes: Number(event.target.value) })} />
+      </SettingsRow>
+      <SettingsRow label="最低有效时长" note="短于该阈值的空档不用于自动排程，仍可手动放置。" htmlFor="settings-minimum" modified={changed("minimumSessionMinutes")} onReset={() => onChange({ minimumSessionMinutes: DEFAULT_SETTINGS.minimumSessionMinutes })}>
+        <select id="settings-minimum" value={preferences.minimumSessionMinutes} onChange={(event) => onChange({ minimumSessionMinutes: Number(event.target.value) as AppSettings["minimumSessionMinutes"] })}>
+          {[5, 10, 15, 20, 30].map((value) => <option key={value} value={value}>{value} 分钟</option>)}
+        </select>
+      </SettingsRow>
+      <SettingsToggleRow label="自动排程辅助" note="只提示可以安排的任务，仍需你预览确认。" checked={preferences.autoScheduleAssist} modified={changed("autoScheduleAssist")} onReset={() => onChange({ autoScheduleAssist: DEFAULT_SETTINGS.autoScheduleAssist })} onChange={(checked) => onChange({ autoScheduleAssist: checked })} />
+    </SettingsSection>
+  </section>;
+}
+
+/** 「工作日／每天／周一、周三」——比把数字翻成「一、二、三」更好读，也避免把 0 当成周一。 */
+function weekdaySummary(weekdays: number[]) {
+  const sorted = [...weekdays].sort((left, right) => left - right);
+  if (sorted.length === 7) return "每天";
+  if (sorted.length === 5 && sorted.every((day, index) => day === index + 1)) return "工作日";
+  return sorted.map((day) => `周${["日", "一", "二", "三", "四", "五", "六"][day] ?? ""}`).join("、");
 }
 
 function FinishDialog({ record, task, onClose, onSubmit }: { record: ExecutionRecord; task: Task; onClose: () => void; onSubmit: (progress: number, note: string, actualEndUtc: string) => Promise<void> }) {
   const [progress, setProgress] = useState(task.progress); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
   const [actualMinutes, setActualMinutes] = useState(() => Math.max(1, Math.round((Date.now() - new Date(record.actualStartUtc).getTime()) / 60_000)));
   const actualEndUtc = new Date(new Date(record.actualStartUtc).getTime() + actualMinutes * 60_000).toISOString();
-  return <ConfirmDialog id="finish-dialog" labelledBy="finish-title" busy={busy} onClose={onClose}><div className="modal-icon"><Square /></div><h2 id="finish-title">结束本次：{task.title}</h2><p>本次执行会立即形成实际投入记录；任务完成度仍由你确认。</p><label>实际投入（分钟）<input type="number" min="1" max="1440" value={actualMinutes} onChange={(event) => setActualMinutes(Math.max(1, Number(event.target.value)))} /></label><label>任务完成度 <strong>{progress}%</strong><input type="range" min="0" max="100" step="5" value={progress} onChange={(event) => setProgress(Number(event.target.value))} /></label><label>本次小结（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="留下对下次有帮助的一句话" /></label><small>开始于 {formatClock(record.actualStartUtc)}</small><div className="form-actions"><Button disabled={busy} onClick={onClose}>继续执行</Button><Button variant="primary" disabled={busy} onClick={async () => { setBusy(true); try { await onSubmit(progress, note, actualEndUtc); } finally { setBusy(false); } }}>{busy ? "正在保存…" : "结束并保存"}</Button></div></ConfirmDialog>;
+  return <ConfirmDialog id="finish-dialog" labelledBy="finish-title" busy={busy} onClose={onClose}><div className="modal-icon"><Square /></div><h2 id="finish-title">结束本次：{task.title}</h2><p>本次执行会立即形成实际投入记录；任务完成度仍由你确认。</p><label>实际投入（分钟）<input type="number" min="1" max="1440" value={actualMinutes} onChange={(event) => setActualMinutes(Math.max(1, Number(event.target.value)))} /></label><label>任务完成度 <strong>{progress}%</strong><RangeBar compact min={0} max={100} step={5} value={progress} onChange={setProgress} /></label><label>本次小结（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="留下对下次有帮助的一句话" /></label><small>开始于 {formatClock(record.actualStartUtc)}</small><div className="form-actions"><Button disabled={busy} onClick={onClose}>继续执行</Button><Button variant="primary" disabled={busy} onClick={async () => { setBusy(true); try { await onSubmit(progress, note, actualEndUtc); } finally { setBusy(false); } }}>{busy ? "正在保存…" : "结束并保存"}</Button></div></ConfirmDialog>;
 }
 
 function RestoreDialog({ preview, error, busy, onClose, onConfirm, currentCounts }: { currentCounts?: { projects: number; tasks: number } | null; preview: BackupPreview; error: string; busy: boolean; onClose: () => void; onConfirm: () => Promise<void> }) {
@@ -1910,7 +2003,7 @@ function ProgressControl({ task, onCommit, showComplete = false }: { task: Task;
   const [value, setValue] = useState(task.progress); useEffect(() => setValue(task.progress), [task.progress]);
   const commit = () => { if (value !== task.progress) void onCommit(task, value); };
   const markComplete = () => { setValue(100); if (task.progress !== 100) void onCommit(task, 100); };
-  return <div className={showComplete ? "progress-control has-complete" : "progress-control"}><input aria-label={`${task.title} 完成度`} type="range" min="0" max="100" step="5" value={value} onChange={(event) => setValue(Number(event.target.value))} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
+  return <div className={showComplete ? "progress-control has-complete" : "progress-control"}><RangeBar compact label={`${task.title} 完成度`} min={0} max={100} step={5} value={value} onChange={setValue} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
 }
 
 function useCurrentTime() {
@@ -1942,8 +2035,6 @@ function TaskEditorFields({ task, projects, onUpdate, onCancel, onPhase }: { tas
 }
 
 function EmptyState({ icon, title, text, action }: { icon: ReactNode; title: string; text: string; action?: ReactNode }) { return <div className="empty-state"><span>{icon}</span><strong>{title}</strong><p>{text}</p>{action}</div>; }
-function RadioOption({ label, checked, onChange, icon }: { label: string; checked: boolean; onChange: () => void; icon: ReactNode }) { return <label className={checked ? "radio-option selected" : "radio-option"}>{icon}<input type="radio" name="appearance" checked={checked} onChange={onChange} /><strong>{label}</strong>{checked && <Check />}</label>; }
-function Toggle({ label, note, checked, onChange }: { label: string; note: string; checked: boolean; onChange: (checked: boolean) => void }) { return <label className="toggle-row"><span><strong>{label}</strong><small>{note}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>; }
 
 function makeSession(task: Task, date: string, start: string, requestedDuration?: number): ExecutionSession {
   const duration = Math.max(5, requestedDuration ?? task.sessionMinutes ?? task.estimatedMinutes ?? 60); const endTotal = timeMinutes(start) + duration;

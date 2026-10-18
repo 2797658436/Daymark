@@ -22,9 +22,9 @@ import type { ProjectMilestone, Task, TaskStatus } from "../../lib/native";
  */
 
 const TASK_STATUS_OPTIONS: Array<{ value: TaskStatus; label: string }> = [
-  { value: "active", label: "显示进行中的任务" },
-  { value: "completed", label: "显示已完成的任务" },
-  { value: "paused", label: "显示已暂停的任务" },
+  { value: "active", label: "进行中" },
+  { value: "completed", label: "已完成" },
+  { value: "paused", label: "已暂停" },
 ];
 
 export interface DeadlinesPageProps {
@@ -101,23 +101,31 @@ export function DeadlinesPage({ index, filter, onFilterChange, focusKey, onFocus
     </header>
 
     <div className="deadline-filters" role="group" aria-label="截止事项筛选">
-      <div className="segmented" role="group" aria-label="按类型筛选">
-        {DEADLINE_KIND_ORDER.map((kind) => <button key={kind} aria-pressed={filter.kinds.includes(kind)} className={filter.kinds.includes(kind) ? "active" : ""} onClick={() => toggleKind(kind)}>{DEADLINE_KIND_LABEL[kind]}</button>)}
+      {/* 2×2 网格：第一列是「筛什么」（上行 chips、下行字段），第二列是动作（清除 / 开关）。
+          两行共用第一列，宽度由 chips 决定；下行「项目」用 flex:1 撑满，右边缘自然与「已暂停」对齐。 */}
+      <div className="deadline-filter-main">
+        <div className="deadline-chip-group" role="group" aria-label="按类型筛选">
+          <span className="deadline-filter-label">类型</span>
+          {DEADLINE_KIND_ORDER.map((kind) => <button key={kind} type="button" className="filter-chip" aria-pressed={filter.kinds.includes(kind)} onClick={() => toggleKind(kind)}>{DEADLINE_KIND_LABEL[kind]}</button>)}
+        </div>
+        <div className="deadline-chip-group" role="group" aria-label="按状态筛选">
+          <span className="deadline-filter-label">状态</span>
+          {TASK_STATUS_OPTIONS.map((option) => <button key={option.value} type="button" className="filter-chip" aria-pressed={filter.taskStatuses.includes(option.value)} onClick={() => toggleTaskStatus(option.value)}>{option.label}</button>)}
+        </div>
       </div>
-      <label className="deadline-field">项目
-        <select aria-label="按项目筛选" value={filter.projectId ?? ""} onChange={(event) => patchFilter({ projectId: event.target.value || null })}>
-          <option value="">全部项目</option>
-          {index.workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-        </select>
-      </label>
-      <div className="deadline-status-filter" role="group" aria-label="按状态筛选">
-        {TASK_STATUS_OPTIONS.map((option) => <label key={option.value}><input type="checkbox" checked={filter.taskStatuses.includes(option.value)} onChange={() => toggleTaskStatus(option.value)} />{option.label}</label>)}
-        <label><input type="checkbox" checked={filter.includeReachedMilestones} onChange={(event) => patchFilter({ includeReachedMilestones: event.target.checked })} />显示当前已达成的里程碑</label>
-      </div>
-      <label className="deadline-field">关键字
-        <input aria-label="按关键字筛选" placeholder="搜索标题" value={filter.query} onChange={(event) => patchFilter({ query: event.target.value })} />
-      </label>
       <Button disabled={!filterActive} onClick={() => onFilterChange(DEFAULT_DEADLINE_FILTER)}><Eraser size={15} />清除筛选</Button>
+      <div className="deadline-filter-main">
+        <label className="deadline-field deadline-field-grow">搜索
+          <input aria-label="按标题搜索" placeholder="输入关键字" value={filter.query} onChange={(event) => patchFilter({ query: event.target.value })} />
+        </label>
+        <label className="deadline-field">项目
+          <select aria-label="按项目筛选" value={filter.projectId ?? ""} onChange={(event) => patchFilter({ projectId: event.target.value || null })}>
+            <option value="">全部项目</option>
+            {index.workspace.projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+          </select>
+        </label>
+      </div>
+      <label className="deadline-switch"><input type="checkbox" className="switch" checked={filter.includeReachedMilestones} onChange={(event) => patchFilter({ includeReachedMilestones: event.target.checked })} />含已达成</label>
     </div>
 
     {staleNotice && <p className="deadline-notice" role="status"><RotateCcw size={15} aria-hidden="true" />{staleNotice}</p>}

@@ -179,7 +179,7 @@ test("light and dark shells have no automated accessibility violations", async (
 test("200 percent scaling keeps data actions visible and persists after reload", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 640 });
   await page.getByRole("button", { name: "设置" }).click();
-  await page.getByLabel(/界面缩放/).fill("200");
+  await page.getByRole("slider", { name: "界面缩放" }).fill("200");
   await page.getByRole("button", { name: "数据" }).click();
   for (const name of ["立即备份", "导出", "恢复"]) {
     const button = page.getByRole("button", { name });
@@ -808,7 +808,7 @@ test("phase 4 M10 keeps the deadline filter, focus and scroll across a round tri
   await expect(page.getByText("完成 0/2，未达成")).toBeVisible();
 
   // 非默认筛选：把当前已达成的里程碑显示出来。
-  await page.getByLabel("显示当前已达成的里程碑").check();
+  await page.getByLabel("含已达成").check();
   await expect(page.getByText("阶段检查点")).toBeVisible();
   await expect(page.locator(".deadline-state.currentlyReached")).toHaveCount(1);
   await expect(rows).toHaveCount(15);
@@ -826,9 +826,9 @@ test("phase 4 M10 keeps the deadline filter, focus and scroll across a round tri
   await expect(page.getByRole("heading", { name: "项目", level: 1 })).toBeVisible();
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
 
-  await sidebar(page).getByRole("button", { name: "截止事项" }).click();
+  await sidebar(page).getByRole("button", { name: "截止", exact: true }).click();
   await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
-  await expect(page.getByLabel("显示当前已达成的里程碑")).toBeChecked();
+  await expect(page.getByLabel("含已达成")).toBeChecked();
   await expect(rows).toHaveCount(15);
   expect(Math.abs(await main.evaluate((element) => element.scrollTop) - before)).toBeLessThanOrEqual(2);
   await expect.poll(() => page.evaluate(() => document.activeElement?.closest("[data-deadline-key]")?.getAttribute("data-deadline-key") ?? null)).toBe("task:t-06");
@@ -836,7 +836,7 @@ test("phase 4 M10 keeps the deadline filter, focus and scroll across a round tri
   // 重启（整页重载）后不恢复：筛选与焦点回到默认。
   await page.reload();
   await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
-  await expect(page.getByLabel("显示当前已达成的里程碑")).not.toBeChecked();
+  await expect(page.getByLabel("含已达成")).not.toBeChecked();
   await expect(rows).toHaveCount(14);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0);
 });
@@ -1036,7 +1036,7 @@ test("phase 4 M11 review page has no automated accessibility violations in light
   await seedReview(page);
   await page.setViewportSize({ width: 960, height: 640 });
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByLabel(/界面缩放/).fill("200");
+  await page.getByRole("slider", { name: "界面缩放" }).fill("200");
   await page.getByRole("button", { name: "回顾", exact: true }).click();
   await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 
@@ -1073,13 +1073,13 @@ test("phase 4 M11 review page has no automated accessibility violations in light
  */
 const SCALE_MATRIX = [100, 150, 200];
 const WIDTH_MATRIX = [960, 1200];
-const NAV_ENTRIES = ["今日", "日历", "截止事项", "项目", "回顾", "数据", "设置"];
+const NAV_ENTRIES = ["今日", "日历", "截止", "项目", "回顾", "数据", "设置"];
 
 /** 通过设置页的滑块改应用内缩放；`html` 的 font-size 是百分比的最终落点，用它当判据。 */
 async function setAppScale(page: import("@playwright/test").Page, scale: number) {
   await sidebar(page).getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByRole("heading", { name: "设置", level: 1 })).toBeVisible();
-  await page.getByLabel(/界面缩放/).fill(String(scale));
+  await page.getByRole("slider", { name: "界面缩放" }).fill(String(scale));
   await expect(page.locator("html")).toHaveCSS("font-size", `${(scale / 100) * 16}px`);
   await expect(page.locator("html")).toHaveAttribute("data-scale", scale >= 150 ? "large" : "normal");
 }
@@ -1120,14 +1120,14 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
       await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 
       // 截止页：筛选组与行级入口在缩放下仍然可操作。
-      await sidebar(page).getByRole("button", { name: "截止事项", exact: true }).click();
+      await sidebar(page).getByRole("button", { name: "截止", exact: true }).click();
       await expect(page.getByRole("heading", { name: "截止事项", level: 1 })).toBeVisible();
       expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth), cell).toBeLessThanOrEqual(2);
       // 用键盘路径切换筛选：1200 宽 × 200% 下复选框**第一次**鼠标点击会因为获得焦点
       // 引起的布局位移而落空（详见 `docs/reports/phase-4-p4-09-implementation.md` §7 的
       // S3 记录），第二次正常。这里验证的是「筛选在缩放下可操作」，所以走键盘（Tab 到
       // 复选框后按空格），鼠标路径的缺陷单独记录，不在这里假装不存在。
-      const reached = page.getByLabel("显示当前已达成的里程碑");
+      const reached = page.getByLabel("含已达成");
       await expect(reached, cell).toBeVisible();
       expect((await reached.boundingBox())?.height ?? 0, cell).toBeGreaterThan(0);
       await reached.press("Space");

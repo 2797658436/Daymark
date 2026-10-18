@@ -949,13 +949,13 @@ describe("phase 1 manual alpha", () => {
     // 放行旧请求（深色）：它成功返回，而最新的偏好（浅色）这时才轮到写。
     backend.releaseAll();
     await waitFor(() => expect(backend.writes).toBeGreaterThanOrEqual(2));
-    expect(screen.getByText("正在保存")).toBeVisible();
-    expect(screen.queryByText("已保存到本机")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "正在保存…" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "已保存到本机" })).not.toBeInTheDocument();
 
     await waitFor(async () => {
       backend.releaseAll();
       await new Promise((resolve) => { setTimeout(resolve, 0); });
-      expect(screen.getByText("已保存到本机")).toBeVisible();
+      expect(screen.getByRole("button", { name: "已保存到本机" })).toBeInTheDocument();
     });
     expect(backend.value).toMatchObject({ appearance: "light" });
   });
@@ -1170,7 +1170,7 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "动态效果" }), "reduce");
+    await user.click(screen.getByRole("radio", { name: "减少" }));
     await user.click(screen.getByRole("button", { name: /添加时段/ }));
     expect(screen.getByRole("dialog", { name: "编辑默认时段" })).toBeVisible();
     const weekdayBoxes = screen.getAllByRole("checkbox", { name: "一" });
@@ -1179,6 +1179,50 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(backend.value).toMatchObject({ motion: "reduce" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots).toHaveLength(2));
     expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots[1].weekdays).not.toContain(1);
+  });
+
+  /**
+   * 设置页改成单列设置行后，依赖项用缩进 + 关闭态表达（P4-13 起不用整体透明度）。
+   * 结构可以变，但「父开关没开时子项不可编辑」这条行为不能被样式改动带走。
+   */
+  it("keeps dependent reminder settings disabled until their parent switch is on", async () => {
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    expect(screen.getByLabelText("开始宽限期")).toBeDisabled();
+    expect(screen.getByLabelText("提前分钟数")).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /记录开始／结束本次/ }));
+    expect(screen.getByLabelText("开始宽限期")).toBeEnabled();
+    expect(screen.getByLabelText("提前分钟数")).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /^执行提醒/ }));
+    expect(screen.getByLabelText("提前分钟数")).toBeEnabled();
+  });
+
+  /**
+   * 单项重置：只在偏离默认值的那一行出现，点它只还原这一项。
+   * 位置固定在控件框外的槽位里，所以「没偏离」的行里不该有可点的重置按钮。
+   */
+  it("offers a per-row reset only after that row leaves its default", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    expect(screen.queryByRole("button", { name: "将「主题」恢复默认" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "将「动态效果」恢复默认" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "深色" }));
+    expect(await screen.findByRole("button", { name: "将「主题」恢复默认" })).toBeInTheDocument();
+    // 只出现在被改过的那一行。
+    expect(screen.queryByRole("button", { name: "将「动态效果」恢复默认" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "将「主题」恢复默认" }));
+    const theme = screen.getByRole("radiogroup", { name: "主题" });
+    expect(within(theme).getByRole("radio", { name: "跟随系统" })).toBeChecked();
+    await waitFor(() => expect(backend.value).toMatchObject({ appearance: "system" }));
+    expect(screen.queryByRole("button", { name: "将「主题」恢复默认" })).not.toBeInTheDocument();
   });
 
   it("turns off calendar snapping", async () => {
@@ -1947,7 +1991,7 @@ describe("phase 4 P4-06 deadline view", () => {
   const NAVIGATION: Array<[PageId, string, string]> = [
     ["today", "今日", "今天从下一步开始"],
     ["calendar", "日历", "日历"],
-    ["deadlines", "截止事项", "截止事项"],
+    ["deadlines", "截止", "截止事项"],
     ["projects", "项目", "项目"],
     ["review", "回顾", "本周回顾"],
     ["data", "数据", "数据与安全"],
@@ -2021,7 +2065,7 @@ describe("phase 4 P4-06 deadline view", () => {
       await user.click(screen.getByRole("button", { name: /^定位项目/ }));
       expect(await screen.findByRole("heading", { name: "项目", level: 1 })).toBeVisible();
 
-      await user.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "截止事项" }));
+      await user.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "截止" }));
       await screen.findByRole("heading", { name: "截止事项", level: 1 });
       expect(screen.getByRole("button", { name: "任务" })).toHaveAttribute("aria-pressed", "false");
       expect(deadlineRows()).toEqual(["milestone:m-1", "project:p-1"]);
