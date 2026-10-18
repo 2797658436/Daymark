@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "daymark"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "indexmap 1.9.3",
