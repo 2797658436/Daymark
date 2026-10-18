@@ -482,7 +482,9 @@ describe("phase 1 manual alpha", () => {
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: false, clientY: 300 });
     expect(page).toHaveAttribute("data-calendar-scale", "72");
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: true, clientY: 300 });
-    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "76"));
+    // 滚轮缩放要量一遍所有日轨的几何（getBoundingClientRect × 7）；全量跑测试时
+    // 机器更忙，1s 的默认轮询窗口偶尔不够，这里放宽到 3s。
+    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "76"), { timeout: 3000 });
     await waitFor(() => expect(backend.value).toMatchObject({ calendarScale: { week: 76 } }));
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
   });
@@ -1735,6 +1737,8 @@ it("keeps a failed habit draft and prevents duplicate submission while saving", 
   const dialog = screen.getByRole("dialog", { name: "新建重复习惯" });
   await user.type(within(dialog).getByLabelText("习惯名称"), "每天阅读");
   const save = within(dialog).getByRole("button", { name: "创建习惯" });
+  // 表单可保存性依赖草稿状态；机器忙时它比 user.type 晚一拍落地，直接点会落在禁用态上。
+  await waitFor(() => expect(save).toBeEnabled());
   await user.click(save); await user.click(save);
   expect(createRecurringHabit).toHaveBeenCalledTimes(1);
   expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
@@ -1927,7 +1931,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
-      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull());
+      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull(), { timeout: 3000 });
       expect(readCalendarPositions().day?.minute).toBe(720);
       first.unmount();
 
@@ -1940,7 +1944,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       };
       render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
       await screen.findByRole("button", { name: "日" });
-      await waitFor(() => expect(readCalendarPositions().day).toEqual({ date: "2026-08-06", minute: 300, viewportRatio: 0.25 }));
+      await waitFor(() => expect(readCalendarPositions().day).toEqual({ date: "2026-08-06", minute: 300, viewportRatio: 0.25 }), { timeout: 3000 });
     } finally {
       resetCalendarPositions();
     }
@@ -1962,7 +1966,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       act(() => { axis.scrollTop = 500; axis.dispatchEvent(new Event("scroll")); });
       // 落定防抖 300ms + 采样是异步的：固定等 360ms 在机器忙时还没跑完，`day` 仍是 null，
       // 重负载下会随机红（单独跑与重跑都过）。等条件成立再读，断言值不变。
-      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull());
+      await waitFor(() => expect(readCalendarPositions().day).not.toBeNull(), { timeout: 3000 });
       const remembered = readCalendarPositions().day;
       expect(remembered?.minute).toBeCloseTo((500 + 300 - 40) / 1152 * 1440, 3);
 

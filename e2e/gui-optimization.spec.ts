@@ -212,7 +212,9 @@ test("a real native drag of a scheduled card stays alive across day columns", as
   await dragGuard(page, page.mouse.move(pressX, pressY));
   await dragGuard(page, page.mouse.down());
   // 小位移：这一步指针仍在卡片上，浏览器在此刻决定「拖起来了」。
-  await dragGuard(page, page.mouse.move(pressX + 5, pressY + 3));
+  // 位移必须**明确超过** Chromium 的拖拽阈值（约 5px）：原来的 (+5,+3) 恰好 5.8px，
+  // 时而触发、时而不触发，是这条用例偶发「拖拽根本没有开始」的根因。
+  await dragGuard(page, page.mouse.move(pressX + 10, pressY + 6));
   const afterStart = await page.evaluate(() => ({
     seen: (window as unknown as { __dragSeen: string[] }).__dragSeen.slice(),
     sourcePointerEvents: (() => {
@@ -330,8 +332,14 @@ test("pending-review actions open from the card itself instead of on hover", asy
   // 「待回顾」状态本身就是键盘入口：聚焦后回车能打开同一套动作。
   const trigger = page.locator(".calendar-session.pending-review button.session-review-trigger");
   await expect(trigger).toHaveCount(1);
+  // 关闭浮层后，宿主（OverlayHost）会在**下一帧**把焦点还给打开前的元素（这张卡片）。
+  // 如果在这帧之前聚焦触发按钮，随后那次归还会把焦点抢回卡片，Enter 就落到卡片上，
+  // 打开的是编辑面板 —— 这正是这条用例偶发「面板没出现」的根因。
+  // 先等焦点归位，再自己聚焦，最后用 `locator.press` 把按键直接发给按钮。
+  await expect(card).toBeFocused();
   await trigger.focus();
-  await page.keyboard.press("Enter");
+  await expect(trigger).toBeFocused();
+  await trigger.press("Enter");
   await expect(panel).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
