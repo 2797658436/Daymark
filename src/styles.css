@@ -1014,7 +1014,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 去处太多时折起来：最后一行是开关，展开后补一份完整的名单（可滚动）。 */
 .review-split-more button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: .8rem; }
 .review-split-more button:hover { color: var(--accent-strong); }
-.review-split-popover { width: 16rem; padding: 10px 12px; }
+/* 比 `.floating-panel` 的默认 23rem 更具体，否则宽度会被它盖掉，右边缘就对不上了。 */
+.floating-panel.review-split-popover { width: 16rem; padding: 10px 12px; }
 .review-split-popover-list { display: grid; gap: 6px; max-height: 13rem; overflow: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
 .review-split-popover-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted-strong); font-size: .78rem; }
 .review-donut-wrap { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 132px; height: 132px; }

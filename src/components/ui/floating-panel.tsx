@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { useOptionalOverlayHost, type OverlayKind } from "./overlay-host";
@@ -11,7 +11,7 @@ import { useOptionalOverlayHost, type OverlayKind } from "./overlay-host";
  * 几何（12px 边距、翻转避让、ResizeObserver、视口内滚动）不在本组件内改动范围内：
  * AC01 已通过，属 P4-01 基线。
  */
-export function FloatingPanel({ children, label, onClose, wide = false, anchor: suppliedAnchor, anchorElement, busy = false, titleId, kind = "editor", dismissible, closeOnOutsideClick = false, className }: {
+export function FloatingPanel({ children, label, onClose, wide = false, anchor: suppliedAnchor, anchorElement, busy = false, titleId, kind = "editor", dismissible, closeOnOutsideClick = false, className, style }: {
   children: ReactNode;
   /** 可访问名。`titleId` 存在时改用 `aria-labelledby`，否则回退到 `aria-label`。 */
   label: string;
@@ -36,6 +36,8 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
   closeOnOutsideClick?: boolean;
   /** 额外类名。用来收紧宽度（时间选择浮层比编辑气泡窄）。 */
   className?: string;
+  /** 覆盖尺寸等几何（例如让气泡和它所属的那一栏同宽）。 */
+  style?: CSSProperties;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [trigger] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -152,7 +154,7 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
 
   const labelled = titleId ? { "aria-labelledby": titleId } : { "aria-label": label };
   return createPortal(
-    <div id={layerId} ref={ref} className={["floating-panel", wide ? "floating-panel-wide" : "", className ?? ""].filter(Boolean).join(" ")} role="dialog" aria-modal={kind === "action" ? undefined : "true"} {...labelled}>{children}</div>,
+    <div id={layerId} ref={ref} style={style} className={["floating-panel", wide ? "floating-panel-wide" : "", className ?? ""].filter(Boolean).join(" ")} role="dialog" aria-modal={kind === "action" ? undefined : "true"} {...labelled}>{children}</div>,
     document.body,
   );
 }

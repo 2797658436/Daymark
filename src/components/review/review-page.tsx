@@ -448,6 +448,9 @@ function SplitChart({ entries, titleOf, onOpen }: {
   const [hot, setHot] = useState<string | null>(null);
   const [extraOpen, setExtraOpen] = useState(false);
   const extraAnchor = useRef<HTMLButtonElement | null>(null);
+  // 气泡宽度固定 16rem，打开时按「锚点右边缘 − 面板宽」算左上角，
+  // 让气泡右边缘和「另外 N 个去处」这一行对齐；交给默认的左侧锚定会往右探出去。
+  const [extraAnchorRect, setExtraAnchorRect] = useState<DOMRect | null>(null);
   const visible = entries.slice(0, SPLIT_PREVIEW);
   const rest = entries.slice(SPLIT_PREVIEW);
   const total = entries.reduce((sum, entry) => sum + entry.recordedMs, 0);
@@ -491,7 +494,18 @@ function SplitChart({ entries, titleOf, onOpen }: {
             {/* 去处太多时折进气泡：点开才列全，不占版面、也不把卡片撑长。 */}
             {rest.length > 0 && <li className="review-split-more">
               <span className="review-split-dot" style={{ background: "var(--line-strong)" }} aria-hidden="true" />
-              <button ref={extraAnchor} type="button" aria-expanded={extraOpen} onClick={() => setExtraOpen(true)}>
+              <button ref={extraAnchor} type="button" aria-expanded={extraOpen} onClick={(event) => {
+                // 气泡和「投入去向」这一栏同宽、左右都对齐：左取图例的左边缘，右取整行的右边缘
+                // （含分钟数那一列）。只锚一侧会显得浮在中间。
+                const row = (event.currentTarget.closest("li") ?? event.currentTarget).getBoundingClientRect();
+                const block = event.currentTarget.closest(".review-split")?.querySelector(".review-split-main");
+                const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+                const blockLeft = block ? block.getBoundingClientRect().left : row.right - 16 * rootRem;
+                // 太窄时保住最小宽度，但右边缘仍然钉在同一处 —— 否则右边会探出去。
+                const width = Math.max(12 * rootRem, row.right - blockLeft);
+                setExtraAnchorRect(new DOMRect(row.right - width, row.top, width, row.height));
+                setExtraOpen(true);
+              }}>
                 另外 {rest.length} 个去处<ChevronDown size={13} aria-hidden="true" />
               </button>
               <span className="review-split-value">{formatRecordedMs(restMs)}</span>
@@ -517,7 +531,7 @@ function SplitChart({ entries, titleOf, onOpen }: {
       </div>
     </div>
 
-    {extraOpen && <FloatingPanel kind="action" label={`另外 ${rest.length} 个去处`} anchorElement={extraAnchor.current} closeOnOutsideClick
+    {extraOpen && <FloatingPanel kind="action" label={`另外 ${rest.length} 个去处`} anchor={extraAnchorRect} style={{ width: extraAnchorRect?.width }} closeOnOutsideClick
       className="review-split-popover" onClose={() => setExtraOpen(false)}>
       <ul className="review-split-popover-list">
         {rest.map((entry) => <li key={entry.projectId ?? "independent"}>
