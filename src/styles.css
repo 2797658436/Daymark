@@ -821,7 +821,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-charts { container-type: inline-size; }
 /* 日视图：投入去向（左，固定宽度）与任务明细（右）合成一张卡。 */
 .review-merged { display: grid; gap: 12px; container-type: inline-size; }
-.review-merged-split { display: grid; grid-template-columns: 24rem minmax(0, 1fr); gap: 28px; align-items: start; }
+.review-merged-split { display: grid; grid-template-columns: 24rem minmax(0, 1fr); gap: 28px; align-items: stretch; }
 .review-merged-split > .review-split { border-right: 1px solid var(--line-soft); padding-right: 28px; }
 .review-merged-tasks { display: grid; gap: 12px; align-content: start; min-width: 0; }
 @container (max-width: 52rem) {
@@ -829,7 +829,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
   .review-merged-split > .review-split { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
 }
 /* 日／周：左列两张图，右列是**固定宽度**的投入去向（宽度不随内容伸缩，图例才稳定）。 */
-.review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 28px; align-items: start; }
+.review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 28px; align-items: stretch; }
 .review-charts-col { display: grid; gap: 12px; align-content: start; min-width: 0; }
 .review-charts-row > .review-split { border-left: 1px solid var(--line-soft); padding-left: 28px; }
 .review-charts-main { display: grid; gap: 12px; align-content: start; }
@@ -996,20 +996,28 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-charts-unit { color: var(--muted); font-size: .74rem; }
 .review-split-empty { margin: 0; color: var(--muted); font-size: .78rem; }
 /* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
-.review-split { display: grid; gap: 10px; }
+/* 内容靠上、格子撑满整行：这样竖分隔线才会和左栏一样长。 */
+.review-split { display: grid; gap: 10px; align-content: start; }
 .review-charts > .review-split { border-top: 1px solid var(--line-soft); padding-top: 12px; }
 .review-split-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-.review-split-head strong { font-size: .88rem; }
+.review-split-head strong { font-size: 1rem; font-weight: 600; }
 .review-split-head span { color: var(--muted); font-size: .74rem; }
 .review-split-body { display: flex; align-items: center; gap: 20px; }
-.review-split-list { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-split-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; align-content: start; }
+.review-split-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .review-split-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-inline: -6px; padding: 3px 6px; border-radius: 7px; transition: background .12s ease; }
 .review-split-list li.is-hot { background: var(--accent-softer); }
 .review-split-dot { width: 9px; height: 9px; border-radius: 3px; }
 .review-split-label { min-width: 0; font-size: .8rem; }
 .review-split-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-split-value { color: var(--muted-strong); font-size: .76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.review-split-rest .review-split-label { color: var(--muted); }
+/* 去处太多时折起来：最后一行是开关，展开后补一份完整的名单（可滚动）。 */
+.review-split-more button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: .8rem; }
+.review-split-more button:hover { color: var(--accent-strong); }
+.review-split-more.is-open button { color: var(--accent-strong); }
+.review-split-more.is-open button svg { transform: rotate(180deg); }
+.review-split-extra { display: grid; gap: 4px; max-height: 9rem; overflow: auto; margin: 0; padding: 6px 0 0; border-top: 1px solid var(--line-soft); list-style: none; scrollbar-width: thin; }
+.review-split-extra li { display: flex; justify-content: space-between; gap: 10px; color: var(--muted-strong); font-size: .76rem; }
 .review-donut-wrap { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 132px; height: 132px; }
 .review-donut { width: 100%; height: 100%; overflow: visible; }
 .review-donut-arc { transition: opacity .12s ease; }
@@ -1083,8 +1091,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .76rem; }
 .task-editor-fields form > label > input, .task-editor-fields form > label > .select-shell, .task-editor-fields form > label > .number-field, .task-editor-fields form > label > .date-field { width: 100%; min-width: 0; }
 /* 优先级三段按钮撑满整列，高度和上面的时间输入框对齐（38px）。 */
-.editor-field .segmented { width: 100%; height: 38px; padding: 2px; }
-.editor-field .segmented button { flex: 1 1 0; height: 100%; padding: 0 8px; }
+/* 三段按钮收窄到和上面的数值输入框一样宽（约 8rem），不要拉满整列。 */
+.editor-field .segmented { width: 8rem; height: 38px; padding: 2px; justify-self: start; }
+.editor-field .segmented button { flex: 1 1 0; height: 100%; padding: 0 4px; font-size: .72rem; }
 .editor-field-label { color: var(--muted); font-size: .76rem; }
 .task-editor-panel { width: min(28rem, calc(100vw - 24px)); }
 /* 日期字段：自绘圆角月历，不用原生日期控件。 */
