@@ -13,6 +13,10 @@
   /* 暖杏主色保留（在 UI-SPEC 锁定语义不变的前提下稍降饱和、微调亮色） */
   --accent: #d2693b; --accent-strong: #a94724; --accent-soft: #fbe8da; --accent-softer: #fbf2eb;
   --accent-tint: #f5d8c2; /* 新增：用于节段高亮、文字 tint 等低饱和装饰 */
+  /* 图表分片色板：只用于「投入去向」的圆环与图例。六色都压在中低饱和，
+     和暖杏主色同族，深浅两套各自可辨（相邻分片对比 ≥ 3:1 由顺序保证）。 */
+  --chart-1: #d2693b; --chart-2: #c99a3f; --chart-3: #6f8f6a;
+  --chart-4: #8d7b9e; --chart-5: #5d8a9c; --chart-6: #b0705f;
   /* 滑块把手是「浮起」的表面：浅色主题比轨道亮，深色主题也必须比轨道亮，
      所以不能用 `--panel`（深色下它比 `--panel-strong` 更暗，把手会变成凹坑）。 */
   --thumb-surface: #ffffff; --thumb-border: var(--line-strong);
@@ -49,6 +53,8 @@
   --text: #f2f0eb; --muted: #bbb7ae; --muted-strong: #cdcabf;
   --accent: #ef8b58; --accent-strong: #ffb48d; --accent-soft: #493126; --accent-softer: #3a2618;
   --accent-tint: #5d3a26;
+  --chart-1: #ef8b58; --chart-2: #e0b464; --chart-3: #8fb589;
+  --chart-4: #b09ec2; --chart-5: #7fb3c6; --chart-6: #d38f7c;
   --thumb-surface: #4a463f; --thumb-border: #6f6a61;
   --success: #86cda6; --danger: #ff9a91; --focus: #75c7de;
   --action: #ef9c6b; --action-hover: #ffc09a; --action-text: #23150d;
@@ -813,13 +819,23 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 }
 .review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
 .review-charts { container-type: inline-size; }
-.review-chart-stack { display: grid; gap: 12px; }
 .review-chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
 /* 两列之间给一条分隔线：否则左列的数值会紧挨右列的日期，读成一串。 */
 .review-chart-row > .review-chart-figure + .review-chart-figure { border-left: 1px solid var(--line-soft); padding-left: 28px; }
+/* 日视图：两个数字在左，投入去向的圆环在右。 */
+.review-day-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: start; }
+.review-day-row > .review-split { border-left: 1px solid var(--line-soft); padding-left: 28px; }
+/* 周视图：柱状图在左，日期与数值在右。 */
+.review-chart-body { display: grid; gap: 10px; }
+.review-chart-body.is-side { grid-template-columns: minmax(0, 1fr) minmax(0, 14rem); gap: 24px; align-items: start; }
 @container (max-width: 44rem) {
   .review-chart-row { grid-template-columns: minmax(0, 1fr); }
   .review-chart-row > .review-chart-figure + .review-chart-figure { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+  .review-day-row { grid-template-columns: minmax(0, 1fr); }
+  .review-day-row > .review-split { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+}
+@container (max-width: 36rem) {
+  .review-chart-body.is-side { grid-template-columns: minmax(0, 1fr); }
 }
 .review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .review-outcome-side { display: grid; gap: 14px; align-content: start; }
@@ -924,17 +940,24 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
 .chart-modal-note { margin: 0; color: var(--muted); font-size: .74rem; }
 
-/* 投入去向：横向条，长度直接比较去处；项目名可点进明细。 */
-.review-split { display: grid; gap: 8px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
-.review-split-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.review-split-list li { display: grid; grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) auto; align-items: center; gap: 12px; }
-.review-split-track { height: 10px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
-.review-split-track > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
-.review-split-track.is-rest { background: transparent; box-shadow: none; }
+/* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
+.review-split { display: grid; gap: 10px; }
+.review-charts > .review-split { border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.review-split-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.review-split-head strong { font-size: .88rem; }
+.review-split-head span { color: var(--muted); font-size: .74rem; }
+.review-split-body { display: flex; align-items: center; gap: 24px; }
+.review-split-list { flex: 1 1 auto; min-width: 0; display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.review-split-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.review-split-dot { width: 9px; height: 9px; border-radius: 3px; }
 .review-split-label { min-width: 0; font-size: .8rem; }
 .review-split-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-split-value { color: var(--muted-strong); font-size: .76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .review-split-rest .review-split-label { color: var(--muted); }
+.review-donut { flex: 0 0 auto; display: grid; place-items: center; width: 124px; height: 124px; border-radius: 50%; }
+.review-donut-center { display: grid; place-items: center; width: 82px; height: 82px; border-radius: 50%; background: var(--panel); }
+.review-donut-center strong { font-size: 1.25rem; font-weight: 650; line-height: 1; font-variant-numeric: tabular-nums; }
+.review-donut-center span { color: var(--muted); font-size: .68rem; }
 
 /* ③ 任务／项目明细：行会换行，窄窗口与 200% 缩放下不横向溢出。 */
 .review-detail-rows { display: grid; gap: 8px; }

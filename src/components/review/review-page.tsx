@@ -247,15 +247,27 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
       <section className="surface-card review-charts" aria-labelledby="review-charts-title">
         <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
-        {/* 单日每张图只有一行数值，上下堆叠会拉出一条很长的空白：并排放两列。 */}
-        <div className={period === "day" ? "review-chart-row" : "review-chart-stack"}>
-          <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-          <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-        </div>
-        {review.actual.byProject.length >= 2 && <SplitChart
-          entries={review.actual.byProject}
-          titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
-          onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
+        {/* 单日每张图只有一行数值：两张并排，右边留给「投入去向」的圆环。
+            周／月仍然是上下堆叠（日期多，横向塞不下）。 */}
+        {period === "day"
+          ? <div className="review-day-row">
+            <div className="review-chart-row">
+              <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+              <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+            </div>
+            {review.actual.byProject.length >= 2 && <SplitChart
+              entries={review.actual.byProject}
+              titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+              onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
+          </div>
+          : <>
+            <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+            <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+            {review.actual.byProject.length >= 2 && <SplitChart
+              entries={review.actual.byProject}
+              titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+              onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
+          </>}
       </section>
 
       {/* ③ 任务／项目明细 */}
@@ -331,10 +343,11 @@ function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "com
 }
 
 /**
- * 投入去向：按项目的横向条。
+ * 投入去向：圆环 + 图例。
  *
- * 和上面两张图共用「一个单位」的规矩（分钟），但没有日期维度，所以不画时间轴，
- * 而是用长度直接比较去处。项目名可点，进入该项目在本周期的明细。
+ * 和上面两张图共用「一个单位」的规矩（分钟），但没有日期维度，所以用圆环直接比较
+ * 各部分占多少。圆环本身对辅助技术隐藏（`aria-hidden`），可读的等价物是左边那列图例。
+ * 项目名可点，进入该项目在本周期的明细。
  */
 function SplitChart({ entries, titleOf, onOpen }: {
   entries: { projectId: string | null; recordedMs: number }[];
@@ -343,27 +356,47 @@ function SplitChart({ entries, titleOf, onOpen }: {
 }) {
   const visible = entries.slice(0, SPLIT_PREVIEW);
   const rest = entries.slice(SPLIT_PREVIEW);
-  const max = entries[0]?.recordedMs ?? 1;
+  const total = entries.reduce((sum, entry) => sum + entry.recordedMs, 0);
+
+  // 圆环分片按可见条目依次取色；被合并的「另外 N 个去处」用一档中性色收尾。
+  let cursor = 0;
+  const segments = visible.map((entry, index) => {
+    const from = (cursor / total) * 100;
+    cursor += entry.recordedMs;
+    return `var(--chart-${(index % 6) + 1}) ${from}% ${(cursor / total) * 100}%`;
+  });
+  const restMs = rest.reduce((sum, entry) => sum + entry.recordedMs, 0);
+  if (restMs > 0) segments.push(`var(--line-strong) ${(cursor / total) * 100}% 100%`);
+
+  const label = (entry: { projectId: string | null }, index: number) => {
+    const title = titleOf(entry.projectId);
+    const name = <span className="review-split-name">{title}</span>;
+    return <>
+      <span className="review-split-dot" style={{ background: `var(--chart-${(index % 6) + 1})` }} aria-hidden="true" />
+      {entry.projectId
+        ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${title}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
+        : <span className="review-split-label">{name}</span>}
+    </>;
+  };
+
   return <section className="review-split" aria-labelledby="review-split-title">
-    <div className="review-chart-caption"><strong id="review-split-title">投入去向</strong><span>单位：分钟 · 按项目</span></div>
-    <ul className="review-split-list">
-      {visible.map((entry) => {
-        const title = titleOf(entry.projectId);
-        const label = <span className="review-split-name">{title}</span>;
-        return <li key={entry.projectId ?? "independent"}>
-          {entry.projectId
-            ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${title}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{label}</button>
-            : <span className="review-split-label">{label}</span>}
-          <span className="review-split-track" aria-hidden="true"><span style={{ width: `${Math.max(2, (entry.recordedMs / max) * 100)}%` }} /></span>
+    <div className="review-split-head"><strong id="review-split-title">投入去向</strong><span>按项目 · 共 {formatRecordedMs(total)}</span></div>
+    <div className="review-split-body">
+      <ul className="review-split-list">
+        {visible.map((entry, index) => <li key={entry.projectId ?? "independent"}>
+          {label(entry, index)}
           <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
-        </li>;
-      })}
-      {rest.length > 0 && <li className="review-split-rest">
-        <span className="review-split-label">另外 {rest.length} 个去处</span>
-        <span className="review-split-track is-rest" aria-hidden="true" />
-        <span className="review-split-value">{formatRecordedMs(rest.reduce((sum, entry) => sum + entry.recordedMs, 0))}</span>
-      </li>}
-    </ul>
+        </li>)}
+        {rest.length > 0 && <li className="review-split-rest">
+          <span className="review-split-dot" style={{ background: "var(--line-strong)" }} aria-hidden="true" />
+          <span className="review-split-label">另外 {rest.length} 个去处</span>
+          <span className="review-split-value">{formatRecordedMs(restMs)}</span>
+        </li>}
+      </ul>
+      <div className="review-donut" style={{ background: `conic-gradient(${segments.join(",")})` }} aria-hidden="true">
+        <span className="review-donut-center"><strong>{Math.round(total / 60_000)}</strong><span>分钟</span></span>
+      </div>
+    </div>
   </section>;
 }
 

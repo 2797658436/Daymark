@@ -78,7 +78,8 @@ function pairsForWidth(widthRem: number, rowCount: number) {
 }
 
 function usePairCount(rowCount: number) {
-  const ref = useRef<HTMLElement | null>(null);
+  // 量的是**表格那一格自己的宽度**：周视图并排时右边只有 14rem，只能放一对日期。
+  const ref = useRef<HTMLDivElement | null>(null);
   const [pairs, setPairs] = useState(() => preferredPairs(rowCount));
 
   useLayoutEffect(() => {
@@ -115,6 +116,8 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   const [expanded, setExpanded] = useState(false);
   // 长周期默认收起数值表：月视图 8 行表格会把图表挤到看不见。短周期只有一两行，展开更省事。
   const collapsible = rows.length > 7;
+  // 一周正好 7 行：图放左边、日期与数值放右边，比上下堆叠省一半高度。
+  const sideBySide = !single && rows.length <= 7;
 
   const barStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
@@ -154,14 +157,14 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     </tbody>
   </table>;
 
-  return <figure ref={ref} className={`review-chart-figure${single ? " is-single" : ""}`}>
+  return <figure className={`review-chart-figure${single ? " is-single" : ""}`}>
     <figcaption className="review-chart-caption">
       <strong>{title}</strong>
       <span>单位：{unit}</span>
       {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
     </figcaption>
 
-    {hasValues ? <>
+    {hasValues ? <div className={`review-chart-body${sideBySide ? " is-side" : ""}`}>
       {!single && <div className="review-chart" aria-hidden="true">
         <div className="review-chart-plot">
           <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
@@ -175,11 +178,14 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
       </div>}
 
       {/* 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
-          长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。 */}
-      {collapsible
-        ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
-        : table}
-    </> : <p className="review-chart-empty">{emptyText}</p>}
+          长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。
+          列对数按**这一格自己的宽度**算：并排时右边只有 14rem，只能放一对。 */}
+      <div className="review-chart-slot" ref={ref}>
+        {collapsible
+          ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
+          : table}
+      </div>
+    </div> : <p className="review-chart-empty">{emptyText}</p>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
     {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}
