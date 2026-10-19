@@ -114,15 +114,15 @@ const minutesFigure = () => figures()[0];
 const progressFigure = () => figures()[1];
 /** ③ 明细里的那一行（① 的任务胶囊与它同名，都是同一个下钻入口，所以查询要限定范围）。 */
 const taskRowButton = (title: string) => within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: `查看任务「${title}」的明细` });
-const chartPairs = (figure: HTMLElement) => ({
+const chartPairs = (tableRoot: HTMLElement, figure: HTMLElement = tableRoot) => ({
   columns: Array.from(figure.querySelectorAll<HTMLElement>(".review-chart-column")).map((column) => [column.dataset.chartDate, Number(column.dataset.chartValue)] as const),
   // 数值表按「日期/值」成对排布，一周 7 天会被折成 4 行；这里按文档顺序摊平，
   // 断言仍然逐个日期、逐个数值对齐 —— 压缩的是行数，不是内容。
-  rows: Array.from(figure.querySelectorAll<HTMLElement>("[data-chart-row]")).map((cell) => [cell.dataset.chartRow, cell.nextElementSibling?.textContent] as const),
+  rows: Array.from(tableRoot.querySelectorAll<HTMLElement>("[data-chart-row]")).map((cell) => [cell.dataset.chartRow, cell.nextElementSibling?.textContent] as const),
 });
 
 describe("review page", () => {
-  it("lays the period page out in the spec order and keeps the charts next to their numeric tables", () => {
+  it("lays the period page out in the spec order and keeps a numeric table behind each chart", () => {
     renderPage();
     // ① 成果与待续 → ② 投入和进度图 → ③ 任务／项目明细，口径说明在最后。
     const sections = Array.from(document.querySelectorAll<HTMLElement>(".review-page > section")).map((node) => node.className);
@@ -130,13 +130,15 @@ describe("review page", () => {
     expect(screen.getByRole("heading", { name: "成果与待续", level: 2 })).toBeVisible();
     expect(screen.getByRole("heading", { name: "投入和进度", level: 2 })).toBeVisible();
     expect(screen.getByRole("heading", { name: "任务／项目明细", level: 2 })).toBeVisible();
-    // 两张图、两张表，一一对应。
+    // 两张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
     expect(figures()).toHaveLength(2);
-    expect(document.querySelectorAll(".review-chart-table")).toHaveLength(2);
+    expect(document.querySelectorAll(".review-chart-table")).toHaveLength(0);
+    for (const figure of figures()) expect(within(figure).getByRole("button", { name: "详细" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
   });
 
-  it("keeps one unit per chart and lets the numeric table stand in for the bars", () => {
+  it("opens the weekly table from the 详细 button and keeps one unit per chart", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     // 投入图只用分钟。
     expect(within(minutesFigure()).getByText("单位：分钟")).toBeVisible();
@@ -145,13 +147,20 @@ describe("review page", () => {
     expect(within(progressFigure()).getByText("单位：百分点")).toBeVisible();
     expect(progressFigure().textContent).not.toContain("分钟");
 
-    // 等价数值表与图上的柱逐列一致，不依赖悬停。
-    const minutes = chartPairs(minutesFigure());
+    // 「详细」打开气泡，表与图上的柱逐列一致，不依赖悬停。
+    await user.click(within(minutesFigure()).getByRole("button", { name: "详细" }));
+    const minutesPopover = document.querySelector<HTMLElement>(".review-chart-popover")!;
+    expect(minutesPopover).not.toBeNull();
+    const minutes = chartPairs(minutesPopover, minutesFigure());
     expect(minutes.columns.map(([date]) => date)).toEqual(minutes.rows.map(([date]) => date));
     expect(minutes.columns.map(([, value]) => value)).toEqual([0, 0, 0, 60, 0, 0, 0]);
     expect(minutes.rows.map(([, label]) => label)).toEqual(["未记录", "未记录", "未记录", "60 分钟", "未记录", "未记录", "未记录"]);
+    // 再点页面别处收起。
+    await user.click(screen.getByRole("heading", { name: "成果与待续", level: 2 }));
+    expect(document.querySelector(".review-chart-popover")).toBeNull();
 
-    const progress = chartPairs(progressFigure());
+    await user.click(within(progressFigure()).getByRole("button", { name: "详细" }));
+    const progress = chartPairs(document.querySelector<HTMLElement>(".review-chart-popover")!, progressFigure());
     expect(progress.columns.map(([, value]) => value)).toEqual([0, 0, 0, 20, -30, 0, 0]);
     expect(progress.rows.map(([, label]) => label)).toEqual(["+0 百分点", "+0 百分点", "+0 百分点", "+20 百分点", "-30 百分点", "+0 百分点", "+0 百分点"]);
   });
@@ -233,15 +242,16 @@ describe("review page", () => {
     expect(split.textContent).toContain("30 分钟");
   });
 
-  it("renders a single-day period as one number instead of a full-width bar", () => {
+  it("folds a single day into one card: the ring beside the task rows", () => {
     renderPage({ preferences: { reviewPeriod: "day", reviewAnchorDate: "2026-03-05" } });
-    // 单日没有比较对象：不画柱，数值表直接放大成数字条。
-    expect(minutesFigure().classList.contains("is-single")).toBe(true);
-    expect(minutesFigure().querySelector(".review-chart-plot")).toBeNull();
-    expect(within(minutesFigure()).getByText("60 分钟")).toBeVisible();
-    // 两张单值图上下排在左列，右边留给投入去向的圆环。
-    expect(document.querySelector(".review-charts-row")).not.toBeNull();
-    expect(document.querySelector(".review-charts-main")).not.toBeNull();
+    // 单日没有「按天比较」的意义：不画柱图，投入去向与任务明细合成一张卡。
+    expect(figures()).toHaveLength(0);
+    const merged = document.querySelector<HTMLElement>(".review-merged")!;
+    expect(merged).not.toBeNull();
+    expect(within(merged).getByRole("heading", { name: "投入去向与任务", level: 2 })).toBeVisible();
+    // 只有一个去处时不画圆环，明细独占整行。
+    expect(document.querySelector(".review-merged-split")).toBeNull();
+    expect(within(merged).getByRole("button", { name: "查看任务「Alpha 任务」的明细" })).toBeVisible();
   });
 
   it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", () => {
@@ -334,7 +344,8 @@ describe("review page", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     // 日期明细 → 再点它里面的任务名：日期明细随之卸载，原触发元素不复存在。
-    await user.click(within(minutesFigure()).getByRole("button", { name: "查看 3月5日 的明细" }));
+    await user.click(within(minutesFigure()).getByRole("button", { name: "详细" }));
+    await user.click(within(document.querySelector<HTMLElement>(".review-chart-popover")!).getByRole("button", { name: "查看 3月5日 的明细" }));
     await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getAllByRole("button", { name: "查看任务「Alpha 任务」的明细" })[0]);
     await user.keyboard("{Escape}");
     expect(document.querySelector(".review-drilldown")).toBeNull();

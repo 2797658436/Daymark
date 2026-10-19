@@ -988,10 +988,19 @@ async function seedReview(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 }
 
-/** 某张图的等价数值表里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。
- *  2026-10-19 起数值表按「日期/值」成对排布（周 2 对、月 4 对），值在日期单元格的紧邻兄弟位。 */
-function chartCell(page: import("@playwright/test").Page, figure: number, date: string) {
-  return page.locator(".review-chart-figure").nth(figure).locator(`[data-chart-row="${date}"] + td`);
+/** 周视图的等价数值表在「详细」气泡里：先点开对应那张图的按钮。 */
+async function openWeeklyTable(page: import("@playwright/test").Page, figure: number) {
+  await page.getByRole("button", { name: "详细" }).nth(figure).click();
+  await expect(page.locator(".review-chart-popover")).toBeVisible();
+}
+/** 点页面别处收起气泡（浮层会吞掉外部点击，所以点标题最稳）。 */
+async function closeWeeklyTable(page: import("@playwright/test").Page) {
+  await page.locator(".review-page h1").click();
+  await expect(page.locator(".review-chart-popover")).toHaveCount(0);
+}
+/** 气泡里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。 */
+function chartCell(page: import("@playwright/test").Page, date: string) {
+  return page.locator(`.review-chart-popover [data-chart-row="${date}"] + td`);
 }
 
 test("phase 4 M11 keeps day, week and month summaries checkable against their detail and remembers the choice", async ({ page }) => {
@@ -1006,10 +1015,14 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 百分点");
 
   // ① 汇总能被 ② 的等价数值表核对：投入只算分钟，进度按百分点且含下调。
-  await expect(chartCell(page, 0, "2026-08-04")).toHaveText("60 分钟");
-  await expect(chartCell(page, 0, "2026-08-05")).toHaveText("未记录");
-  await expect(chartCell(page, 1, "2026-08-04")).toHaveText("+20 百分点");
-  await expect(chartCell(page, 1, "2026-08-05")).toHaveText("-30 百分点");
+  await openWeeklyTable(page, 0);
+  await expect(chartCell(page, "2026-08-04")).toHaveText("60 分钟");
+  await expect(chartCell(page, "2026-08-05")).toHaveText("未记录");
+  await closeWeeklyTable(page);
+  await openWeeklyTable(page, 1);
+  await expect(chartCell(page, "2026-08-04")).toHaveText("+20 百分点");
+  await expect(chartCell(page, "2026-08-05")).toHaveText("-30 百分点");
+  await closeWeeklyTable(page);
   // 净负进度：零基线不在底部，并且有文字说明，不用正向热度暗示。
   await expect(page.locator(".review-chart-figure").nth(1).locator(".review-chart-zero")).toHaveAttribute("style", /top: 40%/);
   await expect(page.getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
@@ -1084,10 +1097,12 @@ test("phase 4 M11 review page has no automated accessibility violations in light
   expect(light).toEqual([]);
 
   // 200% 缩放下图表与等价数值表仍然可用，并且不产生横向溢出。
-  await expect(page.locator(".review-chart-table").first()).toBeVisible();
+  await expect(page.locator(".review-chart-figure").first()).toBeVisible();
   const main = page.locator("#main-content");
   expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(2);
-  // 核心路径可完成：从日期下钻再关掉。
+  // 核心路径可完成：打开「详细」气泡 → 从日期下钻 → 关掉。
+  await openWeeklyTable(page, 0);
+  await expect(page.locator(".review-chart-table")).toBeVisible();
   await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
   await expect(page.locator(".review-drilldown")).toBeVisible();
   await page.keyboard.press("Escape");

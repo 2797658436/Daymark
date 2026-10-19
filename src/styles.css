@@ -819,25 +819,25 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 }
 .review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
 .review-charts { container-type: inline-size; }
+/* 日视图：投入去向（左，固定宽度）与任务明细（右）合成一张卡。 */
+.review-merged { display: grid; gap: 12px; container-type: inline-size; }
+.review-merged-split { display: grid; grid-template-columns: 24rem minmax(0, 1fr); gap: 28px; align-items: start; }
+.review-merged-split > .review-split { border-right: 1px solid var(--line-soft); padding-right: 28px; }
+.review-merged-tasks { display: grid; gap: 12px; align-content: start; min-width: 0; }
+@container (max-width: 52rem) {
+  .review-merged-split { grid-template-columns: minmax(0, 1fr); }
+  .review-merged-split > .review-split { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
+}
 /* 日／周：左列两张图，右列是**固定宽度**的投入去向（宽度不随内容伸缩，图例才稳定）。 */
 .review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 28px; align-items: start; }
 .review-charts-row > .review-split { border-left: 1px solid var(--line-soft); padding-left: 28px; }
 .review-charts-main { display: grid; gap: 12px; align-content: start; }
 .review-charts-main > .review-chart-figure + .review-chart-figure { border-top: 1px solid var(--line-soft); padding-top: 12px; }
-/* 图与表并排：标题与「放大」跟着图走，表格在右；两边同高（图的绘图区撑满）。 */
-.review-chart-body { display: grid; gap: 10px; }
-.review-chart-body.is-side { grid-template-columns: minmax(0, 1fr) 20rem; gap: 24px; align-items: stretch; }
-.review-chart-main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 6px; }
-.review-chart-body.is-side .review-chart { height: 100%; grid-template-rows: minmax(0, 1fr) auto; }
-.review-chart-body.is-side .review-chart-plot { height: auto; }
+/* 周视图把数值表折进「详细」气泡后，图独占整列，可以高一点。 */
+.review-chart-figure.is-week .review-chart-plot { height: 172px; }
 @container (max-width: 52rem) {
   .review-charts-row { grid-template-columns: minmax(0, 1fr); }
   .review-charts-row > .review-split { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
-}
-@container (max-width: 40rem) {
-  .review-chart-body.is-side { grid-template-columns: minmax(0, 1fr); }
-  .review-chart-body.is-side .review-chart { height: auto; }
-  .review-chart-body.is-side .review-chart-plot { height: 134px; }
 }
 .review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .review-outcome-side { display: grid; gap: 14px; align-content: start; }
@@ -868,9 +868,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-chart-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .review-chart-caption strong { font-size: .88rem; }
 .review-chart-caption span { color: var(--muted); font-size: .74rem; }
-/* 「放大」固定在标题行右端，不跟其它元素抢位置。 */
-.review-chart-expand { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 9px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .74rem; }
+/* 「详细」与「放大」成组贴在标题行右端。 */
+.review-chart-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.review-chart-expand { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 9px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .74rem; }
 .review-chart-expand:hover { border-color: var(--line-strong); color: var(--accent-strong); }
+/* 「详细」气泡：一周 7 行，一对日期／数值就够。 */
+.review-chart-popover { width: 20rem; max-height: 60vh; overflow: auto; padding: 10px 12px; }
 .review-chart { display: grid; gap: 4px; }
 /* 顶部 34px 是给悬停气泡留的高度：气泡挂在柱顶（自身底边对齐柱顶上方 5px），
    最高的柱子也不会把它顶出画布。overflow: hidden 让气泡不会把 #main-content 撑出
@@ -889,10 +892,17 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-chart-bar.down { background: var(--muted-strong); border-radius: 0 0 4px 4px; }
 .review-chart-bar.flat { background: var(--line-strong); border-radius: 0; }
 .review-chart-ticks { display: flex; gap: 3px; padding-inline: 2px; }
-.review-chart-ticks span { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: center; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.review-chart-ticks > span { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: center; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+.review-chart-ticks .is-short { display: none; }
 /* 刻度只是图的辅助（整块 aria-hidden），挤到一起时就别显示了：数值表逐日都在。
-   阈值用 rem，跟着界面缩放一起走 —— 200% 下 31 个刻度会叠成「1011121314…」。 */
-@container (max-width: 42rem) { .review-chart-ticks { display: none; } }
+   阈值用 rem，跟着界面缩放一起走 —— 200% 下 31 个刻度会叠成「1011121314…」。
+   周视图只有 7 列，退成「周一」仍然放得下，所以不整行隐藏。 */
+@container (max-width: 42rem) {
+  .review-chart-ticks { display: none; }
+  .review-chart-figure.is-week .review-chart-ticks { display: flex; }
+  .review-chart-figure.is-week .review-chart-ticks .is-long { display: none; }
+  .review-chart-figure.is-week .review-chart-ticks .is-short { display: inline; }
+}
 .review-chart-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
 .review-chart-table th, .review-chart-table td { padding: 5px 8px; border-top: 1px solid var(--line-soft); text-align: left; font-weight: 400; }
 .review-chart-table thead th { color: var(--muted); font-size: .72rem; border-top: 0; }

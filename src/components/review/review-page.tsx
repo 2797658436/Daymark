@@ -136,12 +136,15 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     if (period === "week") return `${WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()]} ${date.slice(5, 7)}/${date.slice(8, 10)}`;
     return String(Number(date.slice(8, 10)));
   };
+  /** 200% 缩放下列宽只剩一半：「周一 10/19」会叠在一起，退成「周一」。 */
+  const shortTickOf = (date: string) => period === "week" ? WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()] : undefined;
   const minuteRows: ReviewChartRow[] = review.days.map((day) => ({
     date: day.date,
     value: day.recordedMinutes,
     // 0 分钟说「未记录」：没有记录不等于 0% 执行率，也不画零柱。
     label: day.recordedMinutes > 0 ? `${day.recordedMinutes} 分钟` : "未记录",
     tick: tickOf(day.date),
+    tickShort: shortTickOf(day.date),
     fullLabel: formatDayLabel(day.date),
   }));
   const deltaRows: ReviewChartRow[] = review.days.map((day) => ({
@@ -149,6 +152,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     value: day.progressDelta,
     label: formatPercentPoints(day.progressDelta),
     tick: tickOf(day.date),
+    tickShort: shortTickOf(day.date),
     fullLabel: formatDayLabel(day.date),
   }));
 
@@ -156,6 +160,53 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     const next = period === "month" ? addLocalMonths(anchorDate, direction) : addLocalDays(anchorDate, direction * (period === "week" ? 7 : 1));
     onPreferences({ reviewAnchorDate: next });
   };
+
+  const minutesChart = <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
+  const progressChart = <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
+
+  const splitChart = review.actual.byProject.length >= 2
+    ? <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+      onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />
+    : null;
+
+  const taskRows = review.tasks.length > 0
+    ? <div className="review-detail-rows">{review.tasks.map((detail) => {
+      const task = index.tasksById.get(detail.taskId);
+      return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
+        <div className="review-detail-main">
+          <strong className="review-detail-title">{task
+            ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
+            : <span>来源不可用</span>}</strong>
+          {detail.projectId
+            ? <button type="button" className="review-inline-link" data-review-trigger={`project:${detail.projectId}`} aria-label={`查看项目「${projectTitleOf(detail.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: detail.projectId! }, event.currentTarget)}>{projectTitleOf(detail.projectId)}</button>
+            : <span className="review-muted">独立任务</span>}
+          <span className="review-detail-range">{formatTaskProgressRange(detail)}</span>
+          <span className="review-detail-metric">净变化 {formatPercentPoints(detail.netDelta)}</span>
+          <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
+          {detail.pendingReviewCount > 0 && <span className="review-detail-metric">待回顾 {detail.pendingReviewCount}</span>}
+          {detail.carryover && <span className="muted-chip">待续</span>}
+        </div>
+        {task && <div className="review-detail-actions">
+          <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
+          {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
+          {task.status === "active"
+            ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
+            : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
+        </div>}
+      </article>;
+    })}</div>
+    : <p className="review-muted">本周期没有任务事实。</p>;
+
+  // 明确未推进／跳过／取消安排分别说明：它们是用户显式给出的结果，不是时间流逝的推断。
+  const notAdvanced = review.notAdvanced.count > 0 && <div className="review-not-advanced">
+    <h3>明确未推进与跳过</h3>
+    <ul className="review-detail-list">
+      {review.notAdvanced.missedSessions.map((session) => <li key={session.id}><span className="review-tag">明确未推进</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.skippedSessions.map((session) => <li key={session.id}><span className="review-tag">跳过</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.cancelledSessions.map((session) => <li key={session.id}><span className="review-tag">取消安排</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.skippedOccurrences.map((occurrence) => <li key={occurrence.id}><span className="review-tag">跳过</span>{index.workspace.recurringHabits.find((habit) => habit.id === occurrence.habitId)?.title ?? "来源不可用"}<time>{formatDayLabel(occurrence.localDate)}</time></li>)}
+    </ul>
+  </div>;
 
   return <section className="page-stack review-page" aria-labelledby="review-title">
     <header className="page-header">
@@ -192,7 +243,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     {hasFacts && <>
       {/* ① 成果与待续 */}
       <section className="surface-card review-outcomes" aria-labelledby="review-outcomes-title">
-        <div className="section-heading"><h2 id="review-outcomes-title">成果与待续</h2><span>不评分，不计算连续天数</span></div>
+        <div className="section-heading"><h2 id="review-outcomes-title">成果与待续</h2></div>
         {/* 一行总账替代原来的四段计数句子：同样的数字只出现一次，细节交给下面三块与任务明细。 */}
         <p className="review-outcome-summary">
           {review.progress.changedTaskIds.length} 项有进度变化 · {review.carryoverTaskIds.length} 项仍可继续安排
@@ -251,74 +302,36 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         </div>
       </section>
 
-      {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
-      <section className="surface-card review-charts" aria-labelledby="review-charts-title">
-        <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
-        {/* 日／周：左列是投入和进度（两张图上下排），右列是固定宽度的投入去向圆环。
-            月视图仍上下堆叠 —— 31 天需要整宽。 */}
-        {(period === "day" || period === "week")
-          ? <div className="review-charts-row">
-            <div className="review-charts-main">
-              <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-              <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-            </div>
-            {review.actual.byProject.length >= 2 && <SplitChart
-              entries={review.actual.byProject}
-              titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
-              onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
+      {period === "day"
+        // 单日没有「按天比较」的意义：上面的三个大字已经给了投入与净进度，
+        // 这里只留投入去向与任务明细，合成一张卡（左圆环、右明细）。
+        ? <section className="surface-card review-merged" aria-labelledby="review-merged-title">
+          <div className="section-heading"><h2 id="review-merged-title">投入去向与任务</h2><span>{review.tasks.length} 项有事实</span></div>
+          <div className={splitChart ? "review-merged-split" : undefined}>
+            {splitChart}
+            <div className="review-merged-tasks">{taskRows}{notAdvanced}</div>
           </div>
-          : <>
-            <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-            <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-            {review.actual.byProject.length >= 2 && <SplitChart
-              entries={review.actual.byProject}
-              titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
-              onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
-          </>}
-      </section>
-
-      {/* ③ 任务／项目明细 */}
-      <section className="surface-card review-tasks" aria-labelledby="review-tasks-title">
-        <div className="section-heading"><h2 id="review-tasks-title">任务／项目明细</h2><span>{review.tasks.length} 项有事实</span></div>
-        {review.tasks.length > 0
-          ? <div className="review-detail-rows">{review.tasks.map((detail) => {
-            const task = index.tasksById.get(detail.taskId);
-            return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
-              <div className="review-detail-main">
-                <strong className="review-detail-title">{task
-                  ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
-                  : <span>来源不可用</span>}</strong>
-                {detail.projectId
-                  ? <button type="button" className="review-inline-link" data-review-trigger={`project:${detail.projectId}`} aria-label={`查看项目「${projectTitleOf(detail.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: detail.projectId! }, event.currentTarget)}>{projectTitleOf(detail.projectId)}</button>
-                  : <span className="review-muted">独立任务</span>}
-                <span className="review-detail-range">{formatTaskProgressRange(detail)}</span>
-                <span className="review-detail-metric">净变化 {formatPercentPoints(detail.netDelta)}</span>
-                <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
-                {detail.pendingReviewCount > 0 && <span className="review-detail-metric">待回顾 {detail.pendingReviewCount}</span>}
-                {detail.carryover && <span className="muted-chip">待续</span>}
+        </section>
+        : <>
+          {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
+          <section className="surface-card review-charts" aria-labelledby="review-charts-title">
+            <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
+            {/* 周视图把图与投入去向并排；月视图 31 列需要整宽，圆环放在下面。 */}
+            {period === "week"
+              ? <div className="review-charts-row">
+                <div className="review-charts-main">{minutesChart}{progressChart}</div>
+                {splitChart}
               </div>
-              {task && <div className="review-detail-actions">
-                <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
-                {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
-                {task.status === "active"
-                  ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
-                  : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
-              </div>}
-            </article>;
-          })}</div>
-          : <p className="review-muted">本周期没有任务事实。</p>}
+              : <>{minutesChart}{progressChart}{splitChart}</>}
+          </section>
 
-        {/* 明确未推进／跳过／取消安排分别说明：它们是用户显式给出的结果，不是时间流逝的推断。 */}
-        {review.notAdvanced.count > 0 && <div className="review-not-advanced">
-          <h3>明确未推进与跳过</h3>
-          <ul className="review-detail-list">
-            {review.notAdvanced.missedSessions.map((session) => <li key={session.id}><span className="review-tag">明确未推进</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-            {review.notAdvanced.skippedSessions.map((session) => <li key={session.id}><span className="review-tag">跳过</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-            {review.notAdvanced.cancelledSessions.map((session) => <li key={session.id}><span className="review-tag">取消安排</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-            {review.notAdvanced.skippedOccurrences.map((occurrence) => <li key={occurrence.id}><span className="review-tag">跳过</span>{index.workspace.recurringHabits.find((habit) => habit.id === occurrence.habitId)?.title ?? "来源不可用"}<time>{formatDayLabel(occurrence.localDate)}</time></li>)}
-          </ul>
-        </div>}
-      </section>
+          {/* ③ 任务／项目明细 */}
+          <section className="surface-card review-tasks" aria-labelledby="review-tasks-title">
+            <div className="section-heading"><h2 id="review-tasks-title">任务／项目明细</h2><span>{review.tasks.length} 项有事实</span></div>
+            {taskRows}
+            {notAdvanced}
+          </section>
+        </>}
     </>}
 
     {selection && <ReviewDetail containerRef={detailRef} index={index} review={review} selection={selection} projectId={projectId}

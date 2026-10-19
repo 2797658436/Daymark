@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Maximize2, X } from "lucide-react";
+import { List, Maximize2, X } from "lucide-react";
 
+import { FloatingPanel } from "../ui/floating-panel";
 import { useOverlayLayer } from "../ui/overlay-host";
 
 /**
@@ -41,6 +42,8 @@ export interface ReviewChartRow {
   label: string;
   /** 图下方的短刻度（周／月是日号，日是当天日期）。 */
   tick: string;
+  /** 容器很窄时用的更短刻度（周视图「周一 10/19」→「周一」）。缺省时沿用 `tick`。 */
+  tickShort?: string;
   /** 数值表里的完整日期。 */
   fullLabel: string;
 }
@@ -114,10 +117,12 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   const { ref, pairs } = usePairCount(rows.length);
   const single = rows.length === 1;
   const [expanded, setExpanded] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailAnchor = useRef<HTMLButtonElement | null>(null);
   // 长周期默认收起数值表：月视图 8 行表格会把图表挤到看不见。短周期只有一两行，展开更省事。
   const collapsible = rows.length > 7;
-  // 一周正好 7 行：图放左边、日期与数值放右边，比上下堆叠省一半高度。
-  const sideBySide = !single && rows.length <= 7;
+  // 一周只有 7 天：数值表折进「详细」气泡，图独占整列；月视图仍然是常驻的折叠表。
+  const popoverTable = !single && rows.length <= 7;
 
   const barStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
@@ -132,35 +137,44 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     return { bottom: `${100 - zeroPercent}%` };
   };
 
-  const rowGroups: ReviewChartRow[][] = [];
-  for (let index = 0; index < rows.length; index += pairs) rowGroups.push(rows.slice(index, index + pairs));
-
+  // 从「详细」气泡里点日期时先收起气泡：否则明细打开后气泡还压在上面，
+  // 一次 Esc 只会关掉气泡，用户要按两次。
   const dateCell = (row: ReviewChartRow) => onOpenDate
-    ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => onOpenDate(row.date, event.currentTarget)}>{row.fullLabel}</button>
+    ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => { setDetailOpen(false); onOpenDate(row.date, event.currentTarget); }}>{row.fullLabel}</button>
     : row.fullLabel;
 
-  const table = <table className={`review-chart-table${pairs > 1 ? " is-multi" : ""}`} aria-label={`${title}（${unit}）等价数值表`}>
-    <thead><tr>
-      {Array.from({ length: pairs }).map((_, index) => <PairHeader key={index} unit={unit} />)}
-    </tr></thead>
-    <tbody>
-      {rowGroups.map((group) => <tr key={group[0].date}>
-        {group.map((row) => <Fragment key={row.date}>
-          <th scope="row" data-chart-row={row.date}>{dateCell(row)}</th>
-          {/* 零值／未记录降到次要色：31 天里通常有 20 多天没有记录，它们不该和真实数值抢注意力。 */}
-          <td data-chart-cell={row.date} className={row.value === 0 ? "is-zero" : undefined}>{row.label}</td>
-        </Fragment>)}
-        {/* 末行不满时用一格跨列补齐：不能补空 <th>（axe 会报 empty-table-header），
-            也不能不补（那一行的分隔线会断在半路）。 */}
-        {pairs - group.length > 0 && <td className="is-empty" colSpan={(pairs - group.length) * 2} />}
-      </tr>)}
-    </tbody>
-  </table>;
+  /** 数值表：列对数由调用方给（页内按可用宽度算，气泡里固定一对）。 */
+  const renderTable = (pairCount: number) => {
+    const groups: ReviewChartRow[][] = [];
+    for (let index = 0; index < rows.length; index += pairCount) groups.push(rows.slice(index, index + pairCount));
+    return <table className={`review-chart-table${pairCount > 1 ? " is-multi" : ""}`} aria-label={`${title}（${unit}）等价数值表`}>
+      <thead><tr>
+        {Array.from({ length: pairCount }).map((_, index) => <PairHeader key={index} unit={unit} />)}
+      </tr></thead>
+      <tbody>
+        {groups.map((group) => <tr key={group[0].date}>
+          {group.map((row) => <Fragment key={row.date}>
+            <th scope="row" data-chart-row={row.date}>{dateCell(row)}</th>
+            {/* 零值／未记录降到次要色：31 天里通常有 20 多天没有记录，它们不该和真实数值抢注意力。 */}
+            <td data-chart-cell={row.date} className={row.value === 0 ? "is-zero" : undefined}>{row.label}</td>
+          </Fragment>)}
+          {/* 末行不满时用一格跨列补齐：不能补空 <th>（axe 会报 empty-table-header），
+              也不能不补（那一行的分隔线会断在半路）。 */}
+          {pairCount - group.length > 0 && <td className="is-empty" colSpan={(pairCount - group.length) * 2} />}
+        </tr>)}
+      </tbody>
+    </table>;
+  };
 
   const caption = <figcaption className="review-chart-caption">
     <strong>{title}</strong>
     <span>单位：{unit}</span>
-    {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
+    <div className="review-chart-actions">
+      {/* 浮层会吞掉「点外面」的事件，所以这里只负责打开；关闭交给点外部、Esc 或明细里的动作。 */}
+      {popoverTable && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
+        onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
+      {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
+    </div>
   </figcaption>;
 
   const plot = !single && <div className="review-chart" aria-hidden="true">
@@ -172,33 +186,35 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
         <span className={`review-chart-tip${index < 2 ? " is-start" : index > rows.length - 3 ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
       </div>)}
     </div>
-    <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>{row.tick}</span>)}</div>
+    <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>
+      <span className="is-long">{row.tick}</span>
+      {row.tickShort && <span className="is-short">{row.tickShort}</span>}
+    </span>)}</div>
   </div>;
 
   // 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
-  // 长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。
-  // 列对数按**这一格自己的宽度**算：并排时右边只有 20rem，只能放一对。
-  const slot = <div className="review-chart-slot" ref={ref}>
+  // 月视图默认收起成一行摘要（表格仍在 DOM 里，键盘能展开）；周视图折进「详细」气泡。
+  const slot = popoverTable ? null : <div className="review-chart-slot" ref={ref}>
     {collapsible
-      ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
-      : table}
+      ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{renderTable(pairs)}</details>
+      : renderTable(pairs)}
   </div>;
 
-  return <figure className={`review-chart-figure${single ? " is-single" : ""}`}>
-    {hasValues && sideBySide
-      // 并排：标题（含「放大」）留在图的这一列，右边才是日期与数值 ——
-      // 否则按钮会飘到卡片最右侧、落在表格上方。
-      ? <div className="review-chart-body is-side">
-        <div className="review-chart-main">{caption}{plot}</div>
-        {slot}
-      </div>
-      : <>
-        {caption}
-        {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
-      </>}
+  return <figure className={`review-chart-figure${single ? " is-single" : ""}${popoverTable ? " is-week" : ""}`}>
+    {caption}
+    {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
     {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}
+
+    {/* 周视图的数值表：「详细」按钮打开气泡，表格仍然是可键盘到达的等价物。 */}
+    {detailOpen && <FloatingPanel kind="action" label={`${title}每日数值`} anchorElement={detailAnchor.current} closeOnOutsideClick
+      className="review-chart-popover" onClose={() => setDetailOpen(false)}>
+      {/* 宿主在时会统一处理 Esc；这里再兜一层，让页面单独渲染（测试、嵌入）时也能关。 */}
+      <div onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setDetailOpen(false); } }}>
+        {renderTable(1)}
+      </div>
+    </FloatingPanel>}
 
     {expanded && <ExpandedChart title={title} unit={unit} rows={rows} signed={signed} zeroPercent={zeroPercent} maxUp={maxUp} maxDown={maxDown} onClose={() => setExpanded(false)} />}
   </figure>;
