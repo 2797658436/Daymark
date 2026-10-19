@@ -1014,10 +1014,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 去处太多时折起来：最后一行是开关，展开后补一份完整的名单（可滚动）。 */
 .review-split-more button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: .8rem; }
 .review-split-more button:hover { color: var(--accent-strong); }
-.review-split-more.is-open button { color: var(--accent-strong); }
-.review-split-more.is-open button svg { transform: rotate(180deg); }
-.review-split-extra { display: grid; gap: 4px; max-height: 9rem; overflow: auto; margin: 0; padding: 6px 0 0; border-top: 1px solid var(--line-soft); list-style: none; scrollbar-width: thin; }
-.review-split-extra li { display: flex; justify-content: space-between; gap: 10px; color: var(--muted-strong); font-size: .76rem; }
+.review-split-popover { width: 16rem; padding: 10px 12px; }
+.review-split-popover-list { display: grid; gap: 6px; max-height: 13rem; overflow: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
+.review-split-popover-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted-strong); font-size: .78rem; }
 .review-donut-wrap { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 132px; height: 132px; }
 .review-donut { width: 100%; height: 100%; overflow: visible; }
 .review-donut-arc { transition: opacity .12s ease; }
@@ -1095,7 +1094,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .editor-field .segmented { width: 8rem; height: 38px; padding: 2px; justify-self: start; }
 .editor-field .segmented button { flex: 1 1 0; height: 100%; padding: 0 4px; font-size: .72rem; }
 .editor-field-label { color: var(--muted); font-size: .76rem; }
-.task-editor-panel { width: min(28rem, calc(100vw - 24px)); }
+.task-editor-panel { width: min(23rem, calc(100vw - 24px)); }
 /* 日期字段：自绘圆角月历，不用原生日期控件。 */
 .date-field { position: relative; display: inline-flex; align-items: center; width: 100%; }
 .date-field-button { display: inline-flex; align-items: center; gap: 7px; width: 100%; min-height: 38px; padding: 0 32px 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: left; }

@@ -2,6 +2,7 @@ import { ChartNoAxesColumnIncreasing, ChevronDown, Eraser, List, Maximize2, Penc
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
+import { FloatingPanel } from "../ui/floating-panel";
 import { ReviewChart, type ReviewChartRow } from "./review-chart";
 import { ReviewDetail, formatDayLabel, type ReviewSelection } from "./review-detail";
 import { ReviewPeriodPicker } from "./review-period-picker";
@@ -445,7 +446,8 @@ function SplitChart({ entries, titleOf, onOpen }: {
   onOpen: (projectId: string | null, trigger: HTMLElement) => void;
 }) {
   const [hot, setHot] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
+  const [extraOpen, setExtraOpen] = useState(false);
+  const extraAnchor = useRef<HTMLButtonElement | null>(null);
   const visible = entries.slice(0, SPLIT_PREVIEW);
   const rest = entries.slice(SPLIT_PREVIEW);
   const total = entries.reduce((sum, entry) => sum + entry.recordedMs, 0);
@@ -486,21 +488,15 @@ function SplitChart({ entries, titleOf, onOpen }: {
                 ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
                 : <span className="review-split-label">{name}</span>);
             })}
-            {/* 去处太多时先折起来：一行一个的完整列表点开才出现，避免把卡片拉得很长。 */}
-            {rest.length > 0 && <li className={`review-split-more${showAll ? " is-open" : ""}`}>
+            {/* 去处太多时折进气泡：点开才列全，不占版面、也不把卡片撑长。 */}
+            {rest.length > 0 && <li className="review-split-more">
               <span className="review-split-dot" style={{ background: "var(--line-strong)" }} aria-hidden="true" />
-              <button type="button" aria-expanded={showAll} onClick={() => setShowAll((open) => !open)}>
+              <button ref={extraAnchor} type="button" aria-expanded={extraOpen} onClick={() => setExtraOpen(true)}>
                 另外 {rest.length} 个去处<ChevronDown size={13} aria-hidden="true" />
               </button>
               <span className="review-split-value">{formatRecordedMs(restMs)}</span>
             </li>}
           </ul>
-          {showAll && rest.length > 0 && <ul className="review-split-extra">
-            {rest.map((entry) => <li key={entry.projectId ?? "independent"}>
-              <span className="review-split-name">{titleOf(entry.projectId)}</span>
-              <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
-            </li>)}
-          </ul>}
         </div>}
       <div className="review-donut-wrap">
         <svg className="review-donut" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
@@ -520,6 +516,16 @@ function SplitChart({ entries, titleOf, onOpen }: {
         </span>
       </div>
     </div>
+
+    {extraOpen && <FloatingPanel kind="action" label={`另外 ${rest.length} 个去处`} anchorElement={extraAnchor.current} closeOnOutsideClick
+      className="review-split-popover" onClose={() => setExtraOpen(false)}>
+      <ul className="review-split-popover-list">
+        {rest.map((entry) => <li key={entry.projectId ?? "independent"}>
+          <span className="review-split-name">{titleOf(entry.projectId)}</span>
+          <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
+        </li>)}
+      </ul>
+    </FloatingPanel>}
   </section>;
 }
 
