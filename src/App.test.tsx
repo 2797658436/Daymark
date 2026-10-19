@@ -894,12 +894,13 @@ describe("phase 1 manual alpha", () => {
       return node as HTMLElement;
     });
     await user.selectOptions(within(popover).getByRole("combobox", { name: "项目" }), "project-1");
-    const dateInput = within(popover).getByLabelText("截止日期") as HTMLInputElement;
-    fireEvent.change(dateInput, { target: { value: "2026-08-02" } });
-    fireEvent.blur(dateInput);
+    // 截止日期改成了自绘月历：用「明日」快捷值，避免依赖当前月份。
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const expected = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    await user.click(within(popover).getByRole("button", { name: "明日" }));
     expect(native.updateTask).not.toHaveBeenCalled();
     await user.click(within(popover).getByRole("button", { name: "保存任务" }));
-    await waitFor(() => expect(native.updateTask).toHaveBeenCalledWith(expect.objectContaining({ deadlineLocal: "2026-08-02" })));
+    await waitFor(() => expect(native.updateTask).toHaveBeenCalledWith(expect.objectContaining({ deadlineLocal: expected })));
   });
 
   it("keeps changed settings visible and reports an unsaved write", async () => {
@@ -2145,8 +2146,10 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
       expect(await screen.findByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "月" }));
-      await user.click(screen.getByRole("button", { name: "上一周期" }));
-      await waitFor(() => expect(backend.value).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-05" }));
+      // 不再用左右箭头：点「选择日期」在日历里跳到上个月。
+      await user.click(screen.getByRole("button", { name: "选择日期" }));
+      await user.click(within(document.querySelector<HTMLElement>(".review-picker")!).getByRole("button", { name: "7 月" }));
+      await waitFor(() => expect(backend.value).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-01" }));
       expect(screen.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
 
       first.unmount();

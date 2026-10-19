@@ -1,10 +1,11 @@
-import { ChartNoAxesColumnIncreasing, ChevronLeft, ChevronRight, Eraser, Pencil, Sparkles } from "lucide-react";
+import { ChartNoAxesColumnIncreasing, Eraser, Pencil, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
 import { ReviewChart, type ReviewChartRow } from "./review-chart";
 import { ReviewDetail, formatDayLabel, type ReviewSelection } from "./review-detail";
-import { addLocalDays, addLocalMonths, localDateOf } from "../../lib/deadlines";
+import { ReviewPeriodPicker } from "./review-period-picker";
+import { localDateOf } from "../../lib/deadlines";
 import {
   REVIEW_PERIOD_LABEL, buildReviewFromIndex, formatPercentPoints, formatRecordedMs, formatTaskProgressRange,
   type ReviewPeriod, type ReviewResult,
@@ -89,6 +90,16 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     const node = detailRef.current;
     if (typeof node?.scrollIntoView === "function") node.scrollIntoView({ block: "nearest" });
     node?.focus({ preventScroll: true });
+    // 从「详细」气泡里下钻时，浮层关闭会由宿主在下一帧把焦点还给它的触发按钮。
+    // 明细必须保住焦点，否则 Esc 落不到自己的处理函数里 —— 所以要排在宿主那一帧之后
+    // 再补一次（宿主在「层数归零」的 effect 里排 rAF，比这里晚一帧才排上）。
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        if (node?.isConnected && !node.contains(document.activeElement)) node.focus({ preventScroll: true });
+      });
+    });
+    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
   }, [selection]);
 
   // 滚动位置只在内存里跟手记录：不写 Store，也不触发重渲染。
@@ -156,13 +167,32 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     fullLabel: formatDayLabel(day.date),
   }));
 
-  const shiftPeriod = (direction: -1 | 1) => {
-    const next = period === "month" ? addLocalMonths(anchorDate, direction) : addLocalDays(anchorDate, direction * (period === "week" ? 7 : 1));
-    onPreferences({ reviewAnchorDate: next });
-  };
+  // 投入与净进度共用一张图：同一批日期、同一个时间轴，切成两个数值看。
+  // 合并后省掉一整行，也避免两张图各自的坐标轴互相对齐。
+  const [metric, setMetric] = useState<"minutes" | "delta">("minutes");
+  const isMinutes = metric === "minutes";
 
-  const minutesChart = <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
-  const progressChart = <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
+  const weekDetail = period === "week" ? review.days.map((day) => ({
+    date: day.date,
+    fullLabel: formatDayLabel(day.date),
+    weekday: WEEKDAY_LABEL[new Date(`${day.date}T12:00:00`).getDay()],
+    minutes: day.recordedMinutes > 0 ? `${day.recordedMinutes} 分钟` : "未记录",
+    delta: formatPercentPoints(day.progressDelta),
+  })) : undefined;
+
+  const mergedChart = <ReviewChart
+    title={isMinutes ? "实际投入" : "净进度变化"}
+    unit={isMinutes ? "分钟" : "百分点"}
+    rows={isMinutes ? minuteRows : deltaRows}
+    signed={!isMinutes}
+    emptyText={isMinutes ? "本周期没有记录实际投入，因此不绘制全零图表。" : "本周期没有进度变化。"}
+    baselineNote={isMinutes ? undefined : "零基线以上是上调，以下是下调；下调如实显示，不代表失败。"}
+    headerSlot={<div className="segmented review-metric-switch" role="group" aria-label="图表数值">
+      <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
+      <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
+    </div>}
+    splitDetail={weekDetail}
+    onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
 
   const splitChart = review.actual.byProject.length >= 2
     ? <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
@@ -218,8 +248,9 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <div className="segmented" role="group" aria-label="回顾周期">
           {PERIODS.map((option) => <button key={option} aria-pressed={period === option} className={period === option ? "active" : ""} onClick={() => onPreferences({ reviewPeriod: option })}>{REVIEW_PERIOD_LABEL[option]}</button>)}
         </div>
-        <Button aria-label="上一周期" onClick={() => shiftPeriod(-1)}><ChevronLeft size={15} /></Button>
-        <Button aria-label="下一周期" onClick={() => shiftPeriod(1)}><ChevronRight size={15} /></Button>
+        {/* 不再用左右箭头翻页：点日期打开日历，在日历里直接跳到想看的那一天／那一周／那一个月。 */}
+        <ReviewPeriodPicker period={period} anchorDate={anchorDate} today={today}
+          onSelect={(nextPeriod, nextAnchor) => onPreferences({ reviewPeriod: nextPeriod, reviewAnchorDate: nextAnchor })} />
         {!review.days.some((day) => day.date === today) && <Button onClick={() => onPreferences({ reviewAnchorDate: null })}>回到当前周期</Button>}
       </div>
     </header>
@@ -313,16 +344,16 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
           </div>
         </section>
         : <>
-          {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
+          {/* ② 投入和进度图：一张图、一个单位，切换看投入还是净进度 */}
           <section className="surface-card review-charts" aria-labelledby="review-charts-title">
-            <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
+            <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2></div>
             {/* 周视图把图与投入去向并排；月视图 31 列需要整宽，圆环放在下面。 */}
             {period === "week"
               ? <div className="review-charts-row">
-                <div className="review-charts-main">{minutesChart}{progressChart}</div>
+                {mergedChart}
                 {splitChart}
               </div>
-              : <>{minutesChart}{progressChart}{splitChart}</>}
+              : <>{mergedChart}{splitChart}</>}
           </section>
 
           {/* ③ 任务／项目明细 */}
@@ -337,11 +368,6 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     {selection && <ReviewDetail containerRef={detailRef} index={index} review={review} selection={selection} projectId={projectId}
       onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
       onOpenTask={(taskId, trigger) => openDetail({ kind: "task", id: taskId }, trigger)} />}
-
-    {hasFacts && <section className="surface-card review-notes" aria-labelledby="review-notes-title">
-      <div className="section-heading"><h2 id="review-notes-title">口径说明</h2></div>
-      <ul>{review.notes.map((note) => <li key={note}>{note}</li>)}</ul>
-    </section>}
   </section>;
 }
 

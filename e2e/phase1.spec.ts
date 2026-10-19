@@ -998,9 +998,9 @@ async function closeWeeklyTable(page: import("@playwright/test").Page) {
   await page.locator(".review-page h1").click();
   await expect(page.locator(".review-chart-popover")).toHaveCount(0);
 }
-/** 气泡里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。 */
-function chartCell(page: import("@playwright/test").Page, date: string) {
-  return page.locator(`.review-chart-popover [data-chart-row="${date}"] + td`);
+/** 气泡里那一行的第几列：0＝星期，1＝投入时间，2＝百分点。 */
+function chartCell(page: import("@playwright/test").Page, date: string, column: number) {
+  return page.locator(`.review-chart-popover tr:has([data-chart-row="${date}"]) td`).nth(column);
 }
 
 test("phase 4 M11 keeps day, week and month summaries checkable against their detail and remembers the choice", async ({ page }) => {
@@ -1014,18 +1014,18 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect(page.locator('[data-review-stat="actual"]')).toContainText("60 分钟");
   await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 百分点");
 
-  // ① 汇总能被 ② 的等价数值表核对：投入只算分钟，进度按百分点且含下调。
+  // ① 汇总能被 ② 的等价数值表核对：周视图的四列表格同时给出投入与百分点。
   await openWeeklyTable(page, 0);
-  await expect(chartCell(page, "2026-08-04")).toHaveText("60 分钟");
-  await expect(chartCell(page, "2026-08-05")).toHaveText("未记录");
+  await expect(chartCell(page, "2026-08-04", 1)).toHaveText("60 分钟");
+  await expect(chartCell(page, "2026-08-05", 1)).toHaveText("未记录");
+  await expect(chartCell(page, "2026-08-04", 2)).toHaveText("+20 百分点");
+  await expect(chartCell(page, "2026-08-05", 2)).toHaveText("-30 百分点");
   await closeWeeklyTable(page);
-  await openWeeklyTable(page, 1);
-  await expect(chartCell(page, "2026-08-04")).toHaveText("+20 百分点");
-  await expect(chartCell(page, "2026-08-05")).toHaveText("-30 百分点");
-  await closeWeeklyTable(page);
-  // 净负进度：零基线不在底部，并且有文字说明，不用正向热度暗示。
-  await expect(page.locator(".review-chart-figure").nth(1).locator(".review-chart-zero")).toHaveAttribute("style", /top: 40%/);
+  // 切成净进度：零基线不在底部，并且有文字说明，不用正向热度暗示。
+  await page.locator(".review-metric-switch").getByRole("button", { name: "净进度" }).click();
+  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-zero")).toHaveAttribute("style", /top: 40%/);
   await expect(page.getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
+  await page.locator(".review-metric-switch").getByRole("button", { name: "实际投入" }).click();
 
   // ③ 明细与 ② 一致；没有事件的时段任务显示「本周期无进度记录，当前 N%」，不冒充历史。
   const alphaRow = page.locator('[data-review-task="m11-alpha"]');
@@ -1044,10 +1044,11 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
   await expect(page.locator(".review-chart-figure").first().locator("[data-chart-row]")).toHaveCount(31);
 
-  // 翻页写锚点，重启后仍然是同一个月。
-  await page.getByRole("button", { name: "上一周期" }).click();
+  // 在日历里跳到上个月：写锚点，重启后仍然是同一个月。
+  await page.getByRole("button", { name: "选择日期" }).click();
+  await page.locator(".review-picker").getByRole("button", { name: "7 月" }).click();
   await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
-  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-05" });
+  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-01" });
   await page.reload();
   await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
   await expect(page.getByRole("button", { name: "月", exact: true })).toHaveAttribute("aria-pressed", "true");

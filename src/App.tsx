@@ -17,6 +17,7 @@ import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-ho
 import { Button } from "./components/ui/button";
 import { RangeBar } from "./components/ui/range-bar";
 import { NumberField } from "./components/ui/number-field";
+import { DateField } from "./components/ui/date-field";
 import { SelectField } from "./components/ui/select-field";
 import { WeekdayPicker } from "./components/ui/weekday-picker";
 import { TimeField } from "./components/ui/time-picker";
@@ -2078,10 +2079,16 @@ function TaskEditorFields({ task, projects, onUpdate, onCancel, onPhase }: { tas
   return <form aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <label>标题<input required value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
     <label>项目<SelectField value={draft.projectId ?? ""} onChange={(value) => patchDraft({ projectId: value || null })} options={[{ value: "", label: "独立任务" }, ...projects.map((project) => ({ value: project.id, label: project.title }))]} /></label>
-    <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => patchDraft({ deadlineLocal: event.target.value || null })} /></label>
+    <label>截止日期<DateField label="截止日期" value={draft.deadlineLocal} today={toLocalDate(new Date())} onChange={(value) => patchDraft({ deadlineLocal: value })} /></label>
     <label>预计耗时<NumberField label="预计耗时" suffix="分钟" min={5} max={1440} step={15} nullable presets={[30, 60, 120, 180]} value={draft.estimatedMinutes ?? null} onChange={(value) => patchDraft({ estimatedMinutes: value })} /></label>
     <label>单次投入<NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} nullable presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes ?? null} onChange={(value) => patchDraft({ sessionMinutes: value })} /></label>
-    <label>优先级<SelectField value={draft.priority ?? "normal"} onChange={(value) => patchDraft({ priority: value as Task["priority"] })} options={[{ value: "low", label: "低" }, { value: "normal", label: "普通" }, { value: "high", label: "高" }]} /></label>
+    <div className="editor-field"><span className="editor-field-label">优先级</span>
+      <div className="segmented" role="group" aria-label="优先级">
+        {([{ value: "low", text: "低" }, { value: "normal", text: "普通" }, { value: "high", text: "高" }] as const).map((option) => <button key={option.value} type="button"
+          aria-pressed={(draft.priority ?? "normal") === option.value} className={(draft.priority ?? "normal") === option.value ? "active" : ""}
+          onClick={() => patchDraft({ priority: option.value })}>{option.text}</button>)}
+      </div>
+    </div>
     {error && phase === "error" && <p role="alert">{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !draft.title.trim()}>{busy ? "正在保存…" : "保存任务"}</Button></div>
   </form>;
 }

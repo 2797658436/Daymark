@@ -943,15 +943,47 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .chart-modal header span { color: var(--muted); font-size: .76rem; }
 .chart-modal-close { flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--panel-strong); color: var(--muted-strong); }
 .chart-modal-close:hover { color: var(--accent-strong); border-color: var(--line-strong); }
-.chart-modal-scroll { overflow-x: auto; overflow-y: hidden; padding: 6px 0 30px; cursor: grab; touch-action: pan-x; }
+.chart-modal-scroll { overflow-x: auto; overflow-y: hidden; padding: 6px 0 52px; cursor: grab; touch-action: pan-x; }
 .chart-modal-scroll:active { cursor: grabbing; }
 .chart-modal-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 22px; }
 .chart-modal-column { position: relative; flex: 0 0 3.5rem; }
-.chart-modal-value { position: absolute; left: 50%; z-index: 2; margin-bottom: 4px; color: var(--muted-strong); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, -100%); }
+.chart-modal-value { position: absolute; left: 50%; z-index: 2; margin-bottom: 4px; color: var(--muted-strong); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, -100%); }
 .chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
+/* 放大视图里的悬停气泡：挂在刻度下面，不跟柱顶的数值标签抢位置。 */
+.chart-modal-tip { position: absolute; top: calc(100% + 26px); left: 50%; z-index: 3; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); font-size: .7rem; font-weight: 600; white-space: nowrap; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .12s ease; }
+.chart-modal-column:hover .chart-modal-tip { opacity: 1; }
 .chart-modal-note { margin: 0; color: var(--muted); font-size: .74rem; }
 
+/* 周期选择器：一个按钮打开日历，圆角与其它浮层一致。 */
+.review-picker-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel-strong); color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; }
+.review-picker-trigger:hover { border-color: var(--line-strong); color: var(--accent-strong); }
+.review-picker { width: 18.5rem; padding: 12px; display: grid; gap: 10px; border-radius: 14px; }
+.review-picker-mode { justify-self: start; }
+.review-picker-mode button { min-height: 28px; padding: 0 12px; font-size: .76rem; }
+.review-picker-head { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 6px; }
+.review-picker-head strong { text-align: center; font-size: .82rem; font-weight: 600; }
+.review-picker-head button { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted-strong); }
+.review-picker-head button:hover { background: var(--accent-softer); color: var(--accent-strong); }
+.review-picker-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); color: var(--muted); font-size: .68rem; text-align: center; }
+.review-picker-grid { display: grid; gap: 2px; }
+.review-picker-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; padding: 1px; border-radius: 9px; }
+/* 周模式：一行就是一周，悬停整行高亮，点哪一格都落到那一周。 */
+.review-picker-grid.is-week .review-picker-row { cursor: pointer; }
+.review-picker-grid.is-week .review-picker-row:hover { background: var(--accent-softer); }
+.review-picker-grid.is-week .review-picker-row.is-current { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+.review-picker-day { display: grid; place-items: center; min-height: 30px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.review-picker-day:hover { background: var(--accent-soft); color: var(--accent-strong); }
+.review-picker-day.is-empty { pointer-events: none; }
+.review-picker-day.is-today { border-color: var(--line-strong); font-weight: 650; }
+.review-picker-day.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
+.review-picker-months { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.review-picker-months button { min-height: 40px; border: 1px solid transparent; border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .78rem; }
+.review-picker-months button:hover { background: var(--accent-soft); color: var(--accent-strong); }
+.review-picker-months button.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
+.review-picker-hint { margin: 0; color: var(--muted); font-size: .72rem; text-align: center; }
+/* 图表标题行里的「实际投入／净进度」切换。 */
+.review-metric-switch button { min-height: 26px; padding: 0 10px; font-size: .76rem; }
 /* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
 .review-split { display: grid; gap: 10px; }
 .review-charts > .review-split { border-top: 1px solid var(--line-soft); padding-top: 12px; }
@@ -1036,6 +1068,26 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .floating-panel .icon-action { min-width: 40px; min-height: 40px; }
 .floating-panel .habit-popover, .floating-panel .blank-action-bubble { position: static; width: auto; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; box-shadow: none; }
 .task-editor-fields form, .session-edit-fields { display: grid; gap: 12px; }
+/* 任务编辑：左侧标题、右侧控件，两列之间留出间距（此前标签和输入框贴在一起）。 */
+.task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 5.25rem minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); font-size: .76rem; }
+.task-editor-fields form > label > input, .task-editor-fields form > label > .select-shell, .task-editor-fields form > label > .number-field, .task-editor-fields form > label > .date-field { width: 100%; min-width: 0; }
+.editor-field-label { color: var(--muted); font-size: .76rem; }
+/* 日期字段：自绘圆角月历，不用原生日期控件。 */
+.date-field { position: relative; display: inline-flex; align-items: center; width: 100%; }
+.date-field-button { display: inline-flex; align-items: center; gap: 7px; width: 100%; min-height: 38px; padding: 0 32px 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: left; }
+.date-field-button.is-empty { color: var(--muted); }
+.date-field-button:hover { border-color: var(--line-strong); }
+.date-field-clear { position: absolute; right: 5px; display: grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
+.date-field-clear:hover { background: var(--accent-softer); color: var(--accent-strong); }
+/* 悬停浮出快捷天数：只改值，不打开月历。 */
+.date-field-quick { position: absolute; z-index: 6; top: calc(100% + 6px); left: 0; display: flex; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-float); opacity: 0; visibility: hidden; transform: translateY(-2px); transition: opacity .12s ease, transform .12s ease, visibility .12s; }
+.date-field:hover .date-field-quick, .date-field:focus-within .date-field-quick { opacity: 1; visibility: visible; transform: none; transition-delay: .12s; }
+.date-field-quick button { min-height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: var(--panel-strong); color: var(--muted-strong); font-size: .72rem; white-space: nowrap; }
+.date-field-quick button:hover, .date-field-quick button.is-active { background: var(--accent-soft); color: var(--accent-strong); }
+.date-field-panel { width: 18.5rem; padding: 12px; display: grid; gap: 10px; border-radius: 14px; }
+.date-field-panel-foot { display: flex; justify-content: space-between; gap: 8px; }
+.date-field-panel-foot button { min-height: 28px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .74rem; }
+.date-field-panel-foot button:hover { border-color: var(--line-strong); color: var(--accent-strong); }
 .project-list-tools { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
 .project-list-tools > input { flex: 1; min-width: 10rem; }
 .project-list-tools label { display: flex; gap: 8px; align-items: center; }

@@ -111,69 +111,62 @@ function renderPage(options: HarnessOptions = {}) {
 
 const figures = () => Array.from(document.querySelectorAll<HTMLElement>(".review-chart-figure"));
 const minutesFigure = () => figures()[0];
-const progressFigure = () => figures()[1];
 /** ③ 明细里的那一行（① 的任务胶囊与它同名，都是同一个下钻入口，所以查询要限定范围）。 */
 const taskRowButton = (title: string) => within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: `查看任务「${title}」的明细` });
-const chartPairs = (tableRoot: HTMLElement, figure: HTMLElement = tableRoot) => ({
-  columns: Array.from(figure.querySelectorAll<HTMLElement>(".review-chart-column")).map((column) => [column.dataset.chartDate, Number(column.dataset.chartValue)] as const),
-  // 数值表按「日期/值」成对排布，一周 7 天会被折成 4 行；这里按文档顺序摊平，
-  // 断言仍然逐个日期、逐个数值对齐 —— 压缩的是行数，不是内容。
-  rows: Array.from(tableRoot.querySelectorAll<HTMLElement>("[data-chart-row]")).map((cell) => [cell.dataset.chartRow, cell.nextElementSibling?.textContent] as const),
-});
 
 describe("review page", () => {
-  it("lays the period page out in the spec order and keeps a numeric table behind each chart", () => {
+  it("lays the period page out in the spec order and keeps a numeric table behind the chart", () => {
     renderPage();
-    // ① 成果与待续 → ② 投入和进度图 → ③ 任务／项目明细，口径说明在最后。
+    // ① 成果与待续 → ② 投入和进度图 → ③ 任务／项目明细。口径说明已按用户要求移除。
     const sections = Array.from(document.querySelectorAll<HTMLElement>(".review-page > section")).map((node) => node.className);
-    expect(sections.map((name) => name.split(" ").at(-1))).toEqual(["review-outcomes", "review-charts", "review-tasks", "review-notes"]);
+    expect(sections.map((name) => name.split(" ").at(-1))).toEqual(["review-outcomes", "review-charts", "review-tasks"]);
     expect(screen.getByRole("heading", { name: "成果与待续", level: 2 })).toBeVisible();
     expect(screen.getByRole("heading", { name: "投入和进度", level: 2 })).toBeVisible();
     expect(screen.getByRole("heading", { name: "任务／项目明细", level: 2 })).toBeVisible();
-    // 两张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
-    expect(figures()).toHaveLength(2);
+    // 投入与净进度合并成一张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
+    expect(figures()).toHaveLength(1);
     expect(document.querySelectorAll(".review-chart-table")).toHaveLength(0);
-    for (const figure of figures()) expect(within(figure).getByRole("button", { name: "详细" })).toBeVisible();
+    expect(within(minutesFigure()).getByRole("button", { name: "详细" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
   });
 
-  it("opens the weekly table from the 详细 button and keeps one unit per chart", async () => {
+  it("switches one chart between minutes and percentage points and lists both in the 详细 table", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
-    // 投入图只用分钟。
+    const switcher = screen.getByRole("group", { name: "图表数值" });
+    // 默认看投入，只有分钟。
     expect(within(minutesFigure()).getByText("单位：分钟")).toBeVisible();
     expect(minutesFigure().textContent).not.toContain("百分点");
-    // 进度图只用百分点。
-    expect(within(progressFigure()).getByText("单位：百分点")).toBeVisible();
-    expect(progressFigure().textContent).not.toContain("分钟");
 
-    // 「详细」打开气泡，表与图上的柱逐列一致，不依赖悬停。
+    await user.click(within(switcher).getByRole("button", { name: "净进度" }));
+    // 切成百分点后，同一张图只讲百分点。
+    expect(within(minutesFigure()).getByText("单位：百分点")).toBeVisible();
+    expect(minutesFigure().textContent).not.toContain("分钟");
+
+    // 「详细」打开气泡：周视图的表格是四列，投入与百分点并排。
     await user.click(within(minutesFigure()).getByRole("button", { name: "详细" }));
-    const minutesPopover = document.querySelector<HTMLElement>(".review-chart-popover")!;
-    expect(minutesPopover).not.toBeNull();
-    const minutes = chartPairs(minutesPopover, minutesFigure());
-    expect(minutes.columns.map(([date]) => date)).toEqual(minutes.rows.map(([date]) => date));
-    expect(minutes.columns.map(([, value]) => value)).toEqual([0, 0, 0, 60, 0, 0, 0]);
-    expect(minutes.rows.map(([, label]) => label)).toEqual(["未记录", "未记录", "未记录", "60 分钟", "未记录", "未记录", "未记录"]);
-    // 再点页面别处收起。
+    const popover = document.querySelector<HTMLElement>(".review-chart-popover")!;
+    expect([...popover.querySelectorAll("thead th")].map((cell) => cell.textContent)).toEqual(["日期", "星期", "投入时间", "百分点"]);
+    const row = popover.querySelector<HTMLElement>('[data-chart-row="2026-03-05"]')!;
+    expect(row.textContent).toBe("3月5日");
+    expect(row.parentElement!.textContent).toBe("3月5日周四60 分钟+20 百分点");
+    // 点页面别处收起。
     await user.click(screen.getByRole("heading", { name: "成果与待续", level: 2 }));
     expect(document.querySelector(".review-chart-popover")).toBeNull();
-
-    await user.click(within(progressFigure()).getByRole("button", { name: "详细" }));
-    const progress = chartPairs(document.querySelector<HTMLElement>(".review-chart-popover")!, progressFigure());
-    expect(progress.columns.map(([, value]) => value)).toEqual([0, 0, 0, 20, -30, 0, 0]);
-    expect(progress.rows.map(([, label]) => label)).toEqual(["+0 百分点", "+0 百分点", "+0 百分点", "+20 百分点", "-30 百分点", "+0 百分点", "+0 百分点"]);
   });
 
-  it("puts the zero baseline above the bottom when progress went down and explains it in words", () => {
+  it("puts the zero baseline above the bottom when progress went down and explains it in words", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
+    await user.click(within(screen.getByRole("group", { name: "图表数值" })).getByRole("button", { name: "净进度" }));
     // 上调 20、下调 30 → 零基线在容器 40% 处，而不是底部。
-    const zero = progressFigure().querySelector<HTMLElement>(".review-chart-zero")!;
+    const zero = minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!;
     expect(zero.style.top).toBe("40%");
-    expect(progressFigure().querySelectorAll(".review-chart-bar.up")).toHaveLength(1);
-    expect(progressFigure().querySelectorAll(".review-chart-bar.down")).toHaveLength(1);
-    expect(within(progressFigure()).getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
-    // 投入图没有负值，零基线就在底部。
+    expect(minutesFigure().querySelectorAll(".review-chart-bar.up")).toHaveLength(1);
+    expect(minutesFigure().querySelectorAll(".review-chart-bar.down")).toHaveLength(1);
+    expect(within(minutesFigure()).getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
+    // 投入没有负值，零基线就在底部。
+    await user.click(within(screen.getByRole("group", { name: "图表数值" })).getByRole("button", { name: "实际投入" }));
     expect(minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!.style.top).toBe("100%");
   });
 
@@ -254,20 +247,21 @@ describe("review page", () => {
     expect(within(merged).getByRole("button", { name: "查看任务「Alpha 任务」的明细" })).toBeVisible();
   });
 
-  it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", () => {
-    // 只有进度事件与一个计划时段、没有任何实际记录：投入图不画全零柱，只给一句「没有记录」。
+  it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    // 只有进度事件与一个计划时段、没有任何实际记录：投入不画全零柱，只给一句「没有记录」。
     renderPage({ workspace: {
       ...structuredClone(EMPTY_WORKSPACE),
       tasks: [task("t-alpha")],
       progressEvents: [event("e-alpha")],
       executionSessions: [session("s-1", { taskId: "t-alpha", localDate: "2026-03-06", endLocalDate: "2026-03-06", startLocal: "19:00", endLocal: "20:00" })],
     } });
-    expect(figures()).toHaveLength(2);
+    expect(figures()).toHaveLength(1);
     expect(minutesFigure().querySelector(".review-chart-plot")).toBeNull();
     expect(within(minutesFigure()).getByText(/本周期没有记录实际投入/)).toBeVisible();
-    expect(progressFigure().querySelector(".review-chart-plot")).not.toBeNull();
-    // 有计划但没有记录时说「未记录」，不说 0% 执行率。
-    expect(document.querySelector(".review-notes")?.textContent).toContain("本周期有计划但没有任何实际记录");
+    // 切到净进度：同一张图这时才有柱子。
+    await user.click(within(screen.getByRole("group", { name: "图表数值" })).getByRole("button", { name: "净进度" }));
+    expect(minutesFigure().querySelector(".review-chart-plot")).not.toBeNull();
   });
 
   it("keeps the period selector and a neutral empty state when the period has no facts at all", () => {
@@ -283,13 +277,18 @@ describe("review page", () => {
   it("writes the period and the anchor through the preference callback and follows the clock when the anchor is null", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const harness = renderPage();
+    const header = () => within(screen.getByRole("group", { name: "回顾周期" }));
+    const openPicker = () => user.click(document.querySelector<HTMLElement>(".review-picker-trigger")!);
+    const picker = () => within(document.querySelector<HTMLElement>(".review-picker")!);
 
-    await user.click(screen.getByRole("button", { name: "月" }));
+    await user.click(header().getByRole("button", { name: "月" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "month" });
     expect(screen.getByRole("heading", { name: "2026年3月回顾", level: 1 })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "上一周期" }));
-    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-02-07" });
+    // 日历跳到 2 月：月模式给的是年视图，点「2 月」直接换月。
+    await openPicker();
+    await user.click(picker().getByRole("button", { name: "2 月" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "month", reviewAnchorDate: "2026-02-01" });
     expect(screen.getByRole("heading", { name: "2026年2月回顾", level: 1 })).toBeVisible();
 
     // 离开当前周期后出现「回到当前周期」，它把锚点交回给时钟（null）。
@@ -297,11 +296,29 @@ describe("review page", () => {
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: null });
     expect(screen.getByRole("heading", { name: "2026年3月回顾", level: 1 })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "日" }));
+    await user.click(header().getByRole("button", { name: "日" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "day" });
     expect(screen.getByRole("heading", { name: "今日回顾", level: 1 })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "下一周期" }));
-    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-03-08" });
+
+    // 日模式：在月历里点某一天。
+    await openPicker();
+    await user.click(picker().getByRole("button", { name: "2026 年 3 月 12 日" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "day", reviewAnchorDate: "2026-03-12" });
+    expect(screen.getByRole("heading", { name: "3月12日回顾", level: 1 })).toBeVisible();
+  });
+
+  it("keeps the calendar on the month grid for weeks and highlights the whole row", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const harness = renderPage();
+    await user.click(document.querySelector<HTMLElement>(".review-picker-trigger")!);
+    const picker = document.querySelector<HTMLElement>(".review-picker")!;
+    // 周模式仍然是月历，只是每一行代表一周。
+    expect(picker.querySelector(".review-picker-grid.is-week")).not.toBeNull();
+    expect(picker.querySelectorAll(".review-picker-row")).toHaveLength(6);
+    // 当前周那一行有标记。
+    expect(picker.querySelectorAll(".review-picker-row.is-current")).toHaveLength(1);
+    await user.click(within(picker).getByRole("button", { name: "2026 年 3 月 12 日" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: "2026-03-12" });
   });
 
   it("opens the in-page detail with the keyboard, shows the raw facts and gives the focus back on Escape", async () => {
@@ -402,11 +419,10 @@ describe("review page", () => {
     expect(document.querySelector('[data-review-stat="progress"]')).toHaveTextContent("+20 百分点");
   });
 
-  it("shows the engine's notes verbatim instead of inventing its own wording", () => {
+  it("no longer renders the 口径说明 card", () => {
     renderPage();
-    const notes = document.querySelector<HTMLElement>(".review-notes")!;
-    expect(notes.textContent).toContain("进度事件按当前设备本地时区");
-    expect(notes.textContent).toContain("计划仍按保存的本地日期展示");
+    expect(document.querySelector(".review-notes")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "口径说明" })).toBeNull();
   });
 
   it("explains 明确未推进, 跳过 and 取消安排 separately and lists 待回顾", () => {

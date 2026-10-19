@@ -91,7 +91,7 @@ export function NumberField({ id, label, value, min, max, step = 1, suffix, null
           <Plus size={14} aria-hidden="true" />
         </button>
       </span>
-      {usablePresets.length > 0 && <span className="number-presets">{usablePresets.map((preset) => <button key={preset} type="button" className={`number-preset${value === preset ? " is-active" : ""}`} aria-label={`设为 ${preset} ${suffix}`} aria-pressed={value === preset} disabled={disabled} onClick={() => { setDraft(null); onChange(preset); }}>{preset}</button>)}</span>}
+      {usablePresets.length > 0 && <span className="number-presets">{usablePresets.map((preset) => <button key={preset} type="button" className={`number-preset${value === preset ? " is-active" : ""}`} aria-label={`设为 ${preset} ${suffix}`} aria-pressed={value === preset} disabled={disabled} onClick={(event) => { setDraft(null); onChange(preset); /* 鼠标点完交还焦点，气泡只跟悬停走；键盘操作保留焦点。 */ if (event.detail > 0) event.currentTarget.blur(); }}>{preset}</button>)}</span>}
     </span>
   );
 }
