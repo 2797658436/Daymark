@@ -86,6 +86,11 @@ export interface ReviewActualSummary {
   overlapping: boolean;
   /** 没有任何实际投入事实（既无已结束交集，也无进行中记录）。 */
   unrecorded: boolean;
+  /**
+   * 实际投入按项目分组（毫秒，按数值降序）。`projectId` 为 `null` 表示独立任务。
+   * 只统计确有已结束记录的时长：进行中的执行不计入，与 `recordedMs` 口径一致。
+   */
+  byProject: { projectId: string | null; recordedMs: number }[];
 }
 
 export interface ReviewPlanSummary {
@@ -422,6 +427,16 @@ function buildRange(
   const unrecorded = recordedMs === 0 && runningRecords.length === 0;
   const overlapping = unionMs(clipped) < recordedMs;
 
+  // 投入去向：从已经算好的任务明细里按项目累加，不另扫一遍记录；独立任务归到 null 一档。
+  const recordedByProject = new Map<string | null, number>();
+  for (const detail of tasks) {
+    if (detail.recordedMs <= 0) continue;
+    recordedByProject.set(detail.projectId, (recordedByProject.get(detail.projectId) ?? 0) + detail.recordedMs);
+  }
+  const byProject = [...recordedByProject.entries()]
+    .map(([entryProjectId, entryMs]) => ({ projectId: entryProjectId, recordedMs: entryMs }))
+    .sort((left, right) => right.recordedMs - left.recordedMs);
+
   // 周期内到期的里程碑：冻结结果优先，未冻结才按 M7 的唯一规则派生。
   const milestones: ReviewMilestoneSummary[] = index.workspace.projectMilestones
     .filter((milestone) => (projectId === null || milestone.projectId === projectId) && dayIndex.has(milestone.targetLocalDate))
@@ -453,7 +468,7 @@ function buildRange(
     projectId,
     days,
     progress: { netDelta, changedTaskIds, completedTaskIds },
-    actual: { recordedMs, recordedMinutes: Math.round(recordedMs / 60_000), runningRecords, overlapping, unrecorded },
+    actual: { recordedMs, recordedMinutes: Math.round(recordedMs / 60_000), runningRecords, overlapping, unrecorded, byProject },
     plan: { sessionCount },
     pendingReview,
     notAdvanced: { missedSessions, skippedSessions, cancelledSessions, skippedOccurrences, count: missedSessions.length + skippedSessions.length + cancelledSessions.length + skippedOccurrences.length },

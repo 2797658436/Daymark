@@ -1001,9 +1001,9 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
     return raw ? JSON.parse(raw) as { reviewPeriod?: string; reviewAnchorDate?: string | null } : null;
   });
 
-  // 默认停在当前周（锚点为 null 时按当前周期计算）。
-  await expect(page.getByText("实际投入 60 分钟")).toBeVisible();
-  await expect(page.getByText("净进度 -10 百分点")).toBeVisible();
+  // 默认停在当前周（锚点为 null 时按当前周期计算）。三个大字在页面第一行。
+  await expect(page.locator('[data-review-stat="actual"]')).toContainText("60 分钟");
+  await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 百分点");
 
   // ① 汇总能被 ② 的等价数值表核对：投入只算分钟，进度按百分点且含下调。
   await expect(chartCell(page, 0, "2026-08-04")).toHaveText("60 分钟");
@@ -1051,6 +1051,8 @@ test("phase 4 M11 opens the in-page detail, keeps the summary scroll and gives t
   // 月视图的数值表足够长，滚动位置才有意义。
   await page.getByRole("button", { name: "月", exact: true }).click();
   await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  // 月视图的等价数值表默认收起，先展开才能从日期下钻。
+  await page.locator(".review-chart-details summary").first().click();
 
   await main.evaluate((element) => { element.scrollTop = 420; });
   const trigger = page.getByRole("button", { name: "查看 8月4日 的明细" }).first();
@@ -1148,6 +1150,8 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
       expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth), cell).toBeLessThanOrEqual(2);
       await page.getByRole("button", { name: "月", exact: true }).click();
       await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+      // 月视图的数值表默认收起（31 天），展开后才可下钻 —— 收的是排版，不是内容。
+      await page.locator(".review-chart-details summary").first().click();
       await expect(page.locator(".review-chart-table").first()).toBeVisible();
       await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
       await expect(page.locator(".review-drilldown")).toBeVisible();

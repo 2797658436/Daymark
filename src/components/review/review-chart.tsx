@@ -1,4 +1,8 @@
-import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import { Maximize2, X } from "lucide-react";
+
+import { useOverlayLayer } from "../ui/overlay-host";
 
 /**
  * 回顾图表（阶段 4 P4-08，规格 §7.4）。
@@ -9,20 +13,24 @@ import { Fragment, useLayoutEffect, useRef, useState, type CSSProperties } from 
  *    混起来会把「投入了 60 分钟」读成「推进了 60 个百分点」。
  * 2. **零基线**：进度变化可能为负（下调），零基线以上是上调、以下是下调，并且带一句
  *    文字说明。**不用「越深越好」的色阶**：下调是事实，不是失败，也不代表热度。
- * 3. **等价数值表**：每张图都带一张始终可见的数值表，悬停只是增强而不是唯一入口。
+ * 3. **等价数值表**：每张图都带一张数值表，悬停只是增强而不是唯一入口。
  *
  * 只用 CSS 画（规格 §9／§12：本阶段不新增依赖），没有图表库；图表本身对辅助技术
  * 隐藏（`aria-hidden`），可访问的等价物是那张表。
  *
  * 2026-10-19 密度修订（用户反馈「内容太多」）：
  * - 数值表从「每天一行、整行铺满」改成**多列成对排布**：周 2 对、月 4 对。行数减少
- *   一半以上，但每个日期仍然是一个独立的行标题、仍然始终可见、仍然可下钻 ——
- *   这是压缩排版，不是把表格藏起来。
+ *   一半以上，但每个日期仍然是一个独立的行标题、仍然可下钻。
  * - 柱宽封顶 2.75rem 并居中。此前柱宽由「列宽 × 72%」决定，单日周期会画出一根
  *   889px 宽的橙色方块，周视图也有 125px。
- * - 单日周期不画柱：一根柱子没有比较对象，图上的信息量为零。数值表直接作为该周期的
- *   呈现（一行大号数值），规格要求的「日回顾用横向变化条呈现」留给任务明细，不在这里
- *   用柱状图冒充。
+ * - 单日周期不画柱：一根柱子没有比较对象，图上的信息量为零。
+ *
+ * 2026-10-19 第二轮（用户：想看得更细）：
+ * - 悬停柱子显示当天日期与数值（只是增强，不替代数值表）。
+ * - 长周期（月）的数值表默认折叠成一句「每日数值（31 天）」，需要核对时再展开 ——
+ *   内容仍在 DOM 里，键盘也能展开，不是把表格删掉。
+ * - 右上角「放大」把图放进浮层：每根柱固定 3.5rem，日期刻度逐日可读；滚轮／拖动／
+ *   方向键横向平移，不必再挤在一屏里。
  */
 
 export interface ReviewChartRow {
@@ -104,6 +112,9 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   const zeroPercent = span === 0 ? 100 : (maxUp / span) * 100;
   const { ref, pairs } = usePairCount(rows.length);
   const single = rows.length === 1;
+  const [expanded, setExpanded] = useState(false);
+  // 长周期默认收起数值表：月视图 8 行表格会把图表挤到看不见。短周期只有一两行，展开更省事。
+  const collapsible = rows.length > 7;
 
   const barStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
@@ -111,6 +122,12 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     return { bottom: `${100 - zeroPercent}%`, height: "2px" };
   };
   const barClass = (value: number) => `review-chart-bar ${value > 0 ? "up" : value < 0 ? "down" : "flat"}`;
+  /** 气泡挂在柱顶：底部位置 = 柱底 + 柱高。0 值挂在零基线上。 */
+  const tipStyle = (value: number): CSSProperties => {
+    if (value > 0) return { bottom: `${100 - zeroPercent + (value / maxUp) * zeroPercent}%` };
+    if (value < 0) return { top: `${zeroPercent}%` };
+    return { bottom: `${100 - zeroPercent}%` };
+  };
 
   const rowGroups: ReviewChartRow[][] = [];
   for (let index = 0; index < rows.length; index += pairs) rowGroups.push(rows.slice(index, index + pairs));
@@ -119,49 +136,132 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => onOpenDate(row.date, event.currentTarget)}>{row.fullLabel}</button>
     : row.fullLabel;
 
+  const table = <table className={`review-chart-table${pairs > 1 ? " is-multi" : ""}`} aria-label={`${title}（${unit}）等价数值表`}>
+    <thead><tr>
+      {Array.from({ length: pairs }).map((_, index) => <PairHeader key={index} unit={unit} />)}
+    </tr></thead>
+    <tbody>
+      {rowGroups.map((group) => <tr key={group[0].date}>
+        {group.map((row) => <Fragment key={row.date}>
+          <th scope="row" data-chart-row={row.date}>{dateCell(row)}</th>
+          {/* 零值／未记录降到次要色：31 天里通常有 20 多天没有记录，它们不该和真实数值抢注意力。 */}
+          <td data-chart-cell={row.date} className={row.value === 0 ? "is-zero" : undefined}>{row.label}</td>
+        </Fragment>)}
+        {/* 末行不满时用一格跨列补齐：不能补空 <th>（axe 会报 empty-table-header），
+            也不能不补（那一行的分隔线会断在半路）。 */}
+        {pairs - group.length > 0 && <td className="is-empty" colSpan={(pairs - group.length) * 2} />}
+      </tr>)}
+    </tbody>
+  </table>;
+
   return <figure ref={ref} className={`review-chart-figure${single ? " is-single" : ""}`}>
     <figcaption className="review-chart-caption">
       <strong>{title}</strong>
       <span>单位：{unit}</span>
+      {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
     </figcaption>
 
     {hasValues ? <>
       {!single && <div className="review-chart" aria-hidden="true">
         <div className="review-chart-plot">
           <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
-          {rows.map((row) => <div className="review-chart-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+          {rows.map((row, index) => <div className="review-chart-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
             <span className={barClass(row.value)} style={barStyle(row.value)} />
+            {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
+            <span className={`review-chart-tip${index < 2 ? " is-start" : index > rows.length - 3 ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
           </div>)}
         </div>
         <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>{row.tick}</span>)}</div>
       </div>}
 
       {/* 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
-          列对数由周期长度决定，日期仍然逐个可读、可下钻。 */}
-      <table className={`review-chart-table${pairs > 1 ? " is-multi" : ""}`} aria-label={`${title}（${unit}）等价数值表`}>
-        <thead><tr>
-          {Array.from({ length: pairs }).map((_, index) => <PairHeader key={index} unit={unit} />)}
-        </tr></thead>
-        <tbody>
-          {rowGroups.map((group) => <tr key={group[0].date}>
-            {group.map((row) => <Fragment key={row.date}>
-              <th scope="row" data-chart-row={row.date}>{dateCell(row)}</th>
-              {/* 零值／未记录降到次要色：31 天里通常有 20 多天没有记录，它们不该和真实数值抢注意力。 */}
-              <td data-chart-cell={row.date} className={row.value === 0 ? "is-zero" : undefined}>{row.label}</td>
-            </Fragment>)}
-            {/* 末行不满时用一格跨列补齐：不能补空 <th>（axe 会报 empty-table-header），
-                也不能不补（那一行的分隔线会断在半路）。 */}
-            {pairs - group.length > 0 && <td className="is-empty" colSpan={(pairs - group.length) * 2} />}
-          </tr>)}
-        </tbody>
-      </table>
+          长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。 */}
+      {collapsible
+        ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
+        : table}
     </> : <p className="review-chart-empty">{emptyText}</p>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
     {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}
+
+    {expanded && <ExpandedChart title={title} unit={unit} rows={rows} signed={signed} zeroPercent={zeroPercent} maxUp={maxUp} maxDown={maxDown} onClose={() => setExpanded(false)} />}
   </figure>;
 }
 
 function PairHeader({ unit }: { unit: string }) {
   return <><th scope="col">日期</th><th scope="col">{unit}</th></>;
+}
+
+/**
+ * 放大视图：每根柱固定 3.5rem，日期刻度逐日可读。
+ *
+ * 平移三种方式都要有：滚轮（原生非 passive 监听 —— React 把 `onWheel` 注册成 passive，
+ * `preventDefault()` 会被忽略，页面会跟着滚）、拖动（指针捕获）、方向键（容器
+ * `tabIndex=0`，浏览器自带横向滚动）。
+ */
+function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown, onClose }: {
+  title: string; unit: string; rows: ReviewChartRow[]; signed?: boolean;
+  zeroPercent: number; maxUp: number; maxDown: number; onClose: () => void;
+}) {
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const headingId = `review-chart-expanded-${title}`;
+  useOverlayLayer("review-chart-expanded", { kind: "confirm", dismissible: true, onDismiss: onClose });
+
+  useEffect(() => {
+    const node = scroller.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      if (node.scrollWidth <= node.clientWidth) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (delta === 0) return;
+      event.preventDefault();
+      node.scrollLeft += delta;
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => { scroller.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const drag = useRef<{ x: number; left: number } | null>(null);
+  const barStyle = (value: number): CSSProperties => {
+    if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
+    if (value < 0) return { top: `${zeroPercent}%`, height: `${(-value / maxDown) * (100 - zeroPercent)}%` };
+    return { bottom: `${100 - zeroPercent}%`, height: "2px" };
+  };
+  /** 数值标签挂在柱顶（和上面气泡同一套算法）；柱子顶到 100% 时靠图顶留白接住。 */
+  const valueStyle = (value: number): CSSProperties => {
+    if (value > 0) return { bottom: `${100 - zeroPercent + (value / maxUp) * zeroPercent}%` };
+    if (value < 0) return { top: `${zeroPercent}%` };
+    return { bottom: `${100 - zeroPercent}%` };
+  };
+
+  return createPortal(<div className="chart-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby={headingId}>
+      <header>
+        <div><h2 id={headingId}>{title}</h2><span>单位：{unit} · 滚轮、拖动或方向键可左右查看</span></div>
+        <button type="button" className="chart-modal-close" aria-label="关闭放大的图表" onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="chart-modal-scroll" ref={scroller} tabIndex={0} role="group" aria-label={`${title}图表，可左右滚动`}
+        onPointerDown={(event) => { drag.current = { x: event.clientX, left: event.currentTarget.scrollLeft }; event.currentTarget.setPointerCapture(event.pointerId); }}
+        onPointerMove={(event) => { const state = drag.current; if (!state) return; event.currentTarget.scrollLeft = state.left - (event.clientX - state.x); }}
+        onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        onPointerCancel={() => { drag.current = null; }}>
+        <div className="chart-modal-plot" style={{ width: `${rows.length * 3.5}rem` }} aria-hidden="true">
+          <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
+          {rows.map((row) => <div className="chart-modal-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+            <span className="chart-modal-value" style={valueStyle(row.value)}>{row.value === 0 ? "—" : `${row.value > 0 && signed ? "+" : ""}${Math.round(row.value)}`}</span>
+            <span className={`review-chart-bar ${row.value > 0 ? "up" : row.value < 0 ? "down" : "flat"}`} style={barStyle(row.value)} />
+            <span className="chart-modal-tick">{row.fullLabel}</span>
+          </div>)}
+        </div>
+      </div>
+      <p className="chart-modal-note">数值单位是{unit}；「—」表示当天没有记录或没有变化，不是失败。</p>
+    </section>
+  </div>, document.body);
 }

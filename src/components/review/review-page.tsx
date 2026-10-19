@@ -31,6 +31,8 @@ export type { ReviewSelection } from "./review-detail";
 const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
 /** 「继续推进」最多直接列几项；再多就交给下方任务明细，避免摘要变成一墙胶囊。 */
 const CARRYOVER_PREVIEW = 6;
+/** 投入去向最多画几条；再多的合并成一行合计。 */
+const SPLIT_PREVIEW = 6;
 
 export interface ReviewPageProps {
   index: WorkspaceIndex;
@@ -151,7 +153,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   return <section className="page-stack review-page" aria-labelledby="review-title">
     <header className="page-header">
       <div>
-        <span className="eyebrow">{`${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}`}</span>
+        <span className="eyebrow">{period === "day" ? formatDayLabel(review.startDate) : `${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}`}</span>
         <h1 id="review-title" ref={headingRef} tabIndex={-1}>{periodTitle(period, review, today)}</h1>
       </div>
       <div className="header-actions">
@@ -161,13 +163,17 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <Button aria-label="上一周期" onClick={() => shiftPeriod(-1)}><ChevronLeft size={15} /></Button>
         <Button aria-label="下一周期" onClick={() => shiftPeriod(1)}><ChevronRight size={15} /></Button>
         {!review.days.some((day) => day.date === today) && <Button onClick={() => onPreferences({ reviewAnchorDate: null })}>回到当前周期</Button>}
-        <div className="summary-pills">
-          <span>实际投入 {formatRecordedMs(review.actual.recordedMs)}</span>
-          <span>净进度 {formatPercentPoints(review.progress.netDelta)}</span>
-          <span>{review.progress.completedTaskIds.length} 项曾完成</span>
-        </div>
       </div>
     </header>
+
+    {/* 第一行就是三个大字：投入、净进度、曾完成。此前它们缩在页头右侧的胶囊里，
+        和下面的图表、明细争夺同一行空间，读起来像备注而不是结论。
+        用 div + role=group 而不是 section：规格里的三段顺序（成果→图表→明细）不该被摘要打断。 */}
+    {hasFacts && <div className="review-stats" role="group" aria-label="本周期总览">
+      <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} label="实际投入" note={`${review.days.filter((day) => day.recordedMinutes > 0).length} 天有记录`} />
+      <Stat kind="progress" value={formatPercentPoints(review.progress.netDelta)} label="净进度" note={`${review.progress.changedTaskIds.length} 项有进度变化`} />
+      <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项`} label="曾完成" note={`${review.carryoverTaskIds.length} 项仍可继续`} />
+    </div>}
 
     {projectId !== null && <p className="review-scope" role="status">
       <span className="muted-chip">仅统计项目：{projectTitleOf(projectId)}</span>
@@ -218,11 +224,14 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
             <h3>里程碑</h3>
             {review.milestones.length > 0 ? <>
               <p>{review.milestones.length} 个在本周期到期</p>
-              <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId}>
-                <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
-                <time>{formatDayLabel(milestone.targetLocalDate)}</time>
-                <span>{milestone.reached ? "达成" : "未达成"}{milestone.frozen ? " · 到期冻结，后续推进不改写" : " · 当前达成情况"}</span>
-                <span>{milestone.resultText}</span>
+              <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId} className="review-milestone">
+                <div className="review-milestone-head">
+                  <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
+                  <time>{formatDayLabel(milestone.targetLocalDate)}</time>
+                  <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>{milestone.reached ? "达成" : "未达成"}</span>
+                </div>
+                {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
+                <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
               </li>)}</ul>
             </> : <p className="review-muted">本周期没有到期的里程碑。</p>}
             </article>
@@ -235,6 +244,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
         <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
         <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+        {/* 第三张图：投入去向。只有两个以上去处时才画 —— 一个项目的分布没有比较意义。 */}
+        {review.actual.byProject.length >= 2 && <SplitChart
+          entries={review.actual.byProject}
+          titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+          onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />}
       </section>
 
       {/* ③ 任务／项目明细 */}
@@ -295,6 +309,54 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
 /** 与 `App.tsx`／截止页同一套空状态类名；页面是独立模块，不反向依赖应用壳。 */
 function ReviewEmpty({ icon, title, text, action }: { icon: ReactNode; title: string; text: string; action?: ReactNode }) {
   return <div className="empty-state"><span>{icon}</span><strong>{title}</strong><p>{text}</p>{action}</div>;
+}
+
+/** 第一行的三个大字。数值用 `data-review-stat` 标出，方便核对与测试。
+ *  数字与单位分开排：单位跟数字同高会把「1481 分钟」读成两个等重的信息。 */
+function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "completed"; value: string; label: string; note: string }) {
+  const [amount, unit] = value.split(" ");
+  return <div className="review-stat" data-review-stat={kind}>
+    <span className="review-stat-value">{amount}{unit && <>{" "}<span className="review-stat-unit">{unit}</span></>}</span>
+    <span className="review-stat-label">{label}</span>
+    <span className="review-stat-note">{note}</span>
+  </div>;
+}
+
+/**
+ * 投入去向：按项目的横向条。
+ *
+ * 和上面两张图共用「一个单位」的规矩（分钟），但没有日期维度，所以不画时间轴，
+ * 而是用长度直接比较去处。项目名可点，进入该项目在本周期的明细。
+ */
+function SplitChart({ entries, titleOf, onOpen }: {
+  entries: { projectId: string | null; recordedMs: number }[];
+  titleOf: (projectId: string | null) => string;
+  onOpen: (projectId: string | null, trigger: HTMLElement) => void;
+}) {
+  const visible = entries.slice(0, SPLIT_PREVIEW);
+  const rest = entries.slice(SPLIT_PREVIEW);
+  const max = entries[0]?.recordedMs ?? 1;
+  return <section className="review-split" aria-labelledby="review-split-title">
+    <div className="review-chart-caption"><strong id="review-split-title">投入去向</strong><span>单位：分钟 · 按项目</span></div>
+    <ul className="review-split-list">
+      {visible.map((entry) => {
+        const title = titleOf(entry.projectId);
+        const label = <span className="review-split-name">{title}</span>;
+        return <li key={entry.projectId ?? "independent"}>
+          {entry.projectId
+            ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${title}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{label}</button>
+            : <span className="review-split-label">{label}</span>}
+          <span className="review-split-track" aria-hidden="true"><span style={{ width: `${Math.max(2, (entry.recordedMs / max) * 100)}%` }} /></span>
+          <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
+        </li>;
+      })}
+      {rest.length > 0 && <li className="review-split-rest">
+        <span className="review-split-label">另外 {rest.length} 个去处</span>
+        <span className="review-split-track is-rest" aria-hidden="true" />
+        <span className="review-split-value">{formatRecordedMs(rest.reduce((sum, entry) => sum + entry.recordedMs, 0))}</span>
+      </li>}
+    </ul>
+  </section>;
 }
 
 /** 周期标题按周期给出：日＝「8 月 5 日回顾」，月＝「2026 年 8 月回顾」，周＝当前周说「本周」。 */

@@ -168,14 +168,69 @@ describe("review page", () => {
     expect(minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!.style.top).toBe("100%");
   });
 
-  it("packs the month table into column pairs instead of one full-width row per day", () => {
+  it("packs the month table into column pairs instead of one full-width row per day", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage({ preferences: { reviewPeriod: "month" } });
     const table = minutesFigure().querySelector<HTMLElement>(".review-chart-table")!;
     expect(table.classList.contains("is-multi")).toBe(true);
     // 3 月 31 天 → 4 对 → 8 行；日期一个不少，仍然逐个可读、可下钻。
     expect(table.querySelectorAll("tbody tr")).toHaveLength(8);
     expect(table.querySelectorAll("[data-chart-row]")).toHaveLength(31);
+    // 月视图的表格默认收起，展开后日期按钮才可见 —— 收的是排版，不是内容。
+    const details = minutesFigure().querySelector<HTMLDetailsElement>(".review-chart-details")!;
+    expect(details.open).toBe(false);
+    await user.click(within(details).getByText(/每日数值（31 天）/));
+    expect(details.open).toBe(true);
     expect(within(minutesFigure()).getByRole("button", { name: "查看 3月5日 的明细" })).toBeVisible();
+  });
+
+  it("puts the three headline numbers in the first row as large figures", () => {
+    renderPage();
+    const stats = Array.from(document.querySelectorAll<HTMLElement>("[data-review-stat]"));
+    expect(stats.map((node) => node.dataset.reviewStat)).toEqual(["actual", "progress", "completed"]);
+    expect(stats[0]).toHaveTextContent("60 分钟");
+    expect(stats[1]).toHaveTextContent("-10 百分点");
+    expect(stats[2]).toHaveTextContent("0 项");
+    // 页头不再重复这三个数字。
+    expect(document.querySelector(".page-header .summary-pills")).toBeNull();
+  });
+
+  it("labels each bar with its day and value on hover and offers a zoomed, pannable chart", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    // 悬停气泡：视觉增强，但仍逐列带着当天的日期与数值。
+    const tips = Array.from(minutesFigure().querySelectorAll(".review-chart-tip")).map((node) => node.textContent);
+    expect(tips).toContain("3月5日 · 60 分钟");
+    expect(tips).toContain("3月4日 · 未记录");
+
+    await user.click(within(minutesFigure()).getByRole("button", { name: "放大实际投入图表" }));
+    const dialog = screen.getByRole("dialog", { name: "实际投入" });
+    expect(dialog).toBeVisible();
+    // 放大后每根柱都有自己的完整日期刻度。
+    expect(within(dialog).getAllByText("3月5日")).toHaveLength(1);
+    expect(within(dialog).getByText("60")).toBeVisible();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "实际投入" })).toBeNull();
+  });
+
+  it("breaks the investment down by project once there is more than one destination", () => {
+    renderPage({ workspace: {
+      ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "p-1", title: "学会 Rust", deadlineLocal: null }, { id: "p-2", title: "另一个项目", deadlineLocal: null }],
+      tasks: [task("t-alpha", { projectId: "p-1", title: "Alpha 任务" }), task("t-beta", { projectId: "p-2", title: "Beta 任务" })],
+      executionRecords: [
+        record("r-1", { taskId: "t-alpha", actualStartUtc: localToUtc(TODAY, "09:00"), actualEndUtc: localToUtc(TODAY, "10:00") }),
+        record("r-2", { taskId: "t-beta", actualStartUtc: localToUtc(TODAY, "11:00"), actualEndUtc: localToUtc(TODAY, "11:30") }),
+      ],
+    } });
+    const split = document.querySelector<HTMLElement>(".review-split")!;
+    expect(split).not.toBeNull();
+    expect(split.textContent).toContain("投入去向");
+    expect(split.textContent).toContain("学会 Rust");
+    expect(split.textContent).toContain("另一个项目");
+    expect(split.textContent).toContain("60 分钟");
+    expect(split.textContent).toContain("30 分钟");
   });
 
   it("renders a single-day period as one number instead of a full-width bar", () => {
@@ -329,8 +384,8 @@ describe("review page", () => {
     expect(harness.onProjectId).toHaveBeenLastCalledWith("p-1");
     // 项目筛选生效后：顶部出现范围说明，汇总只统计该项目。
     expect(await screen.findByText("仅统计项目：学会 Rust")).toBeVisible();
-    expect(screen.getByText("实际投入 60 分钟")).toBeVisible();
-    expect(screen.getByText("净进度 +20 百分点")).toBeVisible();
+    expect(document.querySelector('[data-review-stat="actual"]')).toHaveTextContent("60 分钟");
+    expect(document.querySelector('[data-review-stat="progress"]')).toHaveTextContent("+20 百分点");
   });
 
   it("shows the engine's notes verbatim instead of inventing its own wording", () => {

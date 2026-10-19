@@ -798,6 +798,18 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
 /* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+/* 第一行的三个大字：投入 / 净进度 / 曾完成。 */
+.review-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line-soft); padding-block: 14px; container-type: inline-size; }
+.review-stat { display: grid; gap: 2px; min-width: 0; }
+.review-stat + .review-stat { border-left: 1px solid var(--line-soft); padding-left: 20px; }
+.review-stat-value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
+.review-stat-unit { color: var(--muted-strong); font-size: .82rem; font-weight: 500; letter-spacing: 0; }
+.review-stat-label { color: var(--muted-strong); font-size: .78rem; }
+.review-stat-note { color: var(--muted); font-size: .72rem; }
+@container (max-width: 42rem) {
+  .review-stats { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .review-stat + .review-stat { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+}
 .review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
 .review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .review-outcome-side { display: grid; gap: 14px; align-content: start; }
@@ -816,6 +828,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-muted { margin: 0; color: var(--muted); font-size: .78rem; }
 .review-notice { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted); font-size: .8rem; }
 .review-tag { padding: .14rem .5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+/* 里程碑占两行：名称／日期／达成态一行，结果文字单独一行。 */
+.review-detail-list li.review-milestone { display: grid; gap: 2px; }
+.review-milestone-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.review-milestone-note { margin: 0; color: var(--muted); font-size: .72rem; }
+.review-tag.is-unmet { color: var(--muted-strong); }
 .review-not-advanced { display: grid; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
 
 /* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
@@ -823,12 +840,23 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-chart-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .review-chart-caption strong { font-size: .88rem; }
 .review-chart-caption span { color: var(--muted); font-size: .74rem; }
+/* 「放大」固定在标题行右端，不跟其它元素抢位置。 */
+.review-chart-expand { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 9px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .74rem; }
+.review-chart-expand:hover { border-color: var(--line-strong); color: var(--accent-strong); }
 .review-chart { display: grid; gap: 4px; }
-.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 112px; padding-inline: 2px; }
+/* 顶部 34px 是给悬停气泡留的高度：气泡挂在柱顶（自身底边对齐柱顶上方 5px），
+   最高的柱子也不会把它顶出画布。overflow: hidden 让气泡不会把 #main-content 撑出
+   横向滚动（200% 下气泡比列宽得多）。 */
+.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 134px; padding: 34px 2px 0; overflow: hidden; }
 .review-chart-zero { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
 .review-chart-column { position: relative; flex: 1 1 0; min-width: 0; }
 /* 柱宽由列宽决定会失控：单日周期画过 889px 宽的方块，周视图 125px。封顶并居中。 */
 .review-chart-bar { position: absolute; left: 50%; width: min(2.75rem, 62%); transform: translateX(-50%); border-radius: 4px 4px 0 0; background: var(--accent); }
+/* 悬停气泡：挂在柱顶，只是增强 —— 数值表仍然是可访问的等价物。 */
+.review-chart-tip { position: absolute; left: 50%; z-index: 4; margin-bottom: 5px; padding: 3px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); font-size: .72rem; font-weight: 600; white-space: nowrap; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .12s ease; }
+.review-chart-tip.is-start { left: 0; transform: none; }
+.review-chart-tip.is-end { left: auto; right: 0; transform: none; }
+.review-chart-column:hover .review-chart-tip { opacity: 1; }
 /* 下调用中性色 + 边框：它是事实，不是「更差的热度」，所以不做深浅色阶。 */
 .review-chart-bar.down { background: var(--muted-strong); border-radius: 0 0 4px 4px; }
 .review-chart-bar.flat { background: var(--line-strong); border-radius: 0; }
@@ -853,12 +881,50 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
    所以表头只留给辅助技术，视觉上不再重复一遍「日期／分钟」。 */
 .review-chart-figure.is-single .review-chart-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .review-chart-figure.is-single .review-chart-table tbody th { font-size: .8rem; border-top: 0; }
-/* 单日的数值当成一行「标签 — 数值」：日期靠左，数值靠右，不再把大数字丢在中间。 */
-.review-chart-figure.is-single .review-chart-table tbody td { color: var(--text); font-size: 1.4rem; font-weight: 650; line-height: 1.2; text-align: right; }
+/* 单日只有一行，不需要分隔线 —— 那条横线会被读成删除线。
+   数值当成一行「标签 — 数值」：日期靠左，数值靠右，不再把大数字丢在中间。 */
+.review-chart-figure.is-single .review-chart-table tbody td { border-top: 0; color: var(--text); font-size: 1.4rem; font-weight: 650; line-height: 1.2; text-align: right; }
 .review-chart-date { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; }
 .review-chart-date:hover { text-decoration: underline; }
+/* 长周期的数值表默认收起：内容仍在 DOM 里，键盘可以展开，不是删掉。 */
+.review-chart-details { display: grid; gap: 6px; }
+.review-chart-details > summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--panel-strong); color: var(--muted-strong); font-size: .78rem; cursor: pointer; list-style: none; }
+.review-chart-details > summary::-webkit-details-marker { display: none; }
+.review-chart-details > summary::before { content: ""; flex: 0 0 auto; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s ease; }
+.review-chart-details[open] > summary::before { transform: rotate(45deg); }
+.review-chart-details > summary:hover { border-color: var(--line-strong); color: var(--accent-strong); }
+.review-chart-details > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .review-chart-empty { margin: 0; color: var(--muted); font-size: .8rem; }
 .review-chart-note { margin: 0; color: var(--muted); font-size: .74rem; }
+
+/* 放大视图：每根柱固定 3.5rem，日期刻度逐日可读；滚轮／拖动／方向键横向平移。 */
+.chart-modal-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(22 17 12 / 46%); backdrop-filter: blur(2px); }
+.chart-modal { width: min(1120px, 100%); max-height: calc(100vh - 48px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 18px 20px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow-modal); }
+.chart-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.chart-modal h2 { margin: 0; font-size: 1.05rem; }
+.chart-modal header span { color: var(--muted); font-size: .76rem; }
+.chart-modal-close { flex: 0 0 auto; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--panel-strong); color: var(--muted-strong); }
+.chart-modal-close:hover { color: var(--accent-strong); border-color: var(--line-strong); }
+.chart-modal-scroll { overflow-x: auto; overflow-y: hidden; padding: 6px 0 30px; cursor: grab; touch-action: pan-x; }
+.chart-modal-scroll:active { cursor: grabbing; }
+.chart-modal-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 22px; }
+.chart-modal-column { position: relative; flex: 0 0 3.5rem; }
+.chart-modal-value { position: absolute; left: 50%; z-index: 2; margin-bottom: 4px; color: var(--muted-strong); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, -100%); }
+.chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
+.chart-modal-note { margin: 0; color: var(--muted); font-size: .74rem; }
+
+/* 投入去向：横向条，长度直接比较去处；项目名可点进明细。 */
+.review-split { display: grid; gap: 8px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.review-split-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.review-split-list li { display: grid; grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.review-split-track { height: 10px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.review-split-track > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.review-split-track.is-rest { background: transparent; box-shadow: none; }
+.review-split-label { min-width: 0; font-size: .8rem; }
+.review-split-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-split-value { color: var(--muted-strong); font-size: .76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.review-split-rest .review-split-label { color: var(--muted); }
 
 /* ③ 任务／项目明细：行会换行，窄窗口与 200% 缩放下不横向溢出。 */
 .review-detail-rows { display: grid; gap: 8px; }
