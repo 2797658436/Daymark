@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -16,6 +16,7 @@ import { placementSettled, setPendingPlacement, usePendingPlacement } from "./li
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
 import { RangeBar } from "./components/ui/range-bar";
+import { NumberField } from "./components/ui/number-field";
 import { SelectField } from "./components/ui/select-field";
 import { WeekdayPicker } from "./components/ui/weekday-picker";
 import { TimeField } from "./components/ui/time-picker";
@@ -1529,7 +1530,7 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
     <label>习惯名称<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
     <label>重复规则<SelectField value={draft.pattern} onChange={(value) => patchDraft({ pattern: value as RecurringHabit["pattern"] })} options={[{ value: "daily", label: "每天" }, { value: "weekdays", label: "工作日" }, { value: "weekly", label: "每周选择" }]} /></label>
     {draft.pattern === "weekly" && <fieldset><legend>选择星期</legend><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></fieldset>}
-    <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes} onChange={(event) => patchDraft({ sessionMinutes: Number(event.target.value) })} /></label>
+    <label>单次投入<NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes} onChange={(value) => { if (value !== null) patchDraft({ sessionMinutes: value }); }} /></label>
     <label>固定开始（可选）<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建习惯"}</Button></div>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
@@ -1901,13 +1902,40 @@ function DataPage({ native }: { native: NativeApi }) {
     try { await native.restoreBackup(restoreSelection.source); window.location.reload(); }
     catch (reason) { setRestoreError(readError(reason)); setRestoreBusy(false); }
   };
-  return <section className="page-stack"><PageHeader eyebrow="本地保存 · 保留最近 7 天备份" title="数据与安全" /><section className="surface-card data-card"><ArchiveRestore size={32} /><div><h2>本地备份</h2><p>每次核心写入后刷新当天备份；恢复前会先保存当前状态并验证目标文件。</p></div><div className="form-actions"><Button variant="primary" disabled={busy} onClick={() => void run(() => native.createDailyBackup(), "已刷新今天的备份")}>立即备份</Button><Button disabled={busy} onClick={() => void run(() => native.createManualBackup(), "已导出手动备份")}>导出</Button><Button disabled={busy} onClick={() => void chooseRestore()}>恢复</Button></div></section>{backupError && <p className="error-message" role="alert"><CircleAlert />自动备份未完成：{backupError}。下次核心写入或手动备份时会重试。</p>}{message && <p className="success-message" role="status"><Check />{message}</p>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="backup-list">{backups.map((backup) => <BackupRow key={backup.path} backup={backup} native={native} disabled={busy} onPreview={setRestoreSelection} />)}</div>{restoreSelection && <RestoreDialog currentCounts={currentCounts} preview={restoreSelection} error={restoreError} busy={restoreBusy} onClose={closeRestore} onConfirm={confirmRestore} />}</section>;
+  return <section className="page-stack narrow-page"><PageHeader eyebrow="本地保存 · 保留最近 7 天备份" title="数据与安全" /><section className="surface-card data-card"><div className="data-card-main"><ArchiveRestore size={32} /><div><h2>本地备份</h2><p>每次核心写入后刷新当天备份；恢复前会先保存当前状态并验证目标文件。</p></div></div><div className="form-actions"><Button variant="primary" disabled={busy} onClick={() => void run(() => native.createDailyBackup(), "已刷新今天的备份")}>立即备份</Button><Button disabled={busy} onClick={() => void run(() => native.createManualBackup(), "已导出手动备份")}>导出</Button><Button disabled={busy} onClick={() => void chooseRestore()}>恢复</Button></div></section>{backupError && <p className="error-message" role="alert"><CircleAlert />自动备份未完成：{backupError}。下次核心写入或手动备份时会重试。</p>}{message && <p className="success-message" role="status"><Check />{message}</p>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<section className="settings-section backup-section"><div className="settings-section-head"><Database /><h2>备份记录</h2><p>{backups.length ? `共 ${backups.length} 份` : "还没有备份"}</p></div>{backups.length === 0 ? <p className="settings-empty">还没有备份记录。点「立即备份」生成第一份。</p> : <div className="settings-rows">{backups.map((backup) => <BackupRow key={backup.path} backup={backup} native={native} disabled={busy} onPreview={setRestoreSelection} />)}</div>}</section>{restoreSelection && <RestoreDialog currentCounts={currentCounts} preview={restoreSelection} error={restoreError} busy={restoreBusy} onClose={closeRestore} onConfirm={confirmRestore} />}</section>;
 }
 
 function BackupRow({ backup, native, disabled, onPreview }: { backup: BackupInfo; native: NativeApi; disabled: boolean; onPreview: (preview: BackupPreview) => void }) {
   const [preview, setPreview] = useState<BackupPreview | null>(null); const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false); const copyTimer = useRef<number | null>(null);
   useEffect(() => { let alive = true; void native.inspectBackup(backup.path).then((value) => { if (alive) setPreview(value); }).catch((reason) => { if (alive) setError(readError(reason)); }); return () => { alive = false; }; }, [backup, native]);
-  return <div><Database /><div><strong>{backup.kind === "daily" ? "每日备份" : backup.kind === "manual" ? "手动备份" : "恢复前备份"}</strong>{preview ? <p>{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB · 检查通过</p> : <p>{error || "正在检查备份…"}</p>}<details><summary>文件位置</summary><span>{backup.path}</span></details><Button disabled={disabled || !preview} onClick={() => preview && onPreview(preview)}>检查并预览</Button></div></div>;
+  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
+  // 路径默认不占位（见样式里的 `.backup-path-tip`），复制是唯一的取用方式；
+  // `execCommand` 是 WebView2 里 `navigator.clipboard` 不可用时的退路。
+  const copyPath = async () => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(backup.path);
+      else { const area = document.createElement("textarea"); area.value = backup.path; area.setAttribute("readonly", ""); area.style.cssText = "position:fixed;opacity:0"; document.body.append(area); area.select(); document.execCommand("copy"); area.remove(); }
+      setCopied(true);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1600);
+    } catch { setCopied(false); }
+  };
+  return <div className="settings-row backup-row">
+    <div className="settings-label">
+      <strong>{backup.kind === "daily" ? "每日备份" : backup.kind === "manual" ? "手动备份" : "恢复前备份"}</strong>
+      {preview
+        ? <small className="backup-meta">{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB<span className="backup-status ok">检查通过</span></small>
+        : <small className="backup-meta">{error ? <span className="backup-status bad">{error}</span> : "正在检查备份…"}</small>}
+    </div>
+    <div className="settings-control">
+      <Button disabled={disabled || !preview} onClick={() => preview && onPreview(preview)}>检查并预览</Button>
+      <button type="button" className="icon-action backup-copy" aria-label={copied ? "已复制备份文件位置" : `复制备份文件位置 ${backup.path}`} onClick={() => void copyPath()}>
+        {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
+        <span className="backup-path-tip" aria-hidden="true">{backup.path}</span>
+      </button>
+    </div>
+  </div>;
 }
 
 
@@ -1931,7 +1959,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
   const removeSlot = (index: number) => onChange({ defaultTimeSlots: slots.filter((_, at) => at !== index) });
   // 单项重置只比较值本身；数组项没有稳定标识，用「是否为空」判断（默认值就是空数组）。
   const changed = (key: Exclude<keyof AppSettings, "defaultTimeSlots">) => preferences[key] !== DEFAULT_SETTINGS[key];
-  return <section className="page-stack settings-page">
+  return <section className="page-stack settings-page narrow-page">
     <PageHeader eyebrow="按你的习惯调整" title="设置" />
     <SettingsSection icon={<Palette />} title="外观与无障碍">
       <SettingsRow label="主题" note="跟随系统会随 Windows 的深浅色设置切换。" modified={changed("appearance")} onReset={() => onChange({ appearance: DEFAULT_SETTINGS.appearance })}>
@@ -1954,7 +1982,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
       <SettingsToggleRow label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} dependent muted={!preferences.checkInEnabled} modified={changed("rescuePromptsEnabled")} onReset={() => onChange({ rescuePromptsEnabled: DEFAULT_SETTINGS.rescuePromptsEnabled })} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} />
       <SettingsToggleRow label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} modified={changed("remindersEnabled")} onReset={() => onChange({ remindersEnabled: DEFAULT_SETTINGS.remindersEnabled })} onChange={(checked) => onChange({ remindersEnabled: checked })} />
       <SettingsRow label="提前分钟数" note="在执行时段开始前多久发出提醒。" htmlFor="settings-lead" dependent muted={!preferences.remindersEnabled} modified={changed("reminderLeadMinutes")} onReset={() => onChange({ reminderLeadMinutes: DEFAULT_SETTINGS.reminderLeadMinutes })}>
-        <input id="settings-lead" type="number" min="0" max="120" disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(event) => onChange({ reminderLeadMinutes: Number(event.target.value) })} />
+        <NumberField id="settings-lead" label="提前分钟数" suffix="分钟" min={0} max={120} step={5} disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(value) => { if (value !== null) onChange({ reminderLeadMinutes: value }); }} />
       </SettingsRow>
       <SettingsRow label="启动摘要" note="应用启动后汇总临近与逾期任务。" htmlFor="settings-startup" modified={changed("startupSummary")} onReset={() => onChange({ startupSummary: DEFAULT_SETTINGS.startupSummary })}>
         <SelectField id="settings-startup" value={preferences.startupSummary} onChange={(value) => onChange({ startupSummary: value as AppSettings["startupSummary"] })} options={[{ value: "never", label: "从不提醒" }, { value: "daily", label: "每天首次启动" }, { value: "everyLaunch", label: "每次启动" }]} />
@@ -1977,8 +2005,8 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
           </div>
         </div>)}</div>}
       {slotDraft && <FloatingPanel label="编辑默认时段" busy={slotBusy} onClose={() => setSlotDraft(null)} closeOnOutsideClick><DefaultTimeSlotEditor slot={slotDraft} onCancel={() => setSlotDraft(null)} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); setSlotDraft(null); }} /></FloatingPanel>}
-      <SettingsRow label="全局单次投入（分钟）" note="新建任务时的默认单次投入时长。" htmlFor="settings-session" modified={changed("defaultSessionMinutes")} onReset={() => onChange({ defaultSessionMinutes: DEFAULT_SETTINGS.defaultSessionMinutes })}>
-        <input id="settings-session" type="number" min="5" max="240" value={preferences.defaultSessionMinutes} onChange={(event) => onChange({ defaultSessionMinutes: Number(event.target.value) })} />
+      <SettingsRow label="全局单次投入" note="新建任务时的默认单次投入时长。" htmlFor="settings-session" modified={changed("defaultSessionMinutes")} onReset={() => onChange({ defaultSessionMinutes: DEFAULT_SETTINGS.defaultSessionMinutes })}>
+        <NumberField id="settings-session" label="全局单次投入" suffix="分钟" min={5} max={240} step={5} value={preferences.defaultSessionMinutes} onChange={(value) => { if (value !== null) onChange({ defaultSessionMinutes: value }); }} />
       </SettingsRow>
       <SettingsRow label="最低有效时长" note="短于该阈值的空档不用于自动排程，仍可手动放置。" htmlFor="settings-minimum" modified={changed("minimumSessionMinutes")} onReset={() => onChange({ minimumSessionMinutes: DEFAULT_SETTINGS.minimumSessionMinutes })}>
         <SelectField id="settings-minimum" value={String(preferences.minimumSessionMinutes)} onChange={(value) => onChange({ minimumSessionMinutes: Number(value) as AppSettings["minimumSessionMinutes"] })} options={[5, 10, 15, 20, 30].map((value) => ({ value: String(value), label: `${value} 分钟` }))} />
@@ -2051,8 +2079,8 @@ function TaskEditorFields({ task, projects, onUpdate, onCancel, onPhase }: { tas
     <label>标题<input required value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
     <label>项目<SelectField value={draft.projectId ?? ""} onChange={(value) => patchDraft({ projectId: value || null })} options={[{ value: "", label: "独立任务" }, ...projects.map((project) => ({ value: project.id, label: project.title }))]} /></label>
     <label>截止日期<input type="date" value={draft.deadlineLocal ?? ""} onChange={(event) => patchDraft({ deadlineLocal: event.target.value || null })} /></label>
-    <label>预计耗时（分钟）<input type="number" min="1" max="1440" value={draft.estimatedMinutes ?? ""} onChange={(event) => patchDraft({ estimatedMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
-    <label>单次投入（分钟）<input type="number" min="5" max="240" value={draft.sessionMinutes ?? ""} onChange={(event) => patchDraft({ sessionMinutes: event.target.value ? Number(event.target.value) : null })} /></label>
+    <label>预计耗时<NumberField label="预计耗时" suffix="分钟" min={5} max={1440} step={15} nullable presets={[30, 60, 120, 180]} value={draft.estimatedMinutes ?? null} onChange={(value) => patchDraft({ estimatedMinutes: value })} /></label>
+    <label>单次投入<NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} nullable presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes ?? null} onChange={(value) => patchDraft({ sessionMinutes: value })} /></label>
     <label>优先级<SelectField value={draft.priority ?? "normal"} onChange={(value) => patchDraft({ priority: value as Task["priority"] })} options={[{ value: "low", label: "低" }, { value: "normal", label: "普通" }, { value: "high", label: "高" }]} /></label>
     {error && phase === "error" && <p role="alert">{error}</p>}<div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !draft.title.trim()}>{busy ? "正在保存…" : "保存任务"}</Button></div>
   </form>;

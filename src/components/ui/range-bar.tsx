@@ -63,8 +63,13 @@ export function RangeBar({ id, label, min, max, step, value, onChange, onPointer
       <span className="range-track" aria-hidden="true">
         <span className="range-inner">
           {dots?.map((dot) => <i key={dot} className="range-dot" style={{ left: `${dot * 100}%` } as CSSProperties} />)}
-          {/* `max(...)` 保证 0% 时也留一个起点小块，否则轨道看起来是空的。 */}
-          <span className="range-fill" style={{ width: `max(.375rem, ${percent}%)` } as CSSProperties} />
+          {/* `max(var(--thumb-half), …)` 让 0% 时也留一个和把手对齐的起点小块。
+              把手按**百分比**定位并两端夹取（见样式），所以 0% 和 100% 的间隔天然对称；
+              进度块在 100% 时仍然铺满整条轨道，只是端头被把手盖住。
+              ⚠️ 百分比定位要求 `.range-inner` 是块级元素：它原本是 `<span>`（行内），
+              绝对定位子元素的包含块宽度为 0，`left: 50%` 会被解析到右端（实测偏 79px）。 */}
+          <span className="range-fill" style={{ width: `max(var(--thumb-half), ${percent}%)` } as CSSProperties} />
+          <span className="range-thumb" style={{ left: `clamp(var(--thumb-half), ${percent}%, calc(100% - var(--thumb-half)))` } as CSSProperties} />
         </span>
       </span>
       <input
