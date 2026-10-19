@@ -116,7 +116,9 @@ const progressFigure = () => figures()[1];
 const taskRowButton = (title: string) => within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: `查看任务「${title}」的明细` });
 const chartPairs = (figure: HTMLElement) => ({
   columns: Array.from(figure.querySelectorAll<HTMLElement>(".review-chart-column")).map((column) => [column.dataset.chartDate, Number(column.dataset.chartValue)] as const),
-  rows: Array.from(figure.querySelectorAll<HTMLElement>("[data-chart-row]")).map((row) => [row.dataset.chartRow, row.querySelector("td")?.textContent] as const),
+  // 数值表按「日期/值」成对排布，一周 7 天会被折成 4 行；这里按文档顺序摊平，
+  // 断言仍然逐个日期、逐个数值对齐 —— 压缩的是行数，不是内容。
+  rows: Array.from(figure.querySelectorAll<HTMLElement>("[data-chart-row]")).map((cell) => [cell.dataset.chartRow, cell.nextElementSibling?.textContent] as const),
 });
 
 describe("review page", () => {
@@ -164,6 +166,24 @@ describe("review page", () => {
     expect(within(progressFigure()).getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
     // 投入图没有负值，零基线就在底部。
     expect(minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!.style.top).toBe("100%");
+  });
+
+  it("packs the month table into column pairs instead of one full-width row per day", () => {
+    renderPage({ preferences: { reviewPeriod: "month" } });
+    const table = minutesFigure().querySelector<HTMLElement>(".review-chart-table")!;
+    expect(table.classList.contains("is-multi")).toBe(true);
+    // 3 月 31 天 → 4 对 → 8 行；日期一个不少，仍然逐个可读、可下钻。
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(8);
+    expect(table.querySelectorAll("[data-chart-row]")).toHaveLength(31);
+    expect(within(minutesFigure()).getByRole("button", { name: "查看 3月5日 的明细" })).toBeVisible();
+  });
+
+  it("renders a single-day period as one number instead of a full-width bar", () => {
+    renderPage({ preferences: { reviewPeriod: "day", reviewAnchorDate: "2026-03-05" } });
+    // 单日没有比较对象：不画柱，数值表直接放大成数字条。
+    expect(minutesFigure().classList.contains("is-single")).toBe(true);
+    expect(minutesFigure().querySelector(".review-chart-plot")).toBeNull();
+    expect(within(minutesFigure()).getByText("60 分钟")).toBeVisible();
   });
 
   it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", () => {

@@ -988,9 +988,10 @@ async function seedReview(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 }
 
-/** 某张图的等价数值表里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。 */
+/** 某张图的等价数值表里那一行的显示值（第一张＝投入／分钟，第二张＝进度／百分点）。
+ *  2026-10-19 起数值表按「日期/值」成对排布（周 2 对、月 4 对），值在日期单元格的紧邻兄弟位。 */
 function chartCell(page: import("@playwright/test").Page, figure: number, date: string) {
-  return page.locator(".review-chart-figure").nth(figure).locator(`[data-chart-row="${date}"] td`);
+  return page.locator(".review-chart-figure").nth(figure).locator(`[data-chart-row="${date}"] + td`);
 }
 
 test("phase 4 M11 keeps day, week and month summaries checkable against their detail and remembers the choice", async ({ page }) => {

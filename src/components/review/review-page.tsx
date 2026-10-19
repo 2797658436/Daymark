@@ -29,6 +29,8 @@ export type { ReviewSelection } from "./review-detail";
  */
 
 const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
+/** 「继续推进」最多直接列几项；再多就交给下方任务明细，避免摘要变成一墙胶囊。 */
+const CARRYOVER_PREVIEW = 6;
 
 export interface ReviewPageProps {
   index: WorkspaceIndex;
@@ -178,51 +180,53 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       {/* ① 成果与待续 */}
       <section className="surface-card review-outcomes" aria-labelledby="review-outcomes-title">
         <div className="section-heading"><h2 id="review-outcomes-title">成果与待续</h2><span>不评分，不计算连续天数</span></div>
+        {/* 一行总账替代原来的四段计数句子：同样的数字只出现一次，细节交给下面三块与任务明细。 */}
+        <p className="review-outcome-summary">
+          {review.progress.changedTaskIds.length} 项有进度变化 · {review.carryoverTaskIds.length} 项仍可继续安排
+          {review.progress.completedTaskIds.length > 0 && ` · ${review.progress.completedTaskIds.length} 项曾完成`}
+        </p>
         <div className="review-outcome-grid">
           <article className="review-outcome-block">
-            <h3>完成与推进</h3>
-            <p>{review.progress.completedTaskIds.length} 项曾完成 · {review.progress.changedTaskIds.length} 项有进度变化</p>
-            {review.progress.changedTaskIds.length > 0
-              ? <div className="review-task-list">{review.progress.changedTaskIds.map(taskChip)}</div>
-              : <p className="review-muted">本周期没有进度变化记录。</p>}
+            <h3>继续推进</h3>
+            {review.carryoverTaskIds.length > 0 ? <>
+              <div className="review-task-list">{review.carryoverTaskIds.slice(0, CARRYOVER_PREVIEW).map(taskChip)}</div>
+              {review.carryoverTaskIds.length > CARRYOVER_PREVIEW && <p className="review-muted">还有 {review.carryoverTaskIds.length - CARRYOVER_PREVIEW} 项，见下方任务明细。</p>}
+            </> : <p className="review-muted">本周期没有需要继续推进的任务。</p>}
           </article>
-          <article className="review-outcome-block">
-            <h3>待续</h3>
-            <p>{review.carryoverTaskIds.length} 项仍可继续安排</p>
-            {review.carryoverTaskIds.length > 0
-              ? <div className="review-task-list">{review.carryoverTaskIds.map(taskChip)}</div>
-              : <p className="review-muted">本周期没有需要继续推进的任务。</p>}
-          </article>
-          <article className="review-outcome-block">
+          {/* 待回顾与里程碑同属「需要你处理」，竖着排在一列：它们很少同时为空，
+              分三列会让中间空出一整栏。 */}
+          <div className="review-outcome-side">
+            <article className="review-outcome-block">
             <h3>待回顾</h3>
-            <p>{review.pendingReview.length} 个已结束的时段还没有记录</p>
-            {review.pendingReview.length > 0
-              ? <ul className="review-detail-list">{review.pendingReview.map((session) => <li key={session.id}>
-                <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
-                <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
-              </li>)}</ul>
-              : <p className="review-muted">没有需要回顾的时段。</p>}
+            {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0) ? <>
+              <p>{review.pendingReview.length} 个已结束的时段还没有记录</p>
+              <ul className="review-detail-list">
+                {review.pendingReview.map((session) => <li key={session.id}>
+                  <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
+                  <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
+                </li>)}
+                {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这一块，用标签区分。 */}
+                {review.actual.runningRecords.map((record) => <li key={record.id}>
+                  <span className="review-tag">进行中</span>
+                  <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
+                  <time>开始于 {formatClock(record.actualStartUtc)}</time>
+                </li>)}
+              </ul>
+            </> : <p className="review-muted">没有需要回顾的时段。</p>}
           </article>
           <article className="review-outcome-block">
             <h3>里程碑</h3>
-            <p>{review.milestones.length} 个在本周期到期</p>
-            {review.milestones.length > 0
-              ? <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId}>
+            {review.milestones.length > 0 ? <>
+              <p>{review.milestones.length} 个在本周期到期</p>
+              <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId}>
                 <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
                 <time>{formatDayLabel(milestone.targetLocalDate)}</time>
                 <span>{milestone.reached ? "达成" : "未达成"}{milestone.frozen ? " · 到期冻结，后续推进不改写" : " · 当前达成情况"}</span>
                 <span>{milestone.resultText}</span>
               </li>)}</ul>
-              : <p className="review-muted">本周期没有到期的里程碑。</p>}
-          </article>
-          {review.actual.runningRecords.length > 0 && <article className="review-outcome-block">
-            <h3>进行中的执行</h3>
-            <p>{review.actual.runningRecords.length} 条没有结束时间，不计入已记录投入</p>
-            <ul className="review-detail-list">{review.actual.runningRecords.map((record) => <li key={record.id}>
-              <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
-              <span>开始于 {formatClock(record.actualStartUtc)}</span>
-            </li>)}</ul>
-          </article>}
+            </> : <p className="review-muted">本周期没有到期的里程碑。</p>}
+            </article>
+          </div>
         </div>
       </section>
 
@@ -251,14 +255,13 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
                 <span className="review-detail-metric">净变化 {formatPercentPoints(detail.netDelta)}</span>
                 <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
                 {detail.pendingReviewCount > 0 && <span className="review-detail-metric">待回顾 {detail.pendingReviewCount}</span>}
-                {detail.missedCount > 0 && <span className="review-detail-metric">未推进 {detail.missedCount}</span>}
-                {detail.skippedCount > 0 && <span className="review-detail-metric">跳过／取消 {detail.skippedCount}</span>}
                 {detail.carryover && <span className="muted-chip">待续</span>}
               </div>
               {task && <div className="review-detail-actions">
                 <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
+                {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
                 {task.status === "active"
-                  ? <Button variant="primary" aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
+                  ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
                   : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
               </div>}
             </article>;

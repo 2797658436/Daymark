@@ -799,7 +799,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 .review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
-.review-outcome-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 14px; align-items: start; }
+.review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.review-outcome-side { display: grid; gap: 14px; align-content: start; }
+/* 窄窗口与高缩放下并成一列：阈值用 rem，跟着界面缩放一起走。 */
+.review-outcomes { container-type: inline-size; }
+@container (max-width: 46rem) { .review-outcome-grid { grid-template-columns: minmax(0, 1fr); } }
+.review-outcome-summary { margin: 0; color: var(--muted-strong); font-size: .84rem; font-variant-numeric: tabular-nums; }
 .review-outcome-block { display: grid; gap: 6px; }
 .review-outcome-block h3, .review-not-advanced h3, .review-drilldown h3 { margin: 0; font-size: .82rem; color: var(--muted-strong); }
 .review-outcome-block p { margin: 0; }
@@ -814,25 +819,42 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-not-advanced { display: grid; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
 
 /* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
-.review-chart-figure { display: grid; gap: 8px; margin: 0; }
+.review-chart-figure { display: grid; gap: 8px; margin: 0; container-type: inline-size; }
 .review-chart-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .review-chart-caption strong { font-size: .88rem; }
 .review-chart-caption span { color: var(--muted); font-size: .74rem; }
 .review-chart { display: grid; gap: 4px; }
-.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 132px; padding-inline: 2px; }
+.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 112px; padding-inline: 2px; }
 .review-chart-zero { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
 .review-chart-column { position: relative; flex: 1 1 0; min-width: 0; }
-.review-chart-bar { position: absolute; left: 14%; right: 14%; border-radius: 4px 4px 0 0; background: var(--accent); }
+/* 柱宽由列宽决定会失控：单日周期画过 889px 宽的方块，周视图 125px。封顶并居中。 */
+.review-chart-bar { position: absolute; left: 50%; width: min(2.75rem, 62%); transform: translateX(-50%); border-radius: 4px 4px 0 0; background: var(--accent); }
 /* 下调用中性色 + 边框：它是事实，不是「更差的热度」，所以不做深浅色阶。 */
 .review-chart-bar.down { background: var(--muted-strong); border-radius: 0 0 4px 4px; }
 .review-chart-bar.flat { background: var(--line-strong); border-radius: 0; }
 .review-chart-ticks { display: flex; gap: 3px; padding-inline: 2px; }
 .review-chart-ticks span { flex: 1 1 0; min-width: 0; overflow: hidden; text-align: center; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
+/* 刻度只是图的辅助（整块 aria-hidden），挤到一起时就别显示了：数值表逐日都在。
+   阈值用 rem，跟着界面缩放一起走 —— 200% 下 31 个刻度会叠成「1011121314…」。 */
+@container (max-width: 42rem) { .review-chart-ticks { display: none; } }
 .review-chart-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
 .review-chart-table th, .review-chart-table td { padding: 5px 8px; border-top: 1px solid var(--line-soft); text-align: left; font-weight: 400; }
 .review-chart-table thead th { color: var(--muted); font-size: .72rem; border-top: 0; }
 .review-chart-table tbody th { color: var(--muted-strong); white-space: nowrap; }
 .review-chart-table td { font-variant-numeric: tabular-nums; }
+.review-chart-table td.is-zero { color: var(--muted); }
+/* 多列成对排布（周 2 对、月 4 对）：同样的日期逐个可见，行数减半以上。
+   列宽按内容收紧，日期与数值之间不再留一整行空白。 */
+.review-chart-table.is-multi { table-layout: fixed; }
+.review-chart-table.is-multi th, .review-chart-table.is-multi td { padding: 4px 6px; }
+.review-chart-table.is-multi thead th:nth-child(odd) { width: 11%; }
+.review-chart-table.is-multi thead th:nth-child(even) { width: 14%; }
+/* 单日周期不画柱：一行数值就是全部信息，直接放大成数字条。日期本身就是周期标题，
+   所以表头只留给辅助技术，视觉上不再重复一遍「日期／分钟」。 */
+.review-chart-figure.is-single .review-chart-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.review-chart-figure.is-single .review-chart-table tbody th { font-size: .8rem; border-top: 0; }
+/* 单日的数值当成一行「标签 — 数值」：日期靠左，数值靠右，不再把大数字丢在中间。 */
+.review-chart-figure.is-single .review-chart-table tbody td { color: var(--text); font-size: 1.4rem; font-weight: 650; line-height: 1.2; text-align: right; }
 .review-chart-date { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; }
 .review-chart-date:hover { text-decoration: underline; }
 .review-chart-empty { margin: 0; color: var(--muted); font-size: .8rem; }
@@ -840,7 +862,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 
 /* ③ 任务／项目明细：行会换行，窄窗口与 200% 缩放下不横向溢出。 */
 .review-detail-rows { display: grid; gap: 8px; }
-.review-detail-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
+.review-detail-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
 .review-detail-main { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .review-detail-title { font-size: .86rem; }
 .review-detail-range, .review-detail-metric { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
