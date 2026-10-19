@@ -126,7 +126,7 @@ describe("review page", () => {
     // 投入与净进度合并成一张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
     expect(figures()).toHaveLength(1);
     expect(document.querySelectorAll(".review-chart-table")).toHaveLength(0);
-    expect(within(minutesFigure()).getByRole("button", { name: "详细" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "详细" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
   });
 
@@ -135,16 +135,16 @@ describe("review page", () => {
     renderPage();
     const switcher = screen.getByRole("group", { name: "图表数值" });
     // 默认看投入，只有分钟。
-    expect(within(minutesFigure()).getByText("单位：分钟")).toBeVisible();
+    expect(screen.getByText("单位：分钟")).toBeVisible();
     expect(minutesFigure().textContent).not.toContain("百分点");
 
     await user.click(within(switcher).getByRole("button", { name: "净进度" }));
     // 切成百分点后，同一张图只讲百分点。
-    expect(within(minutesFigure()).getByText("单位：百分点")).toBeVisible();
+    expect(screen.getByText("单位：百分点")).toBeVisible();
     expect(minutesFigure().textContent).not.toContain("分钟");
 
     // 「详细」打开气泡：周视图的表格是四列，投入与百分点并排。
-    await user.click(within(minutesFigure()).getByRole("button", { name: "详细" }));
+    await user.click(screen.getByRole("button", { name: "详细" }));
     const popover = document.querySelector<HTMLElement>(".review-chart-popover")!;
     expect([...popover.querySelectorAll("thead th")].map((cell) => cell.textContent)).toEqual(["日期", "星期", "投入时间", "百分点"]);
     const row = popover.querySelector<HTMLElement>('[data-chart-row="2026-03-05"]')!;
@@ -205,7 +205,7 @@ describe("review page", () => {
     expect(tips).toContain("3月5日 · 60 分钟");
     expect(tips).toContain("3月4日 · 未记录");
 
-    await user.click(within(minutesFigure()).getByRole("button", { name: "放大实际投入图表" }));
+    await user.click(screen.getByRole("button", { name: "放大实际投入图表" }));
     const dialog = screen.getByRole("dialog", { name: "实际投入" });
     expect(dialog).toBeVisible();
     // 放大后每根柱都有自己的完整日期刻度。
@@ -242,8 +242,9 @@ describe("review page", () => {
     const merged = document.querySelector<HTMLElement>(".review-merged")!;
     expect(merged).not.toBeNull();
     expect(within(merged).getByRole("heading", { name: "投入去向与任务", level: 2 })).toBeVisible();
-    // 只有一个去处时不画圆环，明细独占整行。
-    expect(document.querySelector(".review-merged-split")).toBeNull();
+    // 投入去向始终在（有记录就是圆环，没记录就是空环占位），所以卡片固定两栏。
+    expect(document.querySelector(".review-merged-split")).not.toBeNull();
+    expect(document.querySelector(".review-donut")).not.toBeNull();
     expect(within(merged).getByRole("button", { name: "查看任务「Alpha 任务」的明细" })).toBeVisible();
   });
 
@@ -312,13 +313,14 @@ describe("review page", () => {
     const harness = renderPage();
     await user.click(document.querySelector<HTMLElement>(".review-picker-trigger")!);
     const picker = document.querySelector<HTMLElement>(".review-picker")!;
-    // 周模式仍然是月历，只是每一行代表一周。
+    // 周模式仍然是月历，但每一行是一整条可点的横条。
     expect(picker.querySelector(".review-picker-grid.is-week")).not.toBeNull();
-    expect(picker.querySelectorAll(".review-picker-row")).toHaveLength(6);
-    // 当前周那一行有标记。
-    expect(picker.querySelectorAll(".review-picker-row.is-current")).toHaveLength(1);
-    await user.click(within(picker).getByRole("button", { name: "2026 年 3 月 12 日" }));
-    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: "2026-03-12" });
+    expect(picker.querySelectorAll(".review-picker-week")).toHaveLength(6);
+    // 当前周那一条有标记。
+    expect(picker.querySelectorAll(".review-picker-week.is-current")).toHaveLength(1);
+    // 点的是整条横条，落点取那一周的周一。
+    await user.click(within(picker).getByRole("button", { name: "2026 年 3 月 9 日 那一周" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: "2026-03-09" });
   });
 
   it("opens the in-page detail with the keyboard, shows the raw facts and gives the focus back on Escape", async () => {
@@ -361,7 +363,7 @@ describe("review page", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     // 日期明细 → 再点它里面的任务名：日期明细随之卸载，原触发元素不复存在。
-    await user.click(within(minutesFigure()).getByRole("button", { name: "详细" }));
+    await user.click(screen.getByRole("button", { name: "详细" }));
     await user.click(within(document.querySelector<HTMLElement>(".review-chart-popover")!).getByRole("button", { name: "查看 3月5日 的明细" }));
     await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getAllByRole("button", { name: "查看任务「Alpha 任务」的明细" })[0]);
     await user.keyboard("{Escape}");

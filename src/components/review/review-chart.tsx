@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { List, Maximize2, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import { FloatingPanel } from "../ui/floating-panel";
 import { useOverlayLayer } from "../ui/overlay-host";
@@ -59,12 +59,17 @@ export interface ReviewChartProps {
   baselineNote?: string;
   /** 全周期为零时的文字：空周期不绘制全零图表。 */
   emptyText: string;
-  /** 标题行里的附加控件（周期页用它放「实际投入／净进度」切换，替掉标题文字）。 */
-  headerSlot?: ReactNode;
   /** 提供时，「详细」气泡改用它：周视图要同时看日期、星期、投入与百分点。 */
   splitDetail?: { date: string; fullLabel: string; weekday: string; minutes: string; delta: string }[];
   /** 提供时，数值表的日期成为可下钻的按钮（日期明细）。 */
   onOpenDate?: (date: string, trigger: HTMLElement) => void;
+  /** 放大浮层是否打开（按钮已移到卡片标题行，状态由页面持有）。 */
+  expanded: boolean;
+  onExpand: (open: boolean) => void;
+  /** 「详细」气泡是否打开；锚点也由页面传入。 */
+  detailOpen: boolean;
+  onDetailOpen: (open: boolean) => void;
+  detailAnchor: RefObject<HTMLButtonElement | null>;
 }
 
 /** 数值表的列对数：日 1 对、周 2 对、月 4 对。超过 14 天就再分一栏。 */
@@ -110,7 +115,7 @@ function usePairCount(rowCount: number) {
   return { ref, pairs };
 }
 
-export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText, headerSlot, splitDetail, onOpenDate }: ReviewChartProps) {
+export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText, splitDetail, onOpenDate, expanded, onExpand, detailOpen, onDetailOpen, detailAnchor }: ReviewChartProps) {
   // 全零不画图：没有事实时画一排零柱会把「未记录」误读成「做了但没推进」。
   const hasValues = rows.some((row) => row.value !== 0);
   const maxUp = Math.max(0, ...rows.map((row) => row.value));
@@ -120,9 +125,6 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   const zeroPercent = span === 0 ? 100 : (maxUp / span) * 100;
   const { ref, pairs } = usePairCount(rows.length);
   const single = rows.length === 1;
-  const [expanded, setExpanded] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const detailAnchor = useRef<HTMLButtonElement | null>(null);
   // 长周期默认收起数值表：月视图 8 行表格会把图表挤到看不见。短周期只有一两行，展开更省事。
   const collapsible = rows.length > 7;
   // 一周只有 7 天：数值表折进「详细」气泡，图独占整列；月视图仍然是常驻的折叠表。
@@ -145,12 +147,12 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   // 气泡关闭时宿主会在下一帧把焦点还给「详细」按钮，同一帧打开的明细会被抢走焦点，
   // Esc 就落不到明细自己身上了。等归还做完再开，明细的聚焦才是最后一次。
   const openFromPopover = (date: string, trigger: HTMLElement) => {
-    setDetailOpen(false);
+    onDetailOpen(false);
     window.setTimeout(() => onOpenDate?.(date, trigger), 0);
   };
 
   const dateCell = (row: ReviewChartRow) => onOpenDate
-    ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => { setDetailOpen(false); onOpenDate(row.date, event.currentTarget); }}>{row.fullLabel}</button>
+    ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => { onDetailOpen(false); onOpenDate(row.date, event.currentTarget); }}>{row.fullLabel}</button>
     : row.fullLabel;
 
   /** 数值表：列对数由调用方给（页内按可用宽度算，气泡里固定一对）。 */
@@ -176,16 +178,6 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     </table>;
   };
 
-  const caption = <figcaption className="review-chart-caption">
-    {headerSlot ?? <strong>{title}</strong>}
-    <span>单位：{unit}</span>
-    <div className="review-chart-actions">
-      {popoverTable && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
-        onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
-      {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
-    </div>
-  </figcaption>;
-
   const plot = !single && <div className="review-chart" aria-hidden="true">
     <div className="review-chart-plot">
       <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
@@ -209,8 +201,7 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
       : renderTable(pairs)}
   </div>;
 
-  return <figure className={`review-chart-figure${single ? " is-single" : ""}${popoverTable ? " is-week" : ""}`}>
-    {caption}
+  return <figure className={`review-chart-figure${single ? " is-single" : ""}${popoverTable ? " is-week" : ""}`} aria-label={`${title}（${unit}）`}>
     {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
@@ -218,9 +209,9 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
 
     {/* 周视图的数值表：「详细」按钮打开气泡，表格仍然是可键盘到达的等价物。 */}
     {detailOpen && <FloatingPanel kind="action" label={`${title}每日数值`} anchorElement={detailAnchor.current} closeOnOutsideClick
-      className="review-chart-popover" onClose={() => setDetailOpen(false)}>
+      className="review-chart-popover" onClose={() => onDetailOpen(false)}>
       {/* 宿主在时会统一处理 Esc；这里再兜一层，让页面单独渲染（测试、嵌入）时也能关。 */}
-      <div onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setDetailOpen(false); } }}>
+      <div onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDetailOpen(false); } }}>
         {splitDetail
           ? <table className="review-chart-table is-split" aria-label={`${title}逐日数值`}>
             <thead><tr><th scope="col">日期</th><th scope="col">星期</th><th scope="col">投入时间</th><th scope="col">百分点</th></tr></thead>
@@ -237,7 +228,7 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
       </div>
     </FloatingPanel>}
 
-    {expanded && <ExpandedChart title={title} unit={unit} rows={rows} signed={signed} zeroPercent={zeroPercent} maxUp={maxUp} maxDown={maxDown} onClose={() => setExpanded(false)} />}
+    {expanded && <ExpandedChart title={title} unit={unit} rows={rows} signed={signed} zeroPercent={zeroPercent} maxUp={maxUp} maxDown={maxDown} onClose={() => onExpand(false)} />}
   </figure>;
 }
 
@@ -303,7 +294,7 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
   return createPortal(<div className="chart-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="chart-modal" style={{ width: modalWidth }} role="dialog" aria-modal="true" aria-labelledby={headingId}>
       <header>
-        <div><h2 id={headingId}>{title}</h2><span>单位：{unit} · 滚轮、拖动或方向键可左右查看</span></div>
+        <div><h2 id={headingId}>{title}</h2><span>单位：{unit}</span></div>
         <button type="button" className="chart-modal-close" aria-label="关闭放大的图表" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="chart-modal-scroll" ref={scroller} tabIndex={0} role="group" aria-label={`${title}图表，可左右滚动`}
@@ -321,7 +312,6 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
           </div>)}
         </div>
       </div>
-      <p className="chart-modal-note">数值单位是{unit}；「—」表示当天没有记录或没有变化，不是失败。</p>
     </section>
   </div>, document.body);
 }

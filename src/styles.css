@@ -946,7 +946,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .chart-modal-scroll { overflow-x: auto; overflow-y: hidden; padding: 6px 0 52px; cursor: grab; touch-action: pan-x; }
 .chart-modal-scroll:active { cursor: grabbing; }
 .chart-modal-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 22px; }
+/* 顶部留 34px 给数值标签：最高的那根柱的标签会顶到列外面，留少了会被裁掉。 */
+.chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 34px; }
 .chart-modal-column { position: relative; flex: 0 0 3.5rem; }
 .chart-modal-value { position: absolute; left: 50%; z-index: 2; margin-bottom: 4px; color: var(--muted-strong); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, -100%); }
 .chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
@@ -968,22 +969,32 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-picker-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); color: var(--muted); font-size: .68rem; text-align: center; }
 .review-picker-grid { display: grid; gap: 2px; }
 .review-picker-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; padding: 1px; border-radius: 9px; }
-/* 周模式：一行就是一周，悬停整行高亮，点哪一格都落到那一周。 */
-.review-picker-grid.is-week .review-picker-row { cursor: pointer; }
-.review-picker-grid.is-week .review-picker-row:hover { background: var(--accent-softer); }
-.review-picker-grid.is-week .review-picker-row.is-current { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
 .review-picker-day { display: grid; place-items: center; min-height: 30px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); font-size: .76rem; font-variant-numeric: tabular-nums; }
 .review-picker-day:hover { background: var(--accent-soft); color: var(--accent-strong); }
-.review-picker-day.is-empty { pointer-events: none; }
+/* 相邻月份的日期也画出来、也可点，只是降一级颜色。 */
+.review-picker-day.is-outside { color: var(--muted); }
+.review-picker-day.is-outside:hover { color: var(--accent-strong); }
 .review-picker-day.is-today { border-color: var(--line-strong); font-weight: 650; }
 .review-picker-day.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
-.review-picker-months { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+/* 周模式：一行是一整条横条，不是七个方块。 */
+.review-picker-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; width: 100%; min-height: 32px; padding: 0 3px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--text); font-size: .76rem; font-variant-numeric: tabular-nums; }
+.review-picker-week:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); }
+.review-picker-week.is-current { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.review-picker-week-day { display: grid; place-items: center; }
+.review-picker-week-day.is-outside { color: var(--muted); }
+.review-picker-week-day.is-today { font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
+.review-picker-months { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .review-picker-months button { min-height: 40px; border: 1px solid transparent; border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .78rem; }
 .review-picker-months button:hover { background: var(--accent-soft); color: var(--accent-strong); }
 .review-picker-months button.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
 .review-picker-hint { margin: 0; color: var(--muted); font-size: .72rem; text-align: center; }
 /* 图表标题行里的「实际投入／净进度」切换。 */
 .review-metric-switch button { min-height: 26px; padding: 0 10px; font-size: .76rem; }
+/* 图表标题行：切换与按钮并到右侧，两组之间拉开、组内靠紧。 */
+.review-charts-tools { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: flex-end; }
+.review-charts-group { display: flex; align-items: center; gap: 8px; }
+.review-charts-unit { color: var(--muted); font-size: .74rem; }
+.review-split-empty { margin: 0; color: var(--muted); font-size: .78rem; }
 /* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
 .review-split { display: grid; gap: 10px; }
 .review-charts > .review-split { border-top: 1px solid var(--line-soft); padding-top: 12px; }
@@ -1068,10 +1079,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .floating-panel .icon-action { min-width: 40px; min-height: 40px; }
 .floating-panel .habit-popover, .floating-panel .blank-action-bubble { position: static; width: auto; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; box-shadow: none; }
 .task-editor-fields form, .session-edit-fields { display: grid; gap: 12px; }
-/* 任务编辑：左侧标题、右侧控件，两列之间留出间距（此前标签和输入框贴在一起）。 */
-.task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 5.25rem minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); font-size: .76rem; }
+/* 任务编辑：左侧标题、右侧控件，两列之间留出间距；标题本身也往里缩一点。 */
+.task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .76rem; }
 .task-editor-fields form > label > input, .task-editor-fields form > label > .select-shell, .task-editor-fields form > label > .number-field, .task-editor-fields form > label > .date-field { width: 100%; min-width: 0; }
+/* 优先级三段按钮撑满整列，不要右边空一大块。 */
+.editor-field .segmented { width: 100%; }
+.editor-field .segmented button { flex: 1 1 0; }
 .editor-field-label { color: var(--muted); font-size: .76rem; }
+.task-editor-panel { width: min(25rem, calc(100vw - 24px)); }
 /* 日期字段：自绘圆角月历，不用原生日期控件。 */
 .date-field { position: relative; display: inline-flex; align-items: center; width: 100%; }
 .date-field-button { display: inline-flex; align-items: center; gap: 7px; width: 100%; min-height: 38px; padding: 0 32px 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: left; }

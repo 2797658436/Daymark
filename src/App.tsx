@@ -504,7 +504,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         }} />}
       {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
       {/* 截止页与回顾页共用的任务编辑气泡：复用与任务池完全相同的编辑会话，不复制表单。 */}
-      {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
+      {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
         <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setTaskEditorAnchor(null); }} onCancel={() => setTaskEditorAnchor(null)} onPhase={setTaskEditorBusy} />
       </div></FloatingPanel> : null; })()}
     </div>
@@ -673,7 +673,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
     {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
 
     <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
-    {editing && editingTask && <FloatingPanel key={editingTask.id} label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} onClose={() => setEditing(null)}><div className="task-editor-fields">
+    {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} onClose={() => setEditing(null)}><div className="task-editor-fields">
       <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={index.workspace.projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
   </aside>;

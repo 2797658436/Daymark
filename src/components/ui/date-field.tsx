@@ -54,15 +54,13 @@ export function DateField({ value, onChange, today, label, placeholder = "未设
       </div>
       <div className="review-picker-weekdays" aria-hidden="true">{WEEKDAY_LABELS.map((text) => <span key={text}>{text}</span>)}</div>
       <div className="review-picker-grid">
-        {monthRows(month).map((row) => <div className="review-picker-row" key={row.find(Boolean) ?? "empty"}>
-          {row.map((date, index) => date === null
-            ? <span key={`empty-${index}`} className="review-picker-day is-empty" />
-            : <button key={date} type="button"
-              className={["review-picker-day", date === today ? "is-today" : "", date === value ? "is-active" : ""].filter(Boolean).join(" ")}
-              aria-label={formatFieldDate(date, true)}
-              onClick={() => { onChange(date); setOpen(false); }}>
-              {Number(date.slice(8, 10))}
-            </button>)}
+        {monthRows(month).map((row) => <div className="review-picker-row" key={row[0].date}>
+          {row.map((cell) => <button key={cell.date} type="button"
+            className={["review-picker-day", cell.outside ? "is-outside" : "", cell.date === today ? "is-today" : "", cell.date === value ? "is-active" : ""].filter(Boolean).join(" ")}
+            aria-label={formatFieldDate(cell.date, true)}
+            onClick={() => { onChange(cell.date); setOpen(false); }}>
+            {Number(cell.date.slice(8, 10))}
+          </button>)}
         </div>)}
       </div>
       <div className="date-field-panel-foot">

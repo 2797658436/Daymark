@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIncreasing, Eraser, Pencil, Sparkles } from "lucide-react";
+import { ChartNoAxesColumnIncreasing, Eraser, List, Maximize2, Pencil, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
@@ -136,6 +136,21 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
 
   const titleOf = (taskId: string) => index.tasksById.get(taskId)?.title ?? "来源不可用";
   const projectTitleOf = (id: string) => index.projectsById.get(id)?.title ?? "来源不可用";
+
+  // 明细区的 Esc 兜底：容器自己的 onKeyDown 只在焦点落在里面时才生效，而从浮层里下钻时
+  // 宿主可能把焦点抢回触发按钮（归还发生在下一帧），那时 Esc 就没人接。
+  // 这里在文档上再挂一层：只要没有别的对话框在最上面，Esc 就关明细。
+  useEffect(() => {
+    if (!selection) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (document.querySelector('[role="dialog"]')) return;
+      event.stopPropagation();
+      closeDetail();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selection, closeDetail]);
   const taskChip = (taskId: string) => <button key={taskId} type="button" className="review-task-chip" data-review-trigger={`task:${taskId}`} aria-label={`查看任务「${titleOf(taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: taskId }, event.currentTarget)}>{titleOf(taskId)}</button>;
 
   const hasFacts = review.tasks.length > 0 || review.milestones.length > 0 || review.pendingReview.length > 0
@@ -170,7 +185,13 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   // 投入与净进度共用一张图：同一批日期、同一个时间轴，切成两个数值看。
   // 合并后省掉一整行，也避免两张图各自的坐标轴互相对齐。
   const [metric, setMetric] = useState<"minutes" | "delta">("minutes");
+  const [expanded, setExpanded] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailAnchor = useRef<HTMLButtonElement | null>(null);
   const isMinutes = metric === "minutes";
+  const chartRows = isMinutes ? minuteRows : deltaRows;
+  const chartTitle = isMinutes ? "实际投入" : "净进度变化";
+  const chartUnit = isMinutes ? "分钟" : "百分点";
 
   const weekDetail = period === "week" ? review.days.map((day) => ({
     date: day.date,
@@ -181,23 +202,20 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   })) : undefined;
 
   const mergedChart = <ReviewChart
-    title={isMinutes ? "实际投入" : "净进度变化"}
-    unit={isMinutes ? "分钟" : "百分点"}
-    rows={isMinutes ? minuteRows : deltaRows}
+    title={chartTitle}
+    unit={chartUnit}
+    rows={chartRows}
     signed={!isMinutes}
     emptyText={isMinutes ? "本周期没有记录实际投入，因此不绘制全零图表。" : "本周期没有进度变化。"}
     baselineNote={isMinutes ? undefined : "零基线以上是上调，以下是下调；下调如实显示，不代表失败。"}
-    headerSlot={<div className="segmented review-metric-switch" role="group" aria-label="图表数值">
-      <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
-      <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
-    </div>}
     splitDetail={weekDetail}
-    onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />;
+    onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)}
+    expanded={expanded} onExpand={setExpanded}
+    detailOpen={detailOpen} onDetailOpen={setDetailOpen} detailAnchor={detailAnchor} />;
 
-  const splitChart = review.actual.byProject.length >= 2
-    ? <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
-      onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />
-    : null;
+  // 没有记录时也给一个「0 分钟」的占位圆环：比整块消失更能说明「这里本来该有东西」。
+  const splitChart = <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+    onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />;
 
   const taskRows = review.tasks.length > 0
     ? <div className="review-detail-rows">{review.tasks.map((detail) => {
@@ -346,7 +364,25 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         : <>
           {/* ② 投入和进度图：一张图、一个单位，切换看投入还是净进度 */}
           <section className="surface-card review-charts" aria-labelledby="review-charts-title">
-            <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2></div>
+            {/* 切换与按钮都并进标题行：图本身不再带一行标题，卡片少一行高度。 */}
+            <div className="section-heading review-charts-head">
+              <h2 id="review-charts-title">投入和进度</h2>
+              <div className="review-charts-tools">
+                <div className="review-charts-group">
+                  <div className="segmented review-metric-switch" role="group" aria-label="图表数值">
+                    <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
+                    <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
+                  </div>
+                  <span className="review-charts-unit">单位：{chartUnit}</span>
+                </div>
+                <div className="review-charts-group">
+                  {period === "week" && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
+                    onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
+                  {chartRows.some((row) => row.value !== 0) && <button type="button" className="review-chart-expand" aria-label={`放大${chartTitle}图表`}
+                    onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
+                </div>
+              </div>
+            </div>
             {/* 周视图把图与投入去向并排；月视图 31 列需要整宽，圆环放在下面。 */}
             {period === "week"
               ? <div className="review-charts-row">
@@ -430,25 +466,30 @@ function SplitChart({ entries, titleOf, onOpen }: {
   return <section className="review-split" aria-labelledby="review-split-title">
     <div className="review-split-head"><strong id="review-split-title">投入去向</strong></div>
     <div className="review-split-body">
-      <ul className="review-split-list">
-        {visible.map((entry, index) => {
-          const arc = arcs[index];
-          const name = <span className="review-split-name">{arc.label}</span>;
-          return row(arc, entry.projectId
-            ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
-            : <span className="review-split-label">{name}</span>);
-        })}
-        {rest.length > 0 && row(arcs[arcs.length - 1], <span className="review-split-label">另外 {rest.length} 个去处</span>)}
-      </ul>
+      {total === 0
+        // 没有记录时给一个空环：整块消失会让人以为这里本来就没有这个板块。
+        ? <p className="review-split-empty">本期还没有记录投入</p>
+        : <ul className="review-split-list">
+          {visible.map((entry, index) => {
+            const arc = arcs[index];
+            const name = <span className="review-split-name">{arc.label}</span>;
+            return row(arc, entry.projectId
+              ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
+              : <span className="review-split-label">{name}</span>);
+          })}
+          {rest.length > 0 && row(arcs[arcs.length - 1], <span className="review-split-label">另外 {rest.length} 个去处</span>)}
+        </ul>}
       <div className="review-donut-wrap">
         <svg className="review-donut" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-          {arcs.map((arc) => <circle key={arc.key} cx="50" cy="50" r="38" fill="none" pathLength={100}
-            stroke={arc.color} strokeWidth="22"
-            strokeDasharray={`${Math.max(0, arc.percent - 0.9)} ${100 - Math.max(0, arc.percent - 0.9)}`}
-            strokeDashoffset={-arc.offset}
-            transform="rotate(-90 50 50)"
-            className={`review-donut-arc${hot && hot !== arc.key ? " is-dim" : ""}`}
-            onMouseEnter={() => setHot(arc.key)} onMouseLeave={() => setHot(null)} />)}
+          {total === 0
+            ? <circle cx="50" cy="50" r="38" fill="none" stroke="var(--line-soft)" strokeWidth="22" />
+            : arcs.map((arc) => <circle key={arc.key} cx="50" cy="50" r="38" fill="none" pathLength={100}
+              stroke={arc.color} strokeWidth="22"
+              strokeDasharray={`${Math.max(0, arc.percent - 0.9)} ${100 - Math.max(0, arc.percent - 0.9)}`}
+              strokeDashoffset={-arc.offset}
+              transform="rotate(-90 50 50)"
+              className={`review-donut-arc${hot && hot !== arc.key ? " is-dim" : ""}`}
+              onMouseEnter={() => setHot(arc.key)} onMouseLeave={() => setHot(null)} />)}
         </svg>
         <span className="review-donut-center" aria-hidden="true">
           <strong>{hotArc ? `${Math.round(hotArc.percent)}%` : Math.round(total / 60_000)}</strong>
