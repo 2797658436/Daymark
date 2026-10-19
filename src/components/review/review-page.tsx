@@ -201,6 +201,26 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     delta: formatPercentPoints(day.progressDelta),
   })) : undefined;
 
+  // 图表的标题行：切换与按钮都在这里，图本身不再带一行标题。
+  const chartsHeading = <div className="section-heading review-charts-head">
+    <h2 id="review-charts-title">投入和进度</h2>
+    <div className="review-charts-tools">
+      <div className="review-charts-group">
+        <div className="segmented review-metric-switch" role="group" aria-label="图表数值">
+          <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
+          <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
+        </div>
+        <span className="review-charts-unit">单位：{chartUnit}</span>
+      </div>
+      <div className="review-charts-group">
+        {period === "week" && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
+          onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
+        {chartRows.some((row) => row.value !== 0) && <button type="button" className="review-chart-expand" aria-label={`放大${chartTitle}图表`}
+          onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
+      </div>
+    </div>
+  </div>;
+
   const mergedChart = <ReviewChart
     title={chartTitle}
     unit={chartUnit}
@@ -364,32 +384,19 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         : <>
           {/* ② 投入和进度图：一张图、一个单位，切换看投入还是净进度 */}
           <section className="surface-card review-charts" aria-labelledby="review-charts-title">
-            {/* 切换与按钮都并进标题行：图本身不再带一行标题，卡片少一行高度。 */}
-            <div className="section-heading review-charts-head">
-              <h2 id="review-charts-title">投入和进度</h2>
-              <div className="review-charts-tools">
-                <div className="review-charts-group">
-                  <div className="segmented review-metric-switch" role="group" aria-label="图表数值">
-                    <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
-                    <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
-                  </div>
-                  <span className="review-charts-unit">单位：{chartUnit}</span>
-                </div>
-                <div className="review-charts-group">
-                  {period === "week" && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
-                    onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
-                  {chartRows.some((row) => row.value !== 0) && <button type="button" className="review-chart-expand" aria-label={`放大${chartTitle}图表`}
-                    onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
-                </div>
-              </div>
-            </div>
-            {/* 周视图把图与投入去向并排；月视图 31 列需要整宽，圆环放在下面。 */}
-            {period === "week"
-              ? <div className="review-charts-row">
+            {/* 周视图分两栏：标题（含切换与按钮）和柱状图同属左栏，右栏从第一行就是投入去向。
+                月视图 31 列需要整宽，标题在上、圆环在下。 */}
+            {period === "week" ? <div className="review-charts-row">
+              <div className="review-charts-col">
+                {chartsHeading}
                 {mergedChart}
-                {splitChart}
               </div>
-              : <>{mergedChart}{splitChart}</>}
+              {splitChart}
+            </div> : <>
+              {chartsHeading}
+              {mergedChart}
+              {splitChart}
+            </>}
           </section>
 
           {/* ③ 任务／项目明细 */}

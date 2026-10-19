@@ -830,6 +830,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 }
 /* 日／周：左列两张图，右列是**固定宽度**的投入去向（宽度不随内容伸缩，图例才稳定）。 */
 .review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 28px; align-items: start; }
+.review-charts-col { display: grid; gap: 12px; align-content: start; min-width: 0; }
 .review-charts-row > .review-split { border-left: 1px solid var(--line-soft); padding-left: 28px; }
 .review-charts-main { display: grid; gap: 12px; align-content: start; }
 .review-charts-main > .review-chart-figure + .review-chart-figure { border-top: 1px solid var(--line-soft); padding-top: 12px; }
@@ -949,7 +950,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 顶部留 34px 给数值标签：最高的那根柱的标签会顶到列外面，留少了会被裁掉。 */
 .chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 34px; }
 .chart-modal-column { position: relative; flex: 0 0 3.5rem; }
-.chart-modal-value { position: absolute; left: 50%; z-index: 2; margin-bottom: 4px; color: var(--muted-strong); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, -100%); }
+.chart-modal-value { position: absolute; left: 50%; z-index: 2; color: var(--muted-strong); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, calc(-100% - 5px)); }
 .chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
 /* 放大视图里的悬停气泡：挂在刻度下面，不跟柱顶的数值标签抢位置。 */
 .chart-modal-tip { position: absolute; top: calc(100% + 26px); left: 50%; z-index: 3; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); font-size: .7rem; font-weight: 600; white-space: nowrap; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .12s ease; }
@@ -987,7 +988,6 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-picker-months button { min-height: 40px; border: 1px solid transparent; border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .78rem; }
 .review-picker-months button:hover { background: var(--accent-soft); color: var(--accent-strong); }
 .review-picker-months button.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
-.review-picker-hint { margin: 0; color: var(--muted); font-size: .72rem; text-align: center; }
 /* 图表标题行里的「实际投入／净进度」切换。 */
 .review-metric-switch button { min-height: 26px; padding: 0 10px; font-size: .76rem; }
 /* 图表标题行：切换与按钮并到右侧，两组之间拉开、组内靠紧。 */
@@ -1082,11 +1082,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 任务编辑：左侧标题、右侧控件，两列之间留出间距；标题本身也往里缩一点。 */
 .task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .76rem; }
 .task-editor-fields form > label > input, .task-editor-fields form > label > .select-shell, .task-editor-fields form > label > .number-field, .task-editor-fields form > label > .date-field { width: 100%; min-width: 0; }
-/* 优先级三段按钮撑满整列，不要右边空一大块。 */
-.editor-field .segmented { width: 100%; }
-.editor-field .segmented button { flex: 1 1 0; }
+/* 优先级三段按钮撑满整列，高度和上面的时间输入框对齐（38px）。 */
+.editor-field .segmented { width: 100%; height: 38px; padding: 2px; }
+.editor-field .segmented button { flex: 1 1 0; height: 100%; padding: 0 8px; }
 .editor-field-label { color: var(--muted); font-size: .76rem; }
-.task-editor-panel { width: min(25rem, calc(100vw - 24px)); }
+.task-editor-panel { width: min(28rem, calc(100vw - 24px)); }
 /* 日期字段：自绘圆角月历，不用原生日期控件。 */
 .date-field { position: relative; display: inline-flex; align-items: center; width: 100%; }
 .date-field-button { display: inline-flex; align-items: center; gap: 7px; width: 100%; min-height: 38px; padding: 0 32px 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .8rem; font-variant-numeric: tabular-nums; text-align: left; }

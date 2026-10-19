@@ -97,7 +97,6 @@ export function ReviewPeriodPicker({ period, anchorDate, today, onSelect }: {
               </button>)}
             </div>)}
           </div>}
-        {period === "week" && <p className="review-picker-hint">点任意一条，查看它所在的一周</p>}
       </>}
     </FloatingPanel>}
   </>;

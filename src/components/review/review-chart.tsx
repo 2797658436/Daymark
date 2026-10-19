@@ -279,10 +279,11 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
     return { bottom: `${100 - zeroPercent}%`, height: "2px" };
   };
   /** 数值标签挂在柱顶（和上面气泡同一套算法）；柱子顶到 100% 时靠图顶留白接住。 */
+  // 标签一律用 `top` 定位到「柱顶那条线」，再由 translateY(-100%) 抬到线上面 ——
+  // 用 `bottom` 定位会先落在线上、再被 translate 抬一次，和柱顶之间就多出一个标签高度。
   const valueStyle = (value: number): CSSProperties => {
-    if (value > 0) return { bottom: `${100 - zeroPercent + (value / maxUp) * zeroPercent}%` };
-    if (value < 0) return { top: `${zeroPercent}%` };
-    return { bottom: `${100 - zeroPercent}%` };
+    if (value > 0) return { top: `${zeroPercent - (value / maxUp) * zeroPercent}%` };
+    return { top: `${zeroPercent}%` };
   };
   /** 悬停气泡里的完整说法：0 要说清是「没有记录」还是「没有变化」。 */
   const valueText = (value: number) => value === 0
