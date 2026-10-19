@@ -32,7 +32,9 @@ const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
 /** 「继续推进」最多直接列几项；再多就交给下方任务明细，避免摘要变成一墙胶囊。 */
 const CARRYOVER_PREVIEW = 6;
 /** 投入去向最多画几条；再多的合并成一行合计。 */
-const SPLIT_PREVIEW = 6;
+const SPLIT_PREVIEW = 8;
+/** 周视图的刻度要带星期：只有 7 列，放得下「周一 10/19」。 */
+const WEEKDAY_LABEL = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 export interface ReviewPageProps {
   index: WorkspaceIndex;
@@ -128,7 +130,12 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const hasFacts = review.tasks.length > 0 || review.milestones.length > 0 || review.pendingReview.length > 0
     || review.notAdvanced.count > 0 || review.actual.runningRecords.length > 0;
 
-  const tickOf = (date: string) => period === "day" ? formatDayLabel(date) : String(Number(date.slice(8, 10)));
+  const tickOf = (date: string) => {
+    if (period === "day") return formatDayLabel(date);
+    // 周视图只有 7 列，放得下「周一 10/19」；月视图 31 列只留日号。
+    if (period === "week") return `${WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()]} ${date.slice(5, 7)}/${date.slice(8, 10)}`;
+    return String(Number(date.slice(8, 10)));
+  };
   const minuteRows: ReviewChartRow[] = review.days.map((day) => ({
     date: day.date,
     value: day.recordedMinutes,
@@ -247,11 +254,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
       <section className="surface-card review-charts" aria-labelledby="review-charts-title">
         <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
-        {/* 单日每张图只有一行数值：两张并排，右边留给「投入去向」的圆环。
-            周／月仍然是上下堆叠（日期多，横向塞不下）。 */}
-        {period === "day"
-          ? <div className="review-day-row">
-            <div className="review-chart-row">
+        {/* 日／周：左列是投入和进度（两张图上下排），右列是固定宽度的投入去向圆环。
+            月视图仍上下堆叠 —— 31 天需要整宽。 */}
+        {(period === "day" || period === "week")
+          ? <div className="review-charts-row">
+            <div className="review-charts-main">
               <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
               <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
             </div>
@@ -346,7 +353,8 @@ function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "com
  * 投入去向：圆环 + 图例。
  *
  * 和上面两张图共用「一个单位」的规矩（分钟），但没有日期维度，所以用圆环直接比较
- * 各部分占多少。圆环本身对辅助技术隐藏（`aria-hidden`），可读的等价物是左边那列图例。
+ * 各部分占多少。圆环用 SVG 分段（每段可单独悬停），对辅助技术隐藏（`aria-hidden`），
+ * 可读的等价物是左边那列图例；悬停某一段或某一行时，环心换成那一段的百分比。
  * 项目名可点，进入该项目在本周期的明细。
  */
 function SplitChart({ entries, titleOf, onOpen }: {
@@ -354,47 +362,59 @@ function SplitChart({ entries, titleOf, onOpen }: {
   titleOf: (projectId: string | null) => string;
   onOpen: (projectId: string | null, trigger: HTMLElement) => void;
 }) {
+  const [hot, setHot] = useState<string | null>(null);
   const visible = entries.slice(0, SPLIT_PREVIEW);
   const rest = entries.slice(SPLIT_PREVIEW);
   const total = entries.reduce((sum, entry) => sum + entry.recordedMs, 0);
-
-  // 圆环分片按可见条目依次取色；被合并的「另外 N 个去处」用一档中性色收尾。
-  let cursor = 0;
-  const segments = visible.map((entry, index) => {
-    const from = (cursor / total) * 100;
-    cursor += entry.recordedMs;
-    return `var(--chart-${(index % 6) + 1}) ${from}% ${(cursor / total) * 100}%`;
-  });
   const restMs = rest.reduce((sum, entry) => sum + entry.recordedMs, 0);
-  if (restMs > 0) segments.push(`var(--line-strong) ${(cursor / total) * 100}% 100%`);
 
-  const label = (entry: { projectId: string | null }, index: number) => {
-    const title = titleOf(entry.projectId);
-    const name = <span className="review-split-name">{title}</span>;
-    return <>
-      <span className="review-split-dot" style={{ background: `var(--chart-${(index % 6) + 1})` }} aria-hidden="true" />
-      {entry.projectId
-        ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${title}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
-        : <span className="review-split-label">{name}</span>}
-    </>;
-  };
+  const arcs: { key: string; label: string; recordedMs: number; color: string; percent: number; offset: number }[] = [];
+  let cursor = 0;
+  visible.forEach((entry, index) => {
+    const percent = (entry.recordedMs / total) * 100;
+    arcs.push({ key: entry.projectId ?? "independent", label: titleOf(entry.projectId), recordedMs: entry.recordedMs, color: `var(--chart-${(index % 6) + 1})`, percent, offset: cursor });
+    cursor += percent;
+  });
+  if (restMs > 0) arcs.push({ key: "rest", label: `另外 ${rest.length} 个去处`, recordedMs: restMs, color: "var(--line-strong)", percent: (restMs / total) * 100, offset: cursor });
+
+  const hotArc = arcs.find((arc) => arc.key === hot);
+
+  const row = (arc: typeof arcs[number], content: ReactNode) => <li key={arc.key}
+    className={hot === arc.key ? "is-hot" : undefined}
+    onMouseEnter={() => setHot(arc.key)} onMouseLeave={() => setHot(null)}
+    onFocus={() => setHot(arc.key)} onBlur={() => setHot(null)}>
+    <span className="review-split-dot" style={{ background: arc.color }} aria-hidden="true" />
+    {content}
+    <span className="review-split-value">{formatRecordedMs(arc.recordedMs)}</span>
+  </li>;
 
   return <section className="review-split" aria-labelledby="review-split-title">
-    <div className="review-split-head"><strong id="review-split-title">投入去向</strong><span>按项目 · 共 {formatRecordedMs(total)}</span></div>
+    <div className="review-split-head"><strong id="review-split-title">投入去向</strong></div>
     <div className="review-split-body">
       <ul className="review-split-list">
-        {visible.map((entry, index) => <li key={entry.projectId ?? "independent"}>
-          {label(entry, index)}
-          <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
-        </li>)}
-        {rest.length > 0 && <li className="review-split-rest">
-          <span className="review-split-dot" style={{ background: "var(--line-strong)" }} aria-hidden="true" />
-          <span className="review-split-label">另外 {rest.length} 个去处</span>
-          <span className="review-split-value">{formatRecordedMs(restMs)}</span>
-        </li>}
+        {visible.map((entry, index) => {
+          const arc = arcs[index];
+          const name = <span className="review-split-name">{arc.label}</span>;
+          return row(arc, entry.projectId
+            ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
+            : <span className="review-split-label">{name}</span>);
+        })}
+        {rest.length > 0 && row(arcs[arcs.length - 1], <span className="review-split-label">另外 {rest.length} 个去处</span>)}
       </ul>
-      <div className="review-donut" style={{ background: `conic-gradient(${segments.join(",")})` }} aria-hidden="true">
-        <span className="review-donut-center"><strong>{Math.round(total / 60_000)}</strong><span>分钟</span></span>
+      <div className="review-donut-wrap">
+        <svg className="review-donut" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          {arcs.map((arc) => <circle key={arc.key} cx="50" cy="50" r="38" fill="none" pathLength={100}
+            stroke={arc.color} strokeWidth="22"
+            strokeDasharray={`${Math.max(0, arc.percent - 0.9)} ${100 - Math.max(0, arc.percent - 0.9)}`}
+            strokeDashoffset={-arc.offset}
+            transform="rotate(-90 50 50)"
+            className={`review-donut-arc${hot && hot !== arc.key ? " is-dim" : ""}`}
+            onMouseEnter={() => setHot(arc.key)} onMouseLeave={() => setHot(null)} />)}
+        </svg>
+        <span className="review-donut-center" aria-hidden="true">
+          <strong>{hotArc ? `${Math.round(hotArc.percent)}%` : Math.round(total / 60_000)}</strong>
+          <span>{hotArc ? formatRecordedMs(hotArc.recordedMs) : "分钟"}</span>
+        </span>
       </div>
     </div>
   </section>;

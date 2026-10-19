@@ -157,35 +157,45 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     </tbody>
   </table>;
 
+  const caption = <figcaption className="review-chart-caption">
+    <strong>{title}</strong>
+    <span>单位：{unit}</span>
+    {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
+  </figcaption>;
+
+  const plot = !single && <div className="review-chart" aria-hidden="true">
+    <div className="review-chart-plot">
+      <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
+      {rows.map((row, index) => <div className="review-chart-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+        <span className={barClass(row.value)} style={barStyle(row.value)} />
+        {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
+        <span className={`review-chart-tip${index < 2 ? " is-start" : index > rows.length - 3 ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
+      </div>)}
+    </div>
+    <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>{row.tick}</span>)}</div>
+  </div>;
+
+  // 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
+  // 长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。
+  // 列对数按**这一格自己的宽度**算：并排时右边只有 20rem，只能放一对。
+  const slot = <div className="review-chart-slot" ref={ref}>
+    {collapsible
+      ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
+      : table}
+  </div>;
+
   return <figure className={`review-chart-figure${single ? " is-single" : ""}`}>
-    <figcaption className="review-chart-caption">
-      <strong>{title}</strong>
-      <span>单位：{unit}</span>
-      {!single && hasValues && <button type="button" className="review-chart-expand" aria-label={`放大${title}图表`} onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
-    </figcaption>
-
-    {hasValues ? <div className={`review-chart-body${sideBySide ? " is-side" : ""}`}>
-      {!single && <div className="review-chart" aria-hidden="true">
-        <div className="review-chart-plot">
-          <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
-          {rows.map((row, index) => <div className="review-chart-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
-            <span className={barClass(row.value)} style={barStyle(row.value)} />
-            {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
-            <span className={`review-chart-tip${index < 2 ? " is-start" : index > rows.length - 3 ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
-          </div>)}
-        </div>
-        <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>{row.tick}</span>)}</div>
-      </div>}
-
-      {/* 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
-          长周期默认收起成一行摘要 —— 表格仍在 DOM 里，键盘也能展开。
-          列对数按**这一格自己的宽度**算：并排时右边只有 14rem，只能放一对。 */}
-      <div className="review-chart-slot" ref={ref}>
-        {collapsible
-          ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{table}</details>
-          : table}
+    {hasValues && sideBySide
+      // 并排：标题（含「放大」）留在图的这一列，右边才是日期与数值 ——
+      // 否则按钮会飘到卡片最右侧、落在表格上方。
+      ? <div className="review-chart-body is-side">
+        <div className="review-chart-main">{caption}{plot}</div>
+        {slot}
       </div>
-    </div> : <p className="review-chart-empty">{emptyText}</p>}
+      : <>
+        {caption}
+        {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
+      </>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
     {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}

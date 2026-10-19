@@ -239,9 +239,9 @@ describe("review page", () => {
     expect(minutesFigure().classList.contains("is-single")).toBe(true);
     expect(minutesFigure().querySelector(".review-chart-plot")).toBeNull();
     expect(within(minutesFigure()).getByText("60 分钟")).toBeVisible();
-    // 两张单值图并排，右边是投入去向的圆环。
-    expect(document.querySelector(".review-day-row")).not.toBeNull();
-    expect(document.querySelector(".review-chart-row")).not.toBeNull();
+    // 两张单值图上下排在左列，右边留给投入去向的圆环。
+    expect(document.querySelector(".review-charts-row")).not.toBeNull();
+    expect(document.querySelector(".review-charts-main")).not.toBeNull();
   });
 
   it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", () => {
