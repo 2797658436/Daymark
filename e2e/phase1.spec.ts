@@ -1023,7 +1023,7 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
 
   // 日视图：就是那一天。
   await page.getByRole("button", { name: "日", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "8月5日回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "今日回顾", level: 1 })).toBeVisible();
   await expect.poll(storedReview).toMatchObject({ reviewPeriod: "day" });
 
   // 月视图：自然月，日期概览覆盖整月。

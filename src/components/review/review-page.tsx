@@ -170,9 +170,9 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         和下面的图表、明细争夺同一行空间，读起来像备注而不是结论。
         用 div + role=group 而不是 section：规格里的三段顺序（成果→图表→明细）不该被摘要打断。 */}
     {hasFacts && <div className="review-stats" role="group" aria-label="本周期总览">
-      <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} label="实际投入" note={`${review.days.filter((day) => day.recordedMinutes > 0).length} 天有记录`} />
+      <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} label="实际投入" />
       <Stat kind="progress" value={formatPercentPoints(review.progress.netDelta)} label="净进度" note={`${review.progress.changedTaskIds.length} 项有进度变化`} />
-      <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项`} label="曾完成" note={`${review.carryoverTaskIds.length} 项仍可继续`} />
+      <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项完成`} note={`${review.carryoverTaskIds.length} 项仍可继续`} />
     </div>}
 
     {projectId !== null && <p className="review-scope" role="status">
@@ -189,7 +189,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         {/* 一行总账替代原来的四段计数句子：同样的数字只出现一次，细节交给下面三块与任务明细。 */}
         <p className="review-outcome-summary">
           {review.progress.changedTaskIds.length} 项有进度变化 · {review.carryoverTaskIds.length} 项仍可继续安排
-          {review.progress.completedTaskIds.length > 0 && ` · ${review.progress.completedTaskIds.length} 项曾完成`}
+          {review.progress.completedTaskIds.length > 0 && ` · ${review.progress.completedTaskIds.length} 项完成`}
         </p>
         <div className="review-outcome-grid">
           <article className="review-outcome-block">
@@ -200,51 +200,58 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
             </> : <p className="review-muted">本周期没有需要继续推进的任务。</p>}
           </article>
           {/* 待回顾与里程碑同属「需要你处理」，竖着排在一列：它们很少同时为空，
-              分三列会让中间空出一整栏。 */}
-          <div className="review-outcome-side">
-            <article className="review-outcome-block">
-            <h3>待回顾</h3>
-            {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0) ? <>
-              <p>{review.pendingReview.length} 个已结束的时段还没有记录</p>
-              <ul className="review-detail-list">
-                {review.pendingReview.map((session) => <li key={session.id}>
-                  <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
-                  <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
-                </li>)}
-                {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这一块，用标签区分。 */}
-                {review.actual.runningRecords.map((record) => <li key={record.id}>
-                  <span className="review-tag">进行中</span>
-                  <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
-                  <time>开始于 {formatClock(record.actualStartUtc)}</time>
-                </li>)}
-              </ul>
-            </> : <p className="review-muted">没有需要回顾的时段。</p>}
-          </article>
-          <article className="review-outcome-block">
-            <h3>里程碑</h3>
-            {review.milestones.length > 0 ? <>
-              <p>{review.milestones.length} 个在本周期到期</p>
-              <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId} className="review-milestone">
-                <div className="review-milestone-head">
-                  <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
-                  <time>{formatDayLabel(milestone.targetLocalDate)}</time>
-                  <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>{milestone.reached ? "达成" : "未达成"}</span>
-                </div>
-                {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
-                <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
-              </li>)}</ul>
-            </> : <p className="review-muted">本周期没有到期的里程碑。</p>}
-            </article>
-          </div>
+              分三列会让中间空出一整栏。两者都为空时并成一句，别让空状态占掉半张卡。 */}
+          {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0 || review.milestones.length > 0)
+            ? <div className="review-outcome-side">
+              <article className="review-outcome-block">
+                <h3>待回顾</h3>
+                {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0) ? <>
+                  <p>{review.pendingReview.length} 个已结束的时段还没有记录</p>
+                  <ul className="review-detail-list">
+                    {review.pendingReview.map((session) => <li key={session.id}>
+                      <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
+                      <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
+                    </li>)}
+                    {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这一块，用标签区分。 */}
+                    {review.actual.runningRecords.map((record) => <li key={record.id}>
+                      <span className="review-tag">进行中</span>
+                      <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
+                      <time>开始于 {formatClock(record.actualStartUtc)}</time>
+                    </li>)}
+                  </ul>
+                </> : <p className="review-muted">没有需要回顾的时段。</p>}
+              </article>
+              <article className="review-outcome-block">
+                <h3>里程碑</h3>
+                {review.milestones.length > 0 ? <>
+                  <p>{review.milestones.length} 个在本周期到期</p>
+                  <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId} className="review-milestone">
+                    <div className="review-milestone-head">
+                      <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
+                      <time>{formatDayLabel(milestone.targetLocalDate)}</time>
+                      <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>{milestone.reached ? "达成" : "未达成"}</span>
+                    </div>
+                    {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
+                    <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
+                  </li>)}</ul>
+                </> : <p className="review-muted">本周期没有到期的里程碑。</p>}
+              </article>
+            </div>
+            : <article className="review-outcome-block">
+              <h3>需要你处理</h3>
+              <p className="review-muted">本期没有待回顾的时段，也没有到期的里程碑。</p>
+            </article>}
         </div>
       </section>
 
       {/* ② 投入和进度图：两张图、两个单位、各带等价数值表 */}
       <section className="surface-card review-charts" aria-labelledby="review-charts-title">
         <div className="section-heading"><h2 id="review-charts-title">投入和进度</h2><span>分钟与百分点分开呈现</span></div>
-        <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-        <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
-        {/* 第三张图：投入去向。只有两个以上去处时才画 —— 一个项目的分布没有比较意义。 */}
+        {/* 单日每张图只有一行数值，上下堆叠会拉出一条很长的空白：并排放两列。 */}
+        <div className={period === "day" ? "review-chart-row" : "review-chart-stack"}>
+          <ReviewChart title="实际投入" unit="分钟" rows={minuteRows} emptyText="本周期没有记录实际投入，因此不绘制全零图表。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+          <ReviewChart title="净进度变化" unit="百分点" rows={deltaRows} signed emptyText="本周期没有进度变化。" baselineNote="零基线以上是上调，以下是下调；下调如实显示，不代表失败。" onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)} />
+        </div>
         {review.actual.byProject.length >= 2 && <SplitChart
           entries={review.actual.byProject}
           titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
@@ -312,13 +319,14 @@ function ReviewEmpty({ icon, title, text, action }: { icon: ReactNode; title: st
 }
 
 /** 第一行的三个大字。数值用 `data-review-stat` 标出，方便核对与测试。
- *  数字与单位分开排：单位跟数字同高会把「1481 分钟」读成两个等重的信息。 */
-function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "completed"; value: string; label: string; note: string }) {
+ *  数字与单位分开排：单位跟数字同高会把「1481 分钟」读成两个等重的信息。
+ *  没有标签的那一块仍然占住标签行（`min-height`），否则下面的注释会跟旁边错行。 */
+function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "completed"; value: string; label?: string; note?: string }) {
   const [amount, unit] = value.split(" ");
   return <div className="review-stat" data-review-stat={kind}>
     <span className="review-stat-value">{amount}{unit && <>{" "}<span className="review-stat-unit">{unit}</span></>}</span>
-    <span className="review-stat-label">{label}</span>
-    <span className="review-stat-note">{note}</span>
+    <span className="review-stat-label">{label ?? ""}</span>
+    {note && <span className="review-stat-note">{note}</span>}
   </div>;
 }
 
@@ -359,9 +367,10 @@ function SplitChart({ entries, titleOf, onOpen }: {
   </section>;
 }
 
-/** 周期标题按周期给出：日＝「8 月 5 日回顾」，月＝「2026 年 8 月回顾」，周＝当前周说「本周」。 */
+/** 周期标题按周期给出：日＝「今日回顾」（看别的日子才写日期），月＝「2026 年 8 月回顾」，
+ *  周＝当前周说「本周」。日期本身已经在页头的小字里，标题不再重复一遍。 */
 function periodTitle(period: ReviewPeriod, review: ReviewResult, today: string) {
-  if (period === "day") return `${formatDayLabel(review.startDate)}回顾`;
+  if (period === "day") return review.startDate === today ? "今日回顾" : `${formatDayLabel(review.startDate)}回顾`;
   if (period === "month") return `${new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(`${review.startDate}T12:00:00`))}回顾`;
   return review.days.some((day) => day.date === today) ? "本周回顾" : `${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}回顾`;
 }

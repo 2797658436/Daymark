@@ -239,6 +239,9 @@ describe("review page", () => {
     expect(minutesFigure().classList.contains("is-single")).toBe(true);
     expect(minutesFigure().querySelector(".review-chart-plot")).toBeNull();
     expect(within(minutesFigure()).getByText("60 分钟")).toBeVisible();
+    // 两张单值图并排，不再上下堆叠成一长条空白。
+    expect(document.querySelector(".review-chart-row")).not.toBeNull();
+    expect(document.querySelector(".review-chart-stack")).toBeNull();
   });
 
   it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", () => {
@@ -286,7 +289,7 @@ describe("review page", () => {
 
     await user.click(screen.getByRole("button", { name: "日" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "day" });
-    expect(screen.getByRole("heading", { name: "3月7日回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "今日回顾", level: 1 })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "下一周期" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-03-08" });
   });

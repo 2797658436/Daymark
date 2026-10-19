@@ -798,19 +798,29 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
 /* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
-/* 第一行的三个大字：投入 / 净进度 / 曾完成。 */
-.review-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line-soft); padding-block: 14px; container-type: inline-size; }
+/* 第一行的三个大字：投入 / 净进度 / 完成。用和下面一致的圆角卡片做底，
+   内边距与卡片一致（20px），所以数字和下面卡片的内文在同一条竖线上。 */
+.review-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 16px 20px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--panel); box-shadow: var(--shadow-low); container-type: inline-size; }
 .review-stat { display: grid; gap: 2px; min-width: 0; }
 .review-stat + .review-stat { border-left: 1px solid var(--line-soft); padding-left: 20px; }
 .review-stat-value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
 .review-stat-unit { color: var(--muted-strong); font-size: .82rem; font-weight: 500; letter-spacing: 0; }
-.review-stat-label { color: var(--muted-strong); font-size: .78rem; }
+.review-stat-label { min-height: 1.2em; color: var(--muted-strong); font-size: .78rem; }
 .review-stat-note { color: var(--muted); font-size: .72rem; }
 @container (max-width: 42rem) {
   .review-stats { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .review-stat + .review-stat { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
 }
 .review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
+.review-charts { container-type: inline-size; }
+.review-chart-stack { display: grid; gap: 12px; }
+.review-chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+/* 两列之间给一条分隔线：否则左列的数值会紧挨右列的日期，读成一串。 */
+.review-chart-row > .review-chart-figure + .review-chart-figure { border-left: 1px solid var(--line-soft); padding-left: 28px; }
+@container (max-width: 44rem) {
+  .review-chart-row { grid-template-columns: minmax(0, 1fr); }
+  .review-chart-row > .review-chart-figure + .review-chart-figure { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+}
 .review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .review-outcome-side { display: grid; gap: 14px; align-content: start; }
 /* 窄窗口与高缩放下并成一列：阈值用 rem，跟着界面缩放一起走。 */
