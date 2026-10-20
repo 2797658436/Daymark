@@ -176,7 +176,6 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
           <Fact label="当前完成度" value={`${task.progress}%`} />
         </dl>
         : <p className="review-detail-note">该任务在当前周期内没有事实。</p>}
-      <p className="review-detail-note">当前完成度是当前值，不是周期历史。</p>
     </section>
 
     {/* 执行卡只在「有话说」时出现：只列非零的计数胶囊 + 待续标记与原因。

@@ -342,7 +342,8 @@ describe("review page", () => {
     expect(panel.contains(document.activeElement)).toBe(true);
     expect(detail.textContent).toContain("40% → 60%");
     expect(detail.textContent).toContain("第一段");
-    expect(detail.textContent).toContain("当前值，不是周期历史");
+    // 「当前完成度」由标签自己说明是当前值，不再补一句免责说明。
+    expect(detail.textContent).toContain("当前完成度");
     expect(detail.textContent).toContain("3月5日");
 
     await user.keyboard("{Escape}");
@@ -438,7 +439,7 @@ describe("review page", () => {
 
   it("falls back to the page heading when there is no trigger left for the target", async () => {
     renderPage({ selection: { kind: "task", id: "t-idle" } });
-    // 该任务在本周期内没有任何事实：明细保留「当前完成度是当前值」这条仍成立的事实。
+    // 该任务在本周期内没有任何事实：明细只说这一句，不编造数字。
     expect(screen.getByText(/该任务在当前周期内没有事实/)).toBeVisible();
     expect(document.querySelector('[data-review-trigger="task:t-idle"]')).toBeNull();
     fireEvent.keyDown(document.querySelector<HTMLElement>(".review-detail")!, { key: "Escape" });
