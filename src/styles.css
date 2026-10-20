@@ -205,8 +205,6 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .workspace-main { min-width: 0; overflow: auto; padding: 24px clamp(18px, 2.5vw, 36px) 36px; position: relative; scrollbar-gutter: stable; }
 .calendar-workspace { overflow: hidden; }
 .page-stack { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
-/* 回顾页向左顶格（2026-10-20 用户要求，先看效果）：宽窗口下不再居中留白，内容从主区左边距起。 */
-.page-stack.review-page { margin-left: 0; }
 .without-task-pool .page-stack { max-width: 1280px; }
 .page-header { min-height: 64px; display: flex; justify-content: space-between; gap: 18px; align-items: center; padding-bottom: 4px; }
 .eyebrow { display: block; color: var(--accent-strong); text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; font-weight: 600; margin-bottom: 6px; }
@@ -1084,11 +1082,11 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-task-group-head h3 .review-inline-link:hover { color: var(--accent-strong); }
 /* 只给「N 项 · 合计」推右：写成 span 会把色点也推走，卡头就变成居中了。 */
 .review-task-group-count { margin-left: auto; flex: none; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
-/* 任务行缩进一档：项目在卡头、任务在卡内，缩进就是层级。
-   缩进写在行上（不是容器上），分隔线才会通到卡片左缘，看着像分组而不是缩进的块。 */
+/* 任务行不再整体缩进：「待续」那一列自己顶到卡片内容左缘（和卡头的色点同一条线），
+   层级靠这一列和它后面的任务名拉开，不靠整行右移 —— 否则标记离左边缘隔着一大段空白。 */
 .review-detail-rows { display: grid; }
 /* 行里不再有动作列：单列排布，任务名拿到整行宽度（200% 缩放下也不会被按钮挤到折行）。 */
-.review-detail-row { display: grid; padding: 13px 0 13px 3.25rem; border-top: 1px solid var(--line-soft); }
+.review-detail-row { display: grid; padding: 13px 0; border-top: 1px solid var(--line-soft); }
 .review-detail-rows > .review-detail-row:first-child { border-top: 0; }
 .review-detail-main { display: grid; gap: 3px; min-width: 0; }
 /* 任务名是这一行的主体：用正文字色而不是强调色 —— 11 行橙色标题会把整页拉成一片。 */
