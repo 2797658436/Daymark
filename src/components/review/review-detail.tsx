@@ -164,7 +164,8 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
   task: Task;
   onOpenProject: (projectId: string, milestoneId: string | null) => void;
 }) {
-  const executionCounts = detail ? [detail.pendingReviewCount, detail.missedCount, detail.skippedCount] : [];
+  /** 只留非零的计数：三个 0 说的是同一件事，不值得各占一个胶囊。 */
+  const executionCounts = detail ? [detail.pendingReviewCount, detail.missedCount, detail.skippedCount].filter((value) => value > 0) : [];
   return <>
     <section className="review-detail-card" aria-label="本周期">
       {detail

@@ -358,6 +358,9 @@ describe("review page", () => {
     // 「净进度变化」就是区间两端之差，不再单列；副标题只说项目，不重复「当前完成度」。
     expect(taskDetail.textContent).not.toContain("净进度变化");
     expect(taskDetail.querySelector(".review-detail-sub")?.textContent).toBe("学会 Rust");
+    // 三个计数都是 0 时不渲染空胶囊列表，改成一句话。
+    expect(taskDetail.querySelector(".review-detail-chips")).toBeNull();
+    expect(taskDetail.textContent).toContain("本周期没有待回顾、未推进或跳过的时段");
 
     // 项目：截止日期只在数字卡里出现一次（副标题不再写「截止 X」）。
     await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
