@@ -1073,7 +1073,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 任务明细照设置页的形态做：每个项目一张圆角卡（卡头＝项目名下钻入口 + 项数与合计），
    卡内一行一个任务，行与行用分隔线连；行是「标题 + 说明」两行，左列不会空成一条缝。 */
 .review-task-groups { display: grid; gap: 12px; }
-.review-task-group { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 0 1.375rem .25rem; }
+.review-task-group { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 0 1rem .25rem; }
 .review-task-group-head { display: flex; align-items: center; gap: 9px; padding: 15px 0 12px; border-bottom: 1px solid var(--line-soft); }
 /* 卡头色点：与左边圆环里那一块同色，把「这一组」和「圆环的这一段」对上。 */
 .review-task-group-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
@@ -1090,14 +1090,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-detail-rows > .review-detail-row:first-child { border-top: 0; }
 .review-detail-main { display: grid; gap: 3px; min-width: 0; }
 /* 任务名是这一行的主体：用正文字色而不是强调色 —— 11 行橙色标题会把整页拉成一片。 */
-.review-detail-title { display: grid; grid-template-columns: 3rem minmax(0, 1fr); align-items: center; gap: 10px; font-size: 1rem; font-weight: 600; }
+.review-detail-title { display: grid; grid-template-columns: 2.75rem minmax(0, 1fr); align-items: center; gap: 8px; font-size: 1rem; font-weight: 600; }
 /* 有「待续」和没有「待续」的行，任务名都从同一条线起 —— 标记占固定一列，不用它撑宽度。 */
 .review-detail-title > .review-detail-flag { grid-column: 1; justify-self: start; }
 .review-detail-title > .review-inline-link, .review-detail-title > span:last-child { grid-column: 2; }
 .review-detail-title .review-inline-link { color: var(--text); }
 .review-detail-title .review-inline-link:hover { color: var(--accent-strong); }
 /* 第二行跟任务名同一条竖线起：标记那一列只占第一行，事实行缩进对齐。 */
-.review-detail-meta { margin: 0 0 0 calc(3rem + 10px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+.review-detail-meta { margin: 0 0 0 calc(2.75rem + 8px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
 /* 「待续」放在任务名前面：它是这一行的结论，先于名字被扫到；胶囊靠左也不会参差。 */
 .review-detail-flag { flex: none; padding: .1rem .45rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .72rem; line-height: 1.35; }
 .review-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
