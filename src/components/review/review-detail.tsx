@@ -179,19 +179,17 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
       <p className="review-detail-note">当前完成度是当前值，不是周期历史。</p>
     </section>
 
-    {detail && <section className="review-detail-card" aria-label="执行">
-      {/* 只列非零项：三个「0」说的是同一件事，排成三个胶囊反而占掉一行。 */}
-      {executionCounts.length > 0
-        ? <ul className="review-detail-chips">
-          {detail.pendingReviewCount > 0 && <li>待回顾 <b>{detail.pendingReviewCount}</b></li>}
-          {detail.missedCount > 0 && <li>明确未推进 <b>{detail.missedCount}</b></li>}
-          {detail.skippedCount > 0 && <li>跳过／取消 <b>{detail.skippedCount}</b></li>}
-        </ul>
-        : <p className="review-detail-note">本周期没有待回顾、未推进或跳过的时段。</p>}
+    {/* 执行卡只在「有话说」时出现：只列非零的计数胶囊 + 待续标记与原因。
+        两者都没有就整张卡不渲染 —— 不写「本周期没有…」这类占位句，空着比说一句
+        「什么都没有」干净；页首的待回顾提示与「明确未推进」段已经覆盖了这些事实。 */}
+    {detail && (executionCounts.length > 0 || detail.carryover) && <section className="review-detail-card" aria-label="执行">
+      {executionCounts.length > 0 && <ul className="review-detail-chips">
+        {detail.pendingReviewCount > 0 && <li>待回顾 <b>{detail.pendingReviewCount}</b></li>}
+        {detail.missedCount > 0 && <li>明确未推进 <b>{detail.missedCount}</b></li>}
+        {detail.skippedCount > 0 && <li>跳过／取消 <b>{detail.skippedCount}</b></li>}
+      </ul>}
       {/* 待续是「要不要接着做」的结论，不跟计数混在一排胶囊里 —— 它有自己的标记和原因。 */}
-      {detail.carryover
-        ? <p className="review-detail-flag-line"><span className="review-detail-flag">待续</span><span>{detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}</span></p>
-        : executionCounts.length > 0 && <p className="review-detail-note">没有待续原因。</p>}
+      {detail.carryover && <p className="review-detail-flag-line"><span className="review-detail-flag">待续</span><span>{detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}</span></p>}
     </section>}
 
     {detail && <section className="review-detail-card" aria-label="记录">

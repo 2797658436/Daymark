@@ -358,15 +358,30 @@ describe("review page", () => {
     // 「净进度变化」就是区间两端之差，不再单列；副标题只说项目，不重复「当前完成度」。
     expect(taskDetail.textContent).not.toContain("净进度变化");
     expect(taskDetail.querySelector(".review-detail-sub")?.textContent).toBe("学会 Rust");
-    // 三个计数都是 0 时不渲染空胶囊列表，改成一句话。
+    // 三个计数都是 0 时不渲染胶囊，也不写「本周期没有…」这类占位句；
+    // 这个任务有「待续」，所以执行卡还在。
     expect(taskDetail.querySelector(".review-detail-chips")).toBeNull();
-    expect(taskDetail.textContent).toContain("本周期没有待回顾、未推进或跳过的时段");
+    expect(taskDetail.textContent).not.toContain("本周期没有待回顾");
+    expect(taskDetail.querySelector('[aria-label="执行"]')).not.toBeNull();
 
     // 项目：截止日期只在数字卡里出现一次（副标题不再写「截止 X」）。
     await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
     const projectDetail = document.querySelector<HTMLElement>(".review-detail")!;
     expect(projectDetail.querySelector(".review-detail-sub")).toBeNull();
     expect((projectDetail.textContent ?? "").split("2026-03-31").length - 1).toBe(1);
+  });
+
+  it("drops the execution card entirely when there is nothing to report", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const workspace = fixture();
+    // 已完成、没有待回顾／未推进／跳过、也不待续 —— 执行卡没有任何内容可说。
+    workspace.tasks = [...workspace.tasks, task("t-done", { title: "已完成任务", progress: 100, status: "completed", sortOrder: 9 })];
+    workspace.progressEvents = [...workspace.progressEvents, event("e-done", { taskId: "t-done", fromProgress: 0, toProgress: 100, occurredAtUtc: localToUtc("2026-03-05", "10:00") })];
+    renderPage({ workspace });
+    await user.click(taskRowButton("已完成任务"));
+    const detail = document.querySelector<HTMLElement>(".review-detail")!;
+    expect(detail.querySelector('[aria-label="执行"]')).toBeNull();
+    expect(detail.textContent).not.toContain("本周期没有待回顾");
   });
 
   it("closes the bubble on a blank click and lets the next row take over in one click", async () => {
