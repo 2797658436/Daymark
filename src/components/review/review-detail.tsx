@@ -77,18 +77,19 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
         onProjectId={onProjectId} onOpenProject={onOpenProject} />
       : null;
 
-  // 正文放不下时在底边做一道淡出：气泡高度按「触发元素下方剩多少」定，内容常常比它长，
-  // 没有这道提示，被裁在卡片中间的标题会看着像画坏了。
+  // 正文放不下时在底边做一道淡出，提示「下面还有」；**滚到底就撤掉**，
+  // 否则最后一行（比如「已记录实际」）会被这道渐变永久压住，看着像没渲染完。
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [scrollable, setScrollable] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
   useLayoutEffect(() => {
     const node = bodyRef.current;
     if (!node) return;
-    const check = () => setScrollable(node.scrollHeight > node.clientHeight + 2);
+    const check = () => setMoreBelow(node.scrollHeight - node.scrollTop - node.clientHeight > 4);
     check();
+    node.addEventListener("scroll", check, { passive: true });
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(check) : null;
     observer?.observe(node);
-    return () => observer?.disconnect();
+    return () => { node.removeEventListener("scroll", check); observer?.disconnect(); };
   }, [selection]);
 
   return <div className="review-detail" data-review-detail={selection.kind}>
@@ -100,7 +101,7 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
       <button type="button" className="icon-action review-detail-close" aria-label="关闭明细" onClick={onClose}><X size={16} /></button>
     </header>
 
-    <div ref={bodyRef} className={scrollable ? "review-detail-body is-scrollable" : "review-detail-body"}>
+    <div ref={bodyRef} className={moreBelow ? "review-detail-body is-scrollable" : "review-detail-body"}>
       {selection.kind === "date" && <DateDetail review={review} index={index} date={selection.id} onOpenTask={onOpenTask} />}
       {selection.kind === "task" && (task
         ? <TaskDetail index={index} detail={review.tasks.find((item) => item.taskId === selection.id)} task={task} onOpenProject={onOpenProject} />

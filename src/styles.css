@@ -1118,9 +1118,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-detail-head h2 { margin: 0; font-size: .95rem; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .review-detail-sub { margin: 0; color: var(--muted); font-size: .76rem; }
 .review-detail-close { flex: none; margin-left: auto; }
-.review-detail-body { display: grid; gap: 10px; align-content: start; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 16px 14px; }
-/* 还能往下滚时，底边淡出 22px：告诉用户「下面还有」，而不是让卡片被硬生生切断。 */
-.review-detail-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
+.review-detail-body { display: grid; gap: 10px; align-content: start; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 16px 20px; }
+/* 还能往下滚时，底边淡出 14px：只软掉边缘，不压住整行字；滚到底这道遮罩就被撤掉。 */
+/* 只在还能往下滚时软化 6px 边：再长就会把下一行标题压成灰影（用户反馈过）。 */
+.review-detail-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); }
 .review-detail-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--line-soft); background: var(--panel); }
 
 /* 一块事实一张卡：凹面（`--bg`）压在气泡的 `--panel` 上，三种内容才不会摊成一片灰字。 */
