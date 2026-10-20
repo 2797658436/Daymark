@@ -63,12 +63,11 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
   const task = selection.kind === "task" ? index.tasksById.get(selection.id) : undefined;
   const project = selection.kind === "project" ? index.projectsById.get(selection.id) : undefined;
   const heading = selection.kind === "date" ? `${formatDayLabel(selection.id)} 明细` : selection.kind === "task" ? task?.title ?? "来源不可用" : project?.title ?? "来源不可用";
-  /** 副标题只说一条仍然成立的定位信息：任务属于哪个项目、项目截止哪天、日期属于哪个周期。 */
+  /** 副标题只放**卡里没有**的定位信息：任务属于哪个项目。项目与日期的身份已经由标题和卡片说清，
+   *  再写一遍（例如「截止 9月30日」和卡里的「项目截止日期」）就是同一句话出现两次。 */
   const subtitle = selection.kind === "task"
-    ? `${task?.projectId ? index.projectsById.get(task.projectId)?.title ?? "来源不可用" : "独立任务"} · 当前完成度 ${task?.progress ?? 0}%（当前值，不是周期历史）`
-    : selection.kind === "project"
-      ? (project?.deadlineLocal ? `截止 ${formatDayLabel(project.deadlineLocal)}` : "未设置截止日期")
-      : null;
+    ? (task?.projectId ? index.projectsById.get(task.projectId)?.title ?? "来源不可用" : "独立任务")
+    : null;
 
   const actions = selection.kind === "task" && task
     ? <TaskActions task={task} projectTitle={task.projectId ? index.projectsById.get(task.projectId)?.title : undefined}
@@ -164,27 +163,33 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
   task: Task;
   onOpenProject: (projectId: string, milestoneId: string | null) => void;
 }) {
+  const executionCounts = detail ? [detail.pendingReviewCount, detail.missedCount, detail.skippedCount] : [];
   return <>
     <section className="review-detail-card" aria-label="本周期">
       {detail
+        // 「净进度变化」不单列：它就是区间两端之差，同一句话不写两遍。
         ? <dl className="review-detail-stats">
           <Fact label="周期内进度" value={formatTaskProgressRange(detail)} />
-          <Fact label="净进度变化" value={formatPercentPoints(detail.netDelta)} />
           <Fact label="实际投入" value={formatRecordedMs(detail.recordedMs)} />
+          <Fact label="当前完成度" value={`${task.progress}%`} />
         </dl>
         : <p className="review-detail-note">该任务在当前周期内没有事实。</p>}
+      <p className="review-detail-note">当前完成度是当前值，不是周期历史。</p>
     </section>
 
     {detail && <section className="review-detail-card" aria-label="执行">
-      <ul className="review-detail-chips">
-        <li>待回顾 <b>{detail.pendingReviewCount}</b></li>
-        <li>明确未推进 <b>{detail.missedCount}</b></li>
-        <li>跳过／取消 <b>{detail.skippedCount}</b></li>
-      </ul>
+      {/* 只列非零项：三个「0」说的是同一件事，排成三个胶囊反而占掉一行。 */}
+      {executionCounts.length > 0
+        ? <ul className="review-detail-chips">
+          {detail.pendingReviewCount > 0 && <li>待回顾 <b>{detail.pendingReviewCount}</b></li>}
+          {detail.missedCount > 0 && <li>明确未推进 <b>{detail.missedCount}</b></li>}
+          {detail.skippedCount > 0 && <li>跳过／取消 <b>{detail.skippedCount}</b></li>}
+        </ul>
+        : <p className="review-detail-note">本周期没有待回顾、未推进或跳过的时段。</p>}
       {/* 待续是「要不要接着做」的结论，不跟计数混在一排胶囊里 —— 它有自己的标记和原因。 */}
       {detail.carryover
         ? <p className="review-detail-flag-line"><span className="review-detail-flag">待续</span><span>{detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}</span></p>
-        : <p className="review-detail-note">没有待续原因：本周期没有留下未收口的事实。</p>}
+        : executionCounts.length > 0 && <p className="review-detail-note">没有待续原因。</p>}
     </section>}
 
     {detail && <section className="review-detail-card" aria-label="记录">
@@ -242,7 +247,7 @@ function ProjectDetail({ review, index, projectId, onOpenTask }: {
           {index.tasksById.get(detail.taskId)
             ? <button type="button" className="review-inline-link review-detail-stack-title" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${detail.title}」的明细`} onClick={(event) => onOpenTask(detail.taskId, event.currentTarget)}>{detail.title}</button>
             : <strong className="review-detail-stack-title">{detail.title}</strong>}
-          <span className="review-detail-row-note">{formatTaskProgressRange(detail)} · 净变化 {formatPercentPoints(detail.netDelta)} · 投入 {formatRecordedMs(detail.recordedMs)}{detail.carryover ? " · 待续" : ""}</span>
+          <span className="review-detail-row-note">{formatTaskProgressRange(detail)} · 投入 {formatRecordedMs(detail.recordedMs)}{detail.carryover ? " · 待续" : ""}</span>
         </li>)}
       </Block>
     </section>
@@ -251,7 +256,7 @@ function ProjectDetail({ review, index, projectId, onOpenTask }: {
       <Block title="里程碑" empty="这个项目在本周期内没有到期里程碑。">
         {milestones.map((milestone) => <li key={milestone.milestoneId} className="review-detail-stack">
           <strong className="review-detail-stack-title">{milestone.title}</strong>
-          <span className="review-detail-row-note">{formatDayLabel(milestone.targetLocalDate)} · {milestone.reached ? "达成" : "未达成"}{milestone.frozen ? "（到期冻结，后续推进不改写这个结果）" : "（当前达成情况）"} · {milestone.resultText}</span>
+          <span className="review-detail-row-note">{milestone.frozen ? `${formatDayLabel(milestone.targetLocalDate)} · ` : ""}{milestone.reached ? "达成" : "未达成"}{milestone.frozen ? "（到期冻结，后续推进不改写这个结果）" : ""} · {milestone.resultText}</span>
         </li>)}
       </Block>
     </section>

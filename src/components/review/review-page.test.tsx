@@ -350,6 +350,22 @@ describe("review page", () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it("states each fact once in the bubble instead of repeating it", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    await user.click(taskRowButton("Alpha 任务"));
+    const taskDetail = document.querySelector<HTMLElement>(".review-detail")!;
+    // 「净进度变化」就是区间两端之差，不再单列；副标题只说项目，不重复「当前完成度」。
+    expect(taskDetail.textContent).not.toContain("净进度变化");
+    expect(taskDetail.querySelector(".review-detail-sub")?.textContent).toBe("学会 Rust");
+
+    // 项目：截止日期只在数字卡里出现一次（副标题不再写「截止 X」）。
+    await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
+    const projectDetail = document.querySelector<HTMLElement>(".review-detail")!;
+    expect(projectDetail.querySelector(".review-detail-sub")).toBeNull();
+    expect((projectDetail.textContent ?? "").split("2026-03-31").length - 1).toBe(1);
+  });
+
   it("closes the bubble on a blank click and lets the next row take over in one click", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
