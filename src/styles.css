@@ -895,7 +895,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-tag.is-unmet { color: var(--muted-strong); }
 .review-not-advanced { display: grid; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
 /* 明细区与「明确未推进」的小标题：与里程碑格标题同一套层级。 */
-.review-not-advanced h3, .review-drilldown h3 { margin: 0; font-size: .84rem; font-weight: 600; line-height: 1.25; color: var(--muted-strong); display: flex; align-items: baseline; gap: 6px; }
+.review-not-advanced h3 { margin: 0; font-size: .84rem; font-weight: 600; line-height: 1.25; color: var(--muted-strong); display: flex; align-items: baseline; gap: 6px; }
 
 /* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
 .review-chart-figure { display: grid; gap: 8px; margin: 0; container-type: inline-size; }
@@ -1090,27 +1090,74 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-detail-rows > .review-detail-row:first-child { border-top: 0; }
 .review-detail-main { display: grid; gap: 3px; min-width: 0; }
 /* 任务名是这一行的主体：用正文字色而不是强调色 —— 11 行橙色标题会把整页拉成一片。 */
-.review-detail-title { font-size: 1rem; font-weight: 600; }
+.review-detail-title { display: grid; grid-template-columns: 3rem minmax(0, 1fr); align-items: center; gap: 10px; font-size: 1rem; font-weight: 600; }
+/* 有「待续」和没有「待续」的行，任务名都从同一条线起 —— 标记占固定一列，不用它撑宽度。 */
+.review-detail-title > .review-detail-flag { grid-column: 1; justify-self: start; }
+.review-detail-title > .review-inline-link, .review-detail-title > span:last-child { grid-column: 2; }
 .review-detail-title .review-inline-link { color: var(--text); }
 .review-detail-title .review-inline-link:hover { color: var(--accent-strong); }
-.review-detail-meta { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
-/* 「待续」在行里只做标记，不做胶囊：11 行里有一半带它，胶囊会显得参差。 */
-.review-detail-flag { padding: 0 .45rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; }
+/* 第二行跟任务名同一条竖线起：标记那一列只占第一行，事实行缩进对齐。 */
+.review-detail-meta { margin: 0 0 0 calc(3rem + 10px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+/* 「待续」放在任务名前面：它是这一行的结论，先于名字被扫到；胶囊靠左也不会参差。 */
+.review-detail-flag { flex: none; padding: .1rem .45rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .72rem; line-height: 1.35; }
 .review-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* 「明确未推进」与项目卡同列，也给它一张同款卡。 */
 .review-tasks > .review-not-advanced { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 14px 1.375rem; }
 
-/* 页面内明细区：非模态，Tab 可进出；打开时聚焦容器，所以焦点环要可见。 */
-.review-drilldown { display: grid; gap: 10px; border-color: var(--line); }
-.review-drilldown:focus { outline: 2px solid var(--focus); outline-offset: 2px; }
-.review-detail-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 8px 16px; margin: 0; }
-.review-detail-facts > div { display: grid; gap: 2px; }
-.review-detail-facts dt { color: var(--muted); font-size: .72rem; }
-.review-detail-facts dd { margin: 0; font-size: .82rem; }
+/* ---------------------------------------------------------------------------
+   明细气泡（2026-10-20 从页内区域改成气泡）。
+
+   结构是「固定头 + 可滚正文 + 贴底动作条」：正文再长也不把动作挤出视野，
+   气泡本身最高 72vh，超出的部分在正文里滚。宽度 26rem —— 比编辑气泡（23rem）
+   宽一档，因为里面有一张两列的数字表和三条记录，23rem 会把日期列挤成折行。
+   --------------------------------------------------------------------------- */
+.floating-panel.review-detail-panel { display: flex; flex-direction: column; width: min(26rem, calc(100vw - 24px)); max-height: min(72vh, 44rem); padding: 0; overflow: hidden; }
+.review-detail { display: flex; flex-direction: column; min-height: 0; }
+.review-detail-head { display: flex; align-items: flex-start; gap: 10px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line-soft); }
+.review-detail-heading { display: grid; gap: 2px; min-width: 0; }
+.review-detail-head h2 { margin: 0; font-size: .95rem; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.review-detail-sub { margin: 0; color: var(--muted); font-size: .76rem; }
+.review-detail-close { flex: none; margin-left: auto; }
+.review-detail-body { display: grid; gap: 10px; align-content: start; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 16px 14px; }
+/* 还能往下滚时，底边淡出 22px：告诉用户「下面还有」，而不是让卡片被硬生生切断。 */
+.review-detail-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
+.review-detail-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+
+/* 一块事实一张卡：凹面（`--bg`）压在气泡的 `--panel` 上，三种内容才不会摊成一片灰字。 */
+.review-detail-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg); }
+.review-detail-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: 8px 12px; margin: 0; }
+.review-detail-stats > div { display: grid; gap: 1px; min-width: 0; }
+.review-detail-stats dt { color: var(--muted-strong); font-size: .7rem; }
+.review-detail-stats dd { margin: 0; font-size: .84rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+/* 计数用胶囊：四个短标签比四个「标签 + 数字」的小格子省一半高度。 */
+.review-detail-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-detail-chips li { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 9px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel); color: var(--muted-strong); font-size: .74rem; }
+.review-detail-chips b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.review-detail-flag-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0; color: var(--muted); font-size: .74rem; }
+.review-detail-block { display: grid; gap: 3px; }
+.review-detail-block + .review-detail-block { margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.review-detail-block-title { margin: 0; color: var(--muted-strong); font-size: .72rem; font-weight: 600; }
+.review-detail-empty { margin: 0; color: var(--muted); font-size: .76rem; }
+.review-detail-note { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.5; }
+/* 基础名单（「待回顾」「里程碑」两个浮层在用）：弹性排布，标签与时间自己换行。 */
 .review-detail-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .review-detail-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--line-soft); font-size: .78rem; }
 .review-detail-list li:first-child { border-top: 0; }
 .review-detail-list time { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 记录行：时间 / 内容 / 数值三列对齐；长备注换行占满整行，不把日期列挤窄。
+   只作用于气泡内部 —— `.review-detail-list` 在「待回顾」浮层里仍是上面的弹性排布。 */
+.review-detail .review-detail-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.review-detail .review-detail-list li { display: grid; grid-template-columns: max-content minmax(0, 1fr) auto; align-items: baseline; gap: 4px 10px; padding: 5px 0; border-top: 1px solid var(--line-soft); font-size: .76rem; }
+.review-detail .review-detail-list li:first-child { border-top: 0; }
+.review-detail .review-detail-list time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.review-detail-value { justify-self: end; font-variant-numeric: tabular-nums; }
+.review-detail-row-note { grid-column: 1 / -1; color: var(--muted); }
+/* 项目明细里的「任务／里程碑」一条两行：标题一行、事实一行。 */
+.review-detail .review-detail-list li.review-detail-stack { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.review-detail-stack-title { font-size: .82rem; font-weight: 600; }
+/* 项目明细里的任务名是下钻入口，但颜色跟正文一致 —— 三条橙色粗体又会把卡片拉成一片。 */
+.review-detail .review-inline-link.review-detail-stack-title { color: var(--text); }
+.review-detail .review-inline-link.review-detail-stack-title:hover { color: var(--accent-strong); }
 .review-notes ul { display: grid; gap: 4px; margin: 0; padding-left: 18px; color: var(--muted); font-size: .78rem; }
 .import-source { color: var(--muted); font-size: .8rem; }
 

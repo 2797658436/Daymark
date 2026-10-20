@@ -1063,7 +1063,7 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect.poll(storedReview).toMatchObject({ reviewAnchorDate: null });
 });
 
-test("phase 4 M11 opens the in-page detail, keeps the summary scroll and gives the focus back", async ({ page }) => {
+test("phase 4 M11 opens the detail as a bubble under the trigger and closes it on a blank click", async ({ page }) => {
   await seedReview(page);
   const main = page.locator("#main-content");
   // 月视图的数值表足够长，滚动位置才有意义。
@@ -1075,18 +1075,29 @@ test("phase 4 M11 opens the in-page detail, keeps the summary scroll and gives t
   await main.evaluate((element) => { element.scrollTop = 420; });
   const trigger = page.getByRole("button", { name: "查看 8月4日 的明细" }).first();
   await trigger.click();
-  const detail = page.locator(".review-drilldown");
+  const detail = page.locator(".review-detail");
   await expect(detail).toBeVisible();
   await expect(detail).toContainText("60 分钟");
   await expect(detail).toContainText("第一段");
   await expect(detail).toContainText("40% → 60%");
 
-  // 打开明细后用户滚开了；Esc 关闭必须回到汇总原来的位置，并把焦点还给触发元素。
-  await main.evaluate((element) => { element.scrollTop = 0; });
+  // 气泡是浮层：落在触发元素下面（不盖住它），页面停在原处。
+  await expect(trigger).toBeInViewport();
+  const bubble = await detail.boundingBox();
+  const anchor = await trigger.boundingBox();
+  expect(bubble!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height);
+
+  // Esc 关掉：页面停在原处，焦点回到触发元素（点空白处关闭由组件用例覆盖，
+  // 这里不点标题 —— Playwright 会为了点击把页面滚回顶部，测不出「不动」）。
+  const parked = await main.evaluate((element) => element.scrollTop);
   await page.keyboard.press("Escape");
-  await expect(page.locator(".review-drilldown")).toHaveCount(0);
-  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(420);
+  await expect(page.locator(".review-detail")).toHaveCount(0);
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(parked);
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null)).toBe("查看 8月4日 的明细");
+
+  // 再开一次，确认关掉之后还能重新打开。
+  await trigger.click();
+  await expect(page.locator(".review-detail")).toBeVisible();
 });
 
 test("phase 4 M11 review page has no automated accessibility violations in light and dark at 200 percent zoom", async ({ page }) => {
@@ -1109,9 +1120,9 @@ test("phase 4 M11 review page has no automated accessibility violations in light
   await openWeeklyTable(page, 0);
   await expect(page.locator(".review-chart-table")).toBeVisible();
   await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
-  await expect(page.locator(".review-drilldown")).toBeVisible();
+  await expect(page.locator(".review-detail")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".review-drilldown")).toHaveCount(0);
+  await expect(page.locator(".review-detail")).toHaveCount(0);
 
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("radio", { name: "深色" }).check();
@@ -1174,9 +1185,9 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
       await page.locator(".review-chart-details summary").first().click();
       await expect(page.locator(".review-chart-table").first()).toBeVisible();
       await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
-      await expect(page.locator(".review-drilldown")).toBeVisible();
+      await expect(page.locator(".review-detail")).toBeVisible();
       await page.keyboard.press("Escape");
-      await expect(page.locator(".review-drilldown")).toHaveCount(0);
+      await expect(page.locator(".review-detail")).toHaveCount(0);
       await page.getByRole("button", { name: "周", exact: true }).click();
       await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
 

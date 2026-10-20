@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Button } from "../ui/button";
 import { FloatingPanel } from "../ui/floating-panel";
 import { ReviewChart, type ReviewChartRow } from "./review-chart";
-import { ReviewDetail, formatDayLabel, type ReviewSelection } from "./review-detail";
+import { ReviewDetail, formatDayLabel, reviewDetailLabel, type ReviewSelection } from "./review-detail";
 import { ReviewPeriodPicker } from "./review-period-picker";
 import { localDateOf } from "../../lib/deadlines";
 import {
@@ -65,14 +65,13 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const anchorDate = preferences.reviewAnchorDate ?? today;
   const review = useMemo(() => buildReviewFromIndex(index, { period, anchorDate, projectId }, now), [index, period, anchorDate, projectId, now]);
 
-  const detailRef = useRef<HTMLElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const triggerKeyRef = useRef<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const preOpenScroll = useRef(0);
   const restored = useRef(false);
-  const mounted = useRef(false);
-  const lastSelection = useRef<ReviewSelection | null>(selection);
+  /** 明细气泡的锚点：触发元素本身（找不到就退到页面标题）。
+   *  用 layout effect 在**绘制前**算好，气泡才不会先居中再跳到任务名下面。 */
+  const [detailAnchorElement, setDetailAnchorElement] = useState<HTMLElement | null>(null);
 
   // 进入页面先恢复上次的滚动位置（同会话跨页返回有效；重启后 ref 归零，自然回到顶部）。
   useLayoutEffect(() => {
@@ -82,25 +81,20 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     if (container) container.scrollTop = scrollTop.current;
   }, [scrollRef, scrollTop]);
 
-  // 打开明细时把它带进视野并聚焦，之后 Tab 可以正常进出；挂载时不抢焦点、不改滚动。
+  // 明细是气泡：打开时不滚动、不抢页面位置，只在切页返回时把锚点重新找回来。
   useLayoutEffect(() => {
-    if (!mounted.current) { mounted.current = true; lastSelection.current = selection; return; }
-    if (!selection || selection === lastSelection.current) { lastSelection.current = selection; return; }
-    lastSelection.current = selection;
-    const node = detailRef.current;
-    if (typeof node?.scrollIntoView === "function") node.scrollIntoView({ block: "nearest" });
-    node?.focus({ preventScroll: true });
-    // 从「详细」气泡里下钻时，浮层关闭会由宿主在下一帧把焦点还给它的触发按钮。
-    // 明细必须保住焦点，否则 Esc 落不到自己的处理函数里 —— 所以要排在宿主那一帧之后
-    // 再补一次（宿主在「层数归零」的 effect 里排 rAF，比这里晚一帧才排上）。
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => {
-        if (node?.isConnected && !node.contains(document.activeElement)) node.focus({ preventScroll: true });
-      });
-    });
-    return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
+    if (!selection) { setDetailAnchorElement(null); return; }
+    const key = `${selection.kind}:${selection.id}`;
+    const element = triggerKeyRef.current === key && triggerRef.current?.isConnected
+      ? triggerRef.current
+      : document.querySelector<HTMLElement>(`[data-review-trigger="${key}"]`) ?? headingRef.current;
+    setDetailAnchorElement(element);
   }, [selection]);
+
+  // 气泡要落在**触发元素下面**（浮层在下方面积不够时会翻到上面、把列表盖住）。
+  // 打开时先量一次：下方不够就把页面滚出一点空间（能滚多少算多少），再按剩下的空间
+  // 给气泡定高 —— 高不过可用空间，正文在气泡里滚，永远不会盖住触发它的那一行。
+  const [detailMaxHeight, setDetailMaxHeight] = useState<number | undefined>(undefined);
 
   // 滚动位置只在内存里跟手记录：不写 Store，也不触发重渲染。
   useEffect(() => {
@@ -116,14 +110,26 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     // 触发元素的身份（`kind:id`）：切页返回或继续下钻后原节点已经不在了，
     // 关闭时按它重新找同一个目标（与截止页用 `data-deadline-key` 找回焦点行同理）。
     triggerKeyRef.current = `${next.kind}:${next.id}`;
-    preOpenScroll.current = scrollRef.current?.scrollTop ?? 0;
+    if (trigger) {
+      const container = scrollRef.current;
+      const rect = trigger.getBoundingClientRect();
+      const room = window.innerHeight - rect.bottom - 20;
+      const target = Math.min(window.innerHeight * 0.86, 620);
+      // 只滚「补到 target 为止」的那一点，且不越过页面还能滚的距离。
+      const gain = container
+        ? Math.min(Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop), Math.max(0, target - room))
+        : 0;
+      if (gain > 0 && container) container.scrollTop += gain;
+      // 再让 6px：浮层的判据是「top + 高度 > 视口 − 12」，正好贴边会因为小数进位翻到上面去。
+      setDetailMaxHeight(Math.max(240, Math.min(room + gain, target) - 6));
+    }
+    setDetailAnchorElement(trigger);
     onSelection(next);
   }, [onSelection, scrollRef]);
 
-  /** 关闭明细：焦点回到触发元素，滚动回到打开汇总时的位置（查询不变）。 */
+  /** 关闭明细：查询不变、页面不动，焦点回到触发元素（找不到就退到页面标题）。 */
   const closeDetail = useCallback(() => {
     const trigger = triggerRef.current;
-    const container = scrollRef.current;
     onSelection(null);
     // 原触发元素还在就直接用它；否则按身份找同一个目标；再不行退到页面标题 ——
     // 不调用已断开的节点，键盘用户也不会掉到 body。
@@ -131,26 +137,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       ? trigger
       : document.querySelector<HTMLElement>(`[data-review-trigger="${triggerKeyRef.current}"]`);
     (target ?? headingRef.current)?.focus({ preventScroll: true });
-    if (container) container.scrollTop = preOpenScroll.current;
-  }, [onSelection, scrollRef]);
+  }, [onSelection]);
 
   const titleOf = (taskId: string) => index.tasksById.get(taskId)?.title ?? "来源不可用";
   const projectTitleOf = (id: string) => index.projectsById.get(id)?.title ?? "来源不可用";
 
-  // 明细区的 Esc 兜底：容器自己的 onKeyDown 只在焦点落在里面时才生效，而从浮层里下钻时
-  // 宿主可能把焦点抢回触发按钮（归还发生在下一帧），那时 Esc 就没人接。
-  // 这里在文档上再挂一层：只要没有别的对话框在最上面，Esc 就关明细。
-  useEffect(() => {
-    if (!selection) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"]')) return;
-      event.stopPropagation();
-      closeDetail();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [selection, closeDetail]);
   // 顶部这张卡把单位换成「净进度」：一行放下「+10 净进度」，写「+10 百分点」再单起一行太长。
   // 数字仍由 formatPercentPoints 统一格式化（符号 + 四舍五入），这里只换单位词。
   const netDeltaValue = `${formatPercentPoints(review.progress.netDelta).replace(" 百分点", "")} 净进度`;
@@ -305,19 +296,21 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
    *  两行结构是照设置页的设置行来的：标题一行、说明一行，左列就不会空成一条缝。
    *  **行里不放写入口**：回顾页是只读投影，编辑与安排在下钻明细里 —— 那里带着原始事件、
    *  计划时段与备注，动作才有上下文；行内每行两个按钮会把明细区变成待办清单，200% 下
-   *  还会把任务名挤到折行。行内只留「待续」这个**事实**标记。 */
+   *  还会把任务名挤到折行。行内只留「待续」这个**事实**标记 —— 放在任务名前面：
+   *  它是这一行的结论（要不要接着做），先于名字被扫到；跟在第二行末尾时会被进度数字盖住。 */
   const taskRow = (detail: ReviewResult["tasks"][number]) => {
     const task = index.tasksById.get(detail.taskId);
     return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
       <div className="review-detail-main">
-        <strong className="review-detail-title">{task
-          ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
-          : <span>来源不可用</span>}</strong>
+        <strong className="review-detail-title">
+          {detail.carryover && <span className="review-detail-flag">待续</span>}
+          {task
+            ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
+            : <span>来源不可用</span>}
+        </strong>
         <p className="review-detail-meta">
           <span className="review-detail-range">{formatTaskProgressRange(detail)}</span>
           <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
-          {/* 「待续」和另外两个事实同一行：留在说明行里，右列就不会再出现一排按钮。 */}
-          {detail.carryover && <span className="review-detail-flag">待续</span>}
         </p>
       </div>
     </article>;
@@ -459,9 +452,15 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       {pendingList}
     </FloatingPanel>}
 
-    {selection && <ReviewDetail containerRef={detailRef} index={index} review={review} selection={selection} projectId={projectId}
-      onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
-      onOpenTask={(taskId, trigger) => openDetail({ kind: "task", id: taskId }, trigger)} />}
+    {/* 明细是气泡而不是页内区域：锚在触发元素（任务名／项目名／那一天的柱子）下面，
+        点空白、点别的板块、Esc 都关掉它 —— 页面本身不滚动、不位移，看完就消失。 */}
+    {selection && <FloatingPanel kind="action" className="review-detail-panel" titleId="review-detail-title"
+      label={reviewDetailLabel(selection, index)} anchorElement={detailAnchorElement} closeOnOutsideClick
+      style={detailMaxHeight ? { maxHeight: detailMaxHeight } : undefined} onClose={closeDetail}>
+      <ReviewDetail index={index} review={review} selection={selection} projectId={projectId}
+        onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
+        onOpenTask={(taskId, trigger) => openDetail({ kind: "task", id: taskId }, trigger)} />
+    </FloatingPanel>}
   </section>;
 }
 

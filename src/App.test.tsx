@@ -2161,7 +2161,7 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
     }
   });
 
-  it("keeps the drill-down and the project scope across a same-session round trip but not across a restart", async () => {
+  it("keeps the project scope across a same-session round trip and drops the detail bubble on navigation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-05T12:00:00"));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -2175,29 +2175,31 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
       // 项目下钻：明细区先看项目，再把它设成引擎查询的一部分。
       // 项目名下钻现在有两个入口（圆环图例、项目卡头），点卡头那一个。
       await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学习项目」的明细" }));
-      await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getByRole("button", { name: "只看这个项目" }));
+      await user.click(within(document.querySelector<HTMLElement>(".review-detail")!).getByRole("button", { name: "只看这个项目" }));
       expect(await screen.findByText("仅统计项目：学习项目")).toBeVisible();
 
       // 任务下钻：明细区显示原始事件时间、进度变化与实际记录备注。
       await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看任务「Alpha 任务」的明细" }));
-      const detail = document.querySelector<HTMLElement>(".review-drilldown")!;
+      const detail = document.querySelector<HTMLElement>(".review-detail")!;
       expect(detail.textContent).toContain("40% → 60%");
       expect(detail.textContent).toContain("第一段");
 
-      // 同会话跨页返回：查询与明细都还在。
+      // 同会话跨页返回：项目筛选还在；明细是气泡，点别的板块（这里是主导航）就关掉了，
+      // 不跟着换页 —— 气泡的意义是「看完就消失」，不是常驻的区域。
       await user.click(navigation().getByRole("button", { name: "项目" }));
       await screen.findByRole("heading", { name: "项目", level: 1 });
+      expect(document.querySelector(".review-detail")).toBeNull();
       await user.click(navigation().getByRole("button", { name: "回顾" }));
       await screen.findByRole("heading", { name: "本周回顾", level: 1 });
       expect(screen.getByText("仅统计项目：学习项目")).toBeVisible();
-      expect(document.querySelector(".review-drilldown")?.textContent).toContain("40% → 60%");
+      expect(document.querySelector(".review-detail")).toBeNull();
 
       // 重启（整页重载）后不恢复：项目筛选与明细选择只活在 App 层内存里。
       first.unmount();
       render(<App settings={new SettingsRepository(backend)} native={native} />);
       await screen.findByRole("heading", { name: "本周回顾", level: 1 });
       expect(screen.queryByText("仅统计项目：学习项目")).toBeNull();
-      expect(document.querySelector(".review-drilldown")).toBeNull();
+      expect(document.querySelector(".review-detail")).toBeNull();
     } finally {
       vi.useRealTimers();
     }

@@ -1,5 +1,5 @@
 import { FolderKanban, Pencil, Sparkles, X } from "lucide-react";
-import type { KeyboardEvent, RefObject } from "react";
+import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
 import { CARRYOVER_REASON_LABEL, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, type ReviewResult, type ReviewTaskDetail } from "../../lib/review";
@@ -7,17 +7,21 @@ import type { ExecutionRecord, ExecutionSession, Task } from "../../lib/native";
 import type { WorkspaceIndex } from "../../lib/workspaceSelectors";
 
 /**
- * 回顾的页面内明细区（阶段 4 P4-08，规格 §7.4「页面和下钻」）。
+ * 回顾的下钻明细（阶段 4 P4-08，规格 §7.4「页面和下钻」；2026-10-20 改成气泡）。
  *
- * 点击或键盘激活**日期／项目／任务**后在这里展开：显示原始事件时间、进度变化、实际起止
- * 与已记录备注。它是页面内的区域而不是模态：Tab 可以进出，Esc 关闭，关闭后由调用方
- * 把焦点还给触发元素并恢复打开前的滚动位置（与既有编辑气泡、截止页同一套做法）。
+ * 点日期／项目／任务后，在**触发元素下方**弹出一个非模态气泡（`FloatingPanel`
+ * `kind="action"`）：点空白、点别的板块、Esc 都会关掉它，页面本身不滚动、不位移。
+ * 它是只读投影，不承载草稿；「编辑」再叠一层编辑气泡（那是 `kind="editor"`，点外面
+ * 只吞不关、只有取消才丢草稿）。
  *
  * 两条边界：
- * - **明细不是可保存对象**：所有内容都来自 `ReviewResult` 的只读投影与稳定索引，行级
- *   动作只把**原始** `Task`／`Project` 交给 App，不在页面里拼一个可写对象。
+ * - **明细不是可保存对象**：所有内容都来自 `ReviewResult` 的只读投影与稳定索引，动作只把
+ *   **原始** `Task`／`Project` 交给 App，不在页面里拼一个可写对象。
  * - **未知引用不崩页面**：源对象已经不在工作区里时显示「来源不可用」，并保留仍然成立的
  *   事实（例如任务没了但它在周期内的数字还在），不抛错、不整页消失。
+ *
+ * 排版按「一块事实一张卡」组织：数字卡（`dl`）→ 计数卡（胶囊）→ 记录卡（分节列表）。
+ * 卡片是 `--bg` 的凹面，和气泡的 `--panel` 拉开层次，避免一列同权重的灰字堆在一起。
  */
 
 export interface ReviewSelection {
@@ -39,8 +43,6 @@ export interface ReviewDetailProps {
   onProjectId: (projectId: string | null) => void;
   /** 从某一天的明细继续下钻到任务。 */
   onOpenTask: (taskId: string, trigger: HTMLElement) => void;
-  /** 明细区容器（`tabIndex=-1`）；打开时由页面聚焦它，Esc 才能落在自己的处理函数里。 */
-  containerRef?: RefObject<HTMLElement | null>;
 }
 
 const SESSION_STATUS_LABEL: Record<ExecutionSession["status"], string> = {
@@ -50,183 +52,250 @@ const SESSION_STATUS_LABEL: Record<ExecutionSession["status"], string> = {
   cancelled: "已取消安排",
 };
 
+/** 气泡的可访问名：标题优先，来源不可用时退回对象类型。 */
+export function reviewDetailLabel(selection: ReviewSelection, index: WorkspaceIndex) {
+  if (selection.kind === "date") return `${formatDayLabel(selection.id)} 的明细`;
+  if (selection.kind === "task") return `任务「${index.tasksById.get(selection.id)?.title ?? "来源不可用"}」的明细`;
+  return `项目「${index.projectsById.get(selection.id)?.title ?? "来源不可用"}」的明细`;
+}
 
-export function ReviewDetail({ index, review, selection, projectId, onClose, onEditTask, onArrangeTask, onOpenProject, onProjectId, onOpenTask, containerRef }: ReviewDetailProps) {
+export function ReviewDetail({ index, review, selection, projectId, onClose, onEditTask, onArrangeTask, onOpenProject, onProjectId, onOpenTask }: ReviewDetailProps) {
   const task = selection.kind === "task" ? index.tasksById.get(selection.id) : undefined;
   const project = selection.kind === "project" ? index.projectsById.get(selection.id) : undefined;
   const heading = selection.kind === "date" ? `${formatDayLabel(selection.id)} 明细` : selection.kind === "task" ? task?.title ?? "来源不可用" : project?.title ?? "来源不可用";
+  /** 副标题只说一条仍然成立的定位信息：任务属于哪个项目、项目截止哪天、日期属于哪个周期。 */
+  const subtitle = selection.kind === "task"
+    ? `${task?.projectId ? index.projectsById.get(task.projectId)?.title ?? "来源不可用" : "独立任务"} · 当前完成度 ${task?.progress ?? 0}%（当前值，不是周期历史）`
+    : selection.kind === "project"
+      ? (project?.deadlineLocal ? `截止 ${formatDayLabel(project.deadlineLocal)}` : "未设置截止日期")
+      : null;
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Escape") return;
-    // 明细区不是模态：它只处理落在自己内部（含刚打开时聚焦的容器）的 Esc。
-    event.stopPropagation();
-    onClose();
-  };
+  const actions = selection.kind === "task" && task
+    ? <TaskActions task={task} projectTitle={task.projectId ? index.projectsById.get(task.projectId)?.title : undefined}
+      onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} />
+    : selection.kind === "project" && project
+      ? <ProjectActions projectId={project.id} projectTitle={project.title} scoped={projectId === project.id}
+        onProjectId={onProjectId} onOpenProject={onOpenProject} />
+      : null;
 
-  return <section ref={containerRef} className="surface-card review-drilldown" data-review-detail={selection.kind} aria-labelledby="review-detail-title" tabIndex={-1} onKeyDown={handleKeyDown}>
-    <div className="section-heading">
-      <h2 id="review-detail-title">{heading}</h2>
-      <Button aria-label="关闭明细" onClick={onClose}><X size={15} />关闭</Button>
+  // 正文放不下时在底边做一道淡出：气泡高度按「触发元素下方剩多少」定，内容常常比它长，
+  // 没有这道提示，被裁在卡片中间的标题会看着像画坏了。
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [scrollable, setScrollable] = useState(false);
+  useLayoutEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    const check = () => setScrollable(node.scrollHeight > node.clientHeight + 2);
+    check();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(check) : null;
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [selection]);
+
+  return <div className="review-detail" data-review-detail={selection.kind}>
+    <header className="review-detail-head">
+      <div className="review-detail-heading">
+        <h2 id="review-detail-title">{heading}</h2>
+        {subtitle && <p className="review-detail-sub">{subtitle}</p>}
+      </div>
+      <button type="button" className="icon-action review-detail-close" aria-label="关闭明细" onClick={onClose}><X size={16} /></button>
+    </header>
+
+    <div ref={bodyRef} className={scrollable ? "review-detail-body is-scrollable" : "review-detail-body"}>
+      {selection.kind === "date" && <DateDetail review={review} index={index} date={selection.id} onOpenTask={onOpenTask} />}
+      {selection.kind === "task" && (task
+        ? <TaskDetail index={index} detail={review.tasks.find((item) => item.taskId === selection.id)} task={task} onOpenProject={onOpenProject} />
+        : <p className="review-notice" role="status">来源不可用：这个任务已经不在工作区里。它在当前周期内的事实也不再出现在明细中，页面其余部分仍然成立。</p>)}
+      {selection.kind === "project" && (project
+        ? <ProjectDetail review={review} index={index} projectId={project.id} onOpenTask={onOpenTask} />
+        : <p className="review-notice" role="status">来源不可用：这个项目已经不在工作区里。页面其余部分仍然成立。</p>)}
     </div>
-    {selection.kind === "date" && <DateDetail review={review} index={index} date={selection.id} onOpenTask={onOpenTask} />}
-    {selection.kind === "task" && (task
-      ? <TaskDetail index={index} detail={review.tasks.find((item) => item.taskId === selection.id)} task={task} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} />
-      : <p className="review-notice" role="status">来源不可用：这个任务已经不在工作区里。它在当前周期内的事实也不再出现在明细中，页面其余部分仍然成立。</p>)}
-    {selection.kind === "project" && (project
-      ? <ProjectDetail review={review} index={index} projectId={project.id} projectTitle={project.title} scoped={projectId === project.id} onProjectId={onProjectId} onOpenProject={onOpenProject} />
-      : <p className="review-notice" role="status">来源不可用：这个项目已经不在工作区里。页面其余部分仍然成立。</p>)}
-  </section>;
+
+    {actions && <footer className="review-detail-foot">{actions}</footer>}
+  </div>;
 }
 
 function DateDetail({ review, index, date, onOpenTask }: { review: ReviewResult; index: WorkspaceIndex; date: string; onOpenTask: (taskId: string, trigger: HTMLElement) => void }) {
   const day = review.days.find((item) => item.date === date);
   if (!day) return <p className="review-notice" role="status">该日期不在当前周期内：查询已经改变，这一天的汇总不再成立。</p>;
   /** 任务还在工作区里时可继续下钻；已经不在时显示「来源不可用」而不是造一个空链接。 */
-  const nameOf = (taskId: string) => index.tasksById.get(taskId)?.title ?? null;
   const TaskName = ({ taskId }: { taskId: string }) => {
-    const title = nameOf(taskId);
+    const title = index.tasksById.get(taskId)?.title ?? null;
     return title
       ? <button type="button" className="review-inline-link" data-review-trigger={`task:${taskId}`} aria-label={`查看任务「${title}」的明细`} onClick={(event) => onOpenTask(taskId, event.currentTarget)}>{title}</button>
       : <span className="review-muted">来源不可用</span>;
   };
 
   return <>
-    <dl className="review-detail-facts">
-      <Fact label="净进度变化" value={formatPercentPoints(day.progressDelta)} />
-      <Fact label="实际投入" value={formatRecordedMs(day.recordedMs)} />
-      <Fact label="待回顾" value={`${day.pendingReviewCount} 个时段`} />
-      <Fact label="明确未推进" value={`${day.notAdvancedCount} 个时段`} />
-      <Fact label="跳过／取消安排" value={`${day.skippedCount} 条`} />
-      <Fact label="进行中的执行" value={`${day.runningCount} 条`} />
-    </dl>
-    <h3>进度事件</h3>
-    {day.events.length > 0
-      ? <ul className="review-detail-list">{day.events.map((event) => <li key={event.id}>
-        <time>{formatClock(event.occurredAtUtc)}</time><TaskName taskId={event.taskId} />
-        <span>{event.fromProgress}% → {event.toProgress}%</span>
-      </li>)}</ul>
-      : <p className="review-muted">这一天没有进度事件。</p>}
-    <h3>实际记录</h3>
-    {day.records.length > 0
-      ? <ul className="review-detail-list">{day.records.map((record) => <li key={record.id}>
-        <time>{formatRecordRange(record)}</time><TaskName taskId={record.taskId} />
-        <span>{record.note ? record.note : "没有留下备注"}</span>
-      </li>)}</ul>
-      : <p className="review-muted">这一天没有已结束的实际记录；未记录不等于失败。</p>}
-    {day.runningCount > 0 && <p className="review-muted">这一天还有 {day.runningCount} 条进行中的执行：它们没有结束时间，不计入已记录投入。</p>}
+    <section className="review-detail-card" aria-label="这一天">
+      <dl className="review-detail-stats">
+        <Fact label="净进度变化" value={formatPercentPoints(day.progressDelta)} />
+        <Fact label="实际投入" value={formatRecordedMs(day.recordedMs)} />
+        <Fact label="待回顾" value={`${day.pendingReviewCount} 个时段`} />
+        <Fact label="明确未推进" value={`${day.notAdvancedCount} 个时段`} />
+        <Fact label="跳过／取消" value={`${day.skippedCount} 条`} />
+        <Fact label="进行中的执行" value={`${day.runningCount} 条`} />
+      </dl>
+    </section>
+
+    <section className="review-detail-card" aria-label="记录">
+      <Block title="进度事件" empty="这一天没有进度事件。">
+        {day.events.map((event) => <li key={event.id}>
+          <time>{formatClock(event.occurredAtUtc)}</time>
+          <TaskName taskId={event.taskId} />
+          <span className="review-detail-value">{event.fromProgress}% → {event.toProgress}%</span>
+        </li>)}
+      </Block>
+      <Block title="实际记录" empty="这一天没有已结束的实际记录；未记录不等于失败。">
+        {day.records.map((record) => <li key={record.id}>
+          <time>{formatRecordRange(record)}</time>
+          <TaskName taskId={record.taskId} />
+          <span className="review-detail-row-note">{record.note ? record.note : "没有留下备注"}</span>
+        </li>)}
+      </Block>
+      {day.runningCount > 0 && <p className="review-detail-note">这一天还有 {day.runningCount} 条进行中的执行：它们没有结束时间，不计入已记录投入。</p>}
+    </section>
   </>;
 }
 
-function TaskDetail({ index, detail, task, onEditTask, onArrangeTask, onOpenProject }: {
+function TaskDetail({ index, detail, task, onOpenProject }: {
   index: WorkspaceIndex;
   detail: ReviewTaskDetail | undefined;
   task: Task;
-  onEditTask: (task: Task, anchorElement: HTMLElement) => void;
-  onArrangeTask: (task: Task) => void;
   onOpenProject: (projectId: string, milestoneId: string | null) => void;
 }) {
-  const project = task.projectId ? index.projectsById.get(task.projectId) : undefined;
-
   return <>
-    {detail
-      ? <dl className="review-detail-facts">
-        <Fact label="周期内进度" value={formatTaskProgressRange(detail)} />
-        <Fact label="净进度变化" value={formatPercentPoints(detail.netDelta)} />
-        <Fact label="当前完成度" value={`${task.progress}%（当前值，不是周期历史）`} />
-        <Fact label="实际投入" value={formatRecordedMs(detail.recordedMs)} />
-        <Fact label="待回顾" value={`${detail.pendingReviewCount} 个时段`} />
-        <Fact label="明确未推进" value={`${detail.missedCount} 个时段`} />
-        <Fact label="跳过／取消安排" value={`${detail.skippedCount} 条`} />
-        <Fact label="待续" value={detail.carryover ? `是 · ${detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}` : "否"} />
-      </dl>
-      : <p className="review-notice" role="status">该任务在当前周期内没有事实。当前完成度 {task.progress}% 是**当前值**，不是这一周期的历史。</p>}
+    <section className="review-detail-card" aria-label="本周期">
+      {detail
+        ? <dl className="review-detail-stats">
+          <Fact label="周期内进度" value={formatTaskProgressRange(detail)} />
+          <Fact label="净进度变化" value={formatPercentPoints(detail.netDelta)} />
+          <Fact label="实际投入" value={formatRecordedMs(detail.recordedMs)} />
+        </dl>
+        : <p className="review-detail-note">该任务在当前周期内没有事实。</p>}
+    </section>
 
-    <h3>进度事件</h3>
-    {detail && detail.events.length > 0
-      ? <ul className="review-detail-list">{detail.events.map((event) => <li key={event.id}>
-        <time>{formatDateTime(event.occurredAtUtc)}</time>
-        <span>{event.fromProgress}% → {event.toProgress}%</span>
-      </li>)}</ul>
-      : <p className="review-muted">本周期没有进度事件，因此不显示历史起止；不从当前完成度反推。</p>}
+    {detail && <section className="review-detail-card" aria-label="执行">
+      <ul className="review-detail-chips">
+        <li>待回顾 <b>{detail.pendingReviewCount}</b></li>
+        <li>明确未推进 <b>{detail.missedCount}</b></li>
+        <li>跳过／取消 <b>{detail.skippedCount}</b></li>
+      </ul>
+      {/* 待续是「要不要接着做」的结论，不跟计数混在一排胶囊里 —— 它有自己的标记和原因。 */}
+      {detail.carryover
+        ? <p className="review-detail-flag-line"><span className="review-detail-flag">待续</span><span>{detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}</span></p>
+        : <p className="review-detail-note">没有待续原因：本周期没有留下未收口的事实。</p>}
+    </section>}
 
-    <h3>计划时段</h3>
-    {detail && detail.sessions.length > 0
-      ? <ul className="review-detail-list">{detail.sessions.map((session) => <li key={session.id}>
-        <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
-        <span>{SESSION_STATUS_LABEL[session.status]}{session.status === "missed" && (index.recordsBySessionId.get(session.id)?.length ?? 0) > 0
-          ? " · 已补录执行记录（按实际投入计入，不重复记为未推进）" : ""}</span>
-      </li>)}</ul>
-      : <p className="review-muted">本周期没有计划时段。</p>}
-
-    <h3>已记录实际</h3>
-    {detail && detail.records.length > 0
-      ? <ul className="review-detail-list">{detail.records.map((record) => <li key={record.id}>
-        <time>{formatRecordRange(record)}</time>
-        <span>{record.note ? record.note : "没有留下备注"}</span>
-      </li>)}</ul>
-      : <p className="review-muted">本周期没有已结束的实际记录：显示「未记录」，不写成 0% 执行率。</p>}
-    {detail && detail.runningRecords.length > 0 && <ul className="review-detail-list">{detail.runningRecords.map((record) => <li key={record.id}>
-      <time>开始于 {formatDateTime(record.actualStartUtc)}</time><span>进行中，不计入已记录投入</span>
-    </li>)}</ul>}
-
-    <div className="review-detail-actions">
-      <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
-      {task.status === "active"
-        ? <Button variant="primary" aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
-        : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
-      {task.projectId && <Button aria-label={`定位项目 ${project?.title ?? "来源不可用"}`} onClick={() => onOpenProject(task.projectId!, null)}><FolderKanban size={14} />定位项目</Button>}
-    </div>
+    {detail && <section className="review-detail-card" aria-label="记录">
+      <Block title="进度事件" empty="本周期没有进度事件，因此不显示历史起止；不从当前完成度反推。">
+        {detail.events.map((event) => <li key={event.id}>
+          <time>{formatDateTime(event.occurredAtUtc)}</time>
+          <span className="review-detail-value">{event.fromProgress}% → {event.toProgress}%</span>
+        </li>)}
+      </Block>
+      <Block title="计划时段" empty="本周期没有计划时段。">
+        {detail.sessions.map((session) => <li key={session.id}>
+          <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
+          <span className="review-detail-row-note">{SESSION_STATUS_LABEL[session.status]}{session.status === "missed" && (index.recordsBySessionId.get(session.id)?.length ?? 0) > 0
+            ? " · 已补录执行记录（按实际投入计入，不重复记为未推进）" : ""}</span>
+        </li>)}
+      </Block>
+      <Block title="已记录实际" empty="本周期没有已结束的实际记录：显示「未记录」，不写成 0% 执行率。">
+        {detail.records.map((record) => <li key={record.id}>
+          <time>{formatRecordRange(record)}</time>
+          <span className="review-detail-row-note">{record.note ? record.note : "没有留下备注"}</span>
+        </li>)}
+      </Block>
+      {detail.runningRecords.length > 0 && <Block title="进行中" empty="">
+        {detail.runningRecords.map((record) => <li key={record.id}>
+          <time>开始于 {formatDateTime(record.actualStartUtc)}</time>
+          <span className="review-detail-row-note">没有结束时间，不计入已记录投入</span>
+        </li>)}
+      </Block>}
+    </section>}
   </>;
 }
 
-function ProjectDetail({ review, index, projectId, projectTitle, scoped, onProjectId, onOpenProject }: {
+function ProjectDetail({ review, index, projectId, onOpenTask }: {
   review: ReviewResult;
   index: WorkspaceIndex;
   projectId: string;
-  projectTitle: string;
-  scoped: boolean;
-  onProjectId: (projectId: string | null) => void;
-  onOpenProject: (projectId: string, milestoneId: string | null) => void;
+  onOpenTask: (taskId: string, trigger: HTMLElement) => void;
 }) {
   // 明细只列出引擎已经算好的行：不在页面里对任务再求一次和，避免长出第二套口径。
   const tasks = review.tasks.filter((detail) => detail.projectId === projectId);
   const milestones = review.milestones.filter((milestone) => milestone.projectId === projectId);
 
   return <>
-    <dl className="review-detail-facts">
-      <Fact label="周期内有事实的任务" value={`${tasks.length} 项`} />
-      <Fact label="周期内到期的里程碑" value={`${milestones.length} 个`} />
-      <Fact label="项目截止日期" value={index.projectsById.get(projectId)?.deadlineLocal ?? "未设置"} />
-    </dl>
+    <section className="review-detail-card" aria-label="这个项目">
+      <dl className="review-detail-stats">
+        <Fact label="周期内有事实的任务" value={`${tasks.length} 项`} />
+        <Fact label="周期内到期的里程碑" value={`${milestones.length} 个`} />
+        <Fact label="项目截止日期" value={index.projectsById.get(projectId)?.deadlineLocal ?? "未设置"} />
+      </dl>
+    </section>
 
-    <h3>任务</h3>
-    {tasks.length > 0
-      ? <ul className="review-detail-list">{tasks.map((detail) => <li key={detail.taskId} data-review-detail-task={detail.taskId}>
-        <strong>{detail.title}</strong>
-        <span>{formatTaskProgressRange(detail)}</span>
-        <span>净变化 {formatPercentPoints(detail.netDelta)}</span>
-        <span>投入 {formatRecordedMs(detail.recordedMs)}</span>
-        {detail.carryover && <span className="muted-chip">待续</span>}
-      </li>)}</ul>
-      : <p className="review-muted">这个项目在本周期内没有任务事实。</p>}
+    <section className="review-detail-card" aria-label="任务">
+      <Block title="任务" empty="这个项目在本周期内没有任务事实。">
+        {tasks.map((detail) => <li key={detail.taskId} className="review-detail-stack" data-review-detail-task={detail.taskId}>
+          {index.tasksById.get(detail.taskId)
+            ? <button type="button" className="review-inline-link review-detail-stack-title" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${detail.title}」的明细`} onClick={(event) => onOpenTask(detail.taskId, event.currentTarget)}>{detail.title}</button>
+            : <strong className="review-detail-stack-title">{detail.title}</strong>}
+          <span className="review-detail-row-note">{formatTaskProgressRange(detail)} · 净变化 {formatPercentPoints(detail.netDelta)} · 投入 {formatRecordedMs(detail.recordedMs)}{detail.carryover ? " · 待续" : ""}</span>
+        </li>)}
+      </Block>
+    </section>
 
-    <h3>里程碑</h3>
-    {milestones.length > 0
-      ? <ul className="review-detail-list">{milestones.map((milestone) => <li key={milestone.milestoneId}>
-        <strong>{milestone.title}</strong>
-        <span>{formatDayLabel(milestone.targetLocalDate)}</span>
-        <span>{milestone.reached ? "达成" : "未达成"}{milestone.frozen ? "（到期冻结，后续推进不改写这个结果）" : "（当前达成情况）"}</span>
-        <span>{milestone.resultText}</span>
-      </li>)}</ul>
-      : <p className="review-muted">这个项目在本周期内没有到期里程碑。</p>}
-
-    <div className="review-detail-actions">
-      {scoped
-        ? <Button onClick={() => onProjectId(null)}>清除项目筛选</Button>
-        : <Button variant="primary" onClick={() => onProjectId(projectId)}>只看这个项目</Button>}
-      <Button aria-label={`定位项目 ${projectTitle}`} onClick={() => onOpenProject(projectId, null)}><FolderKanban size={14} />定位项目</Button>
-    </div>
+    <section className="review-detail-card" aria-label="里程碑">
+      <Block title="里程碑" empty="这个项目在本周期内没有到期里程碑。">
+        {milestones.map((milestone) => <li key={milestone.milestoneId} className="review-detail-stack">
+          <strong className="review-detail-stack-title">{milestone.title}</strong>
+          <span className="review-detail-row-note">{formatDayLabel(milestone.targetLocalDate)} · {milestone.reached ? "达成" : "未达成"}{milestone.frozen ? "（到期冻结，后续推进不改写这个结果）" : "（当前达成情况）"} · {milestone.resultText}</span>
+        </li>)}
+      </Block>
+    </section>
   </>;
+}
+
+function TaskActions({ task, projectTitle, onEditTask, onArrangeTask, onOpenProject }: {
+  task: Task;
+  projectTitle: string | undefined;
+  onEditTask: (task: Task, anchorElement: HTMLElement) => void;
+  onArrangeTask: (task: Task) => void;
+  onOpenProject: (projectId: string, milestoneId: string | null) => void;
+}) {
+  return <>
+    <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
+    {task.status === "active"
+      ? <Button variant="primary" aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
+      : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
+    {task.projectId && <Button aria-label={`定位项目 ${projectTitle ?? "来源不可用"}`} onClick={() => onOpenProject(task.projectId!, null)}><FolderKanban size={14} />定位项目</Button>}
+  </>;
+}
+
+function ProjectActions({ projectId, projectTitle, scoped, onProjectId, onOpenProject }: {
+  projectId: string;
+  projectTitle: string;
+  scoped: boolean;
+  onProjectId: (projectId: string | null) => void;
+  onOpenProject: (projectId: string, milestoneId: string | null) => void;
+}) {
+  return <>
+    {scoped
+      ? <Button onClick={() => onProjectId(null)}>清除项目筛选</Button>
+      : <Button variant="primary" onClick={() => onProjectId(projectId)}>只看这个项目</Button>}
+    <Button aria-label={`定位项目 ${projectTitle}`} onClick={() => onOpenProject(projectId, null)}><FolderKanban size={14} />定位项目</Button>
+  </>;
+}
+
+/** 一块带小标题的记录区：有内容就排成列表，没有就留一句说明（不留空块）。 */
+function Block({ title, empty, children }: { title: string; empty: string; children?: ReactNode }) {
+  const items = Children.toArray(children);
+  return <div className="review-detail-block">
+    <h3 className="review-detail-block-title">{title}</h3>
+    {items.length > 0 ? <ul className="review-detail-list">{children}</ul> : <p className="review-detail-empty">{empty}</p>}
+  </div>;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type RefObject } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ReviewPage, type ReviewSelection } from "./review-page";
+import { OverlayHostProvider } from "../ui/overlay-host";
 import { createWorkspaceIndex } from "../../lib/workspaceSelectors";
 import { DEFAULT_SETTINGS, type AppSettings } from "../../lib/settings";
 import { EMPTY_WORKSPACE, type ExecutionRecord, type ExecutionSession, type ProgressEvent, type Task, type WorkspaceSnapshot } from "../../lib/native";
@@ -105,7 +106,8 @@ function renderPage(options: HarnessOptions = {}) {
       scrollRef={scrollRef} scrollTop={scrollTop} onGoToday={handlers.onGoToday}
       onEditTask={handlers.onEditTask} onArrangeTask={handlers.onArrangeTask} onOpenProject={handlers.onOpenProject} />;
   }
-  render(<Harness />, { container });
+  // 明细是浮层：Esc 的顶层裁决与焦点归还都归宿主，测试必须和 App 一样包一层。
+  render(<OverlayHostProvider><Harness /></OverlayHostProvider>, { container });
   return { ...handlers, index, container, scrollTop };
 }
 
@@ -322,37 +324,58 @@ describe("review page", () => {
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: "2026-03-09" });
   });
 
-  it("opens the in-page detail with the keyboard, shows the raw facts and gives the focus back on Escape", async () => {
+  it("opens the detail as a bubble under the trigger, shows the raw facts and gives the focus back on Escape", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     const trigger = taskRowButton("Alpha 任务");
     trigger.focus();
     await user.keyboard("{Enter}");
 
-    const detail = document.querySelector<HTMLElement>(".review-drilldown")!;
-    expect(detail).not.toBeNull();
-    // 打开后焦点进入明细区，Esc 才落在它自己的处理函数里。
-    expect(document.activeElement).toBe(detail);
+    const panel = document.querySelector<HTMLElement>(".review-detail-panel")!;
+    const detail = document.querySelector<HTMLElement>(".review-detail")!;
+    expect(panel).not.toBeNull();
+    // 信息气泡：有可访问名，但不锁背景（`aria-modal` 不写）。
+    expect(panel).toHaveAttribute("role", "dialog");
+    expect(panel).toHaveAttribute("aria-labelledby", "review-detail-title");
+    expect(panel).not.toHaveAttribute("aria-modal");
+    // 打开后焦点进入气泡，Esc 由宿主的顶层裁决处理。
+    expect(panel.contains(document.activeElement)).toBe(true);
     expect(detail.textContent).toContain("40% → 60%");
     expect(detail.textContent).toContain("第一段");
     expect(detail.textContent).toContain("当前值，不是周期历史");
     expect(detail.textContent).toContain("3月5日");
 
     await user.keyboard("{Escape}");
-    expect(document.querySelector(".review-drilldown")).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    expect(document.querySelector(".review-detail")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
-  it("keeps the query and the scroll position when the detail closes", async () => {
+  it("closes the bubble on a blank click and lets the next row take over in one click", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    await user.click(taskRowButton("Alpha 任务"));
+    expect(document.querySelector(".review-detail")).not.toBeNull();
+
+    // 点空白处：气泡直接关掉（不需要先按 Esc）。
+    await user.click(document.body);
+    await waitFor(() => expect(document.querySelector(".review-detail")).toBeNull());
+
+    // 点另一行：旧气泡让位、新气泡接上，一次点击完成，不用点两次。
+    await user.click(taskRowButton("Alpha 任务"));
+    await user.click(taskRowButton("Beta 任务"));
+    await waitFor(() => expect(document.querySelector(".review-detail")?.textContent).toContain("50% → 20%"));
+  });
+
+  it("keeps the query and the page position when the detail closes", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const harness = renderPage();
     harness.container.scrollTop = 320;
     harness.container.dispatchEvent(new Event("scroll"));
     expect(harness.scrollTop.current).toBe(320);
 
+    // 气泡不把页面滚到别处：打开、关闭都不动滚动位置，也不写偏好。
     await user.click(taskRowButton("Alpha 任务"));
-    // 打开明细后页面被带到别处；关闭时必须回到汇总原来的位置，且查询不变。
-    harness.container.scrollTop = 0;
+    expect(harness.container.scrollTop).toBe(320);
     await user.click(screen.getByRole("button", { name: "关闭明细" }));
     expect(harness.container.scrollTop).toBe(320);
     expect(harness.onPreferences).not.toHaveBeenCalled();
@@ -364,11 +387,11 @@ describe("review page", () => {
     // 日期明细 → 再点它里面的任务名：日期明细随之卸载，原触发元素不复存在。
     await user.click(screen.getByRole("button", { name: "详细" }));
     await user.click(within(document.querySelector<HTMLElement>(".review-chart-popover")!).getByRole("button", { name: "查看 3月5日 的明细" }));
-    await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getAllByRole("button", { name: "查看任务「Alpha 任务」的明细" })[0]);
+    await user.click(within(document.querySelector<HTMLElement>(".review-detail")!).getAllByRole("button", { name: "查看任务「Alpha 任务」的明细" })[0]);
     await user.keyboard("{Escape}");
-    expect(document.querySelector(".review-drilldown")).toBeNull();
+    expect(document.querySelector(".review-detail")).toBeNull();
     // 不调用已断开的节点：按身份找回同一个目标的另一个入口。
-    expect(document.activeElement).toBe(document.querySelector('[data-review-trigger="task:t-alpha"]'));
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('[data-review-trigger="task:t-alpha"]')));
   });
 
   it("keeps the still-true facts and stays usable when a selected source is gone", () => {
@@ -379,15 +402,15 @@ describe("review page", () => {
     expect(document.querySelector(".review-headline")).not.toBeNull();
   });
 
-  it("falls back to the page heading when there is no trigger left for the target", () => {
+  it("falls back to the page heading when there is no trigger left for the target", async () => {
     renderPage({ selection: { kind: "task", id: "t-idle" } });
     // 该任务在本周期内没有任何事实：明细保留「当前完成度是当前值」这条仍成立的事实。
     expect(screen.getByText(/该任务在当前周期内没有事实/)).toBeVisible();
     expect(document.querySelector('[data-review-trigger="task:t-idle"]')).toBeNull();
-    fireEvent.keyDown(document.querySelector<HTMLElement>(".review-drilldown")!, { key: "Escape" });
-    expect(document.querySelector(".review-drilldown")).toBeNull();
+    fireEvent.keyDown(document.querySelector<HTMLElement>(".review-detail")!, { key: "Escape" });
+    expect(document.querySelector(".review-detail")).toBeNull();
     // 没有任何入口可还焦点时退到页面标题，不掉到 body。
-    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "本周回顾", level: 1 }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "本周回顾", level: 1 })));
   });
 
   it("tells a date outside the current period apart from a missing project", () => {
@@ -407,7 +430,7 @@ describe("review page", () => {
 
     // 下钻到任务明细后再把原始对象交给 App：锚点元素仍是那个按钮。
     await user.click(taskRowButton("Alpha 任务"));
-    const taskDetail = document.querySelector<HTMLElement>(".review-drilldown")!;
+    const taskDetail = document.querySelector<HTMLElement>(".review-detail")!;
     await user.click(within(taskDetail).getByRole("button", { name: "编辑任务 Alpha 任务" }));
     expect(harness.onEditTask.mock.calls[0][0]).toMatchObject({ id: "t-alpha", title: "Alpha 任务" });
     expect(harness.onEditTask.mock.calls[0][1]).toBeInstanceOf(HTMLElement);
@@ -416,7 +439,7 @@ describe("review page", () => {
 
     // 项目下钻：先看明细，再把它设成引擎查询的一部分。
     await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
-    const detail = document.querySelector<HTMLElement>(".review-drilldown")!;
+    const detail = document.querySelector<HTMLElement>(".review-detail")!;
     expect(detail.textContent).toContain("第一阶段");
     expect(detail.textContent).toContain("到期冻结，后续推进不改写这个结果");
     await user.click(within(detail).getByRole("button", { name: "只看这个项目" }));
