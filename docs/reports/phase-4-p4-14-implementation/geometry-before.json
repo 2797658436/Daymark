@@ -1,0 +1,66 @@
+{
+  "week-1440": {
+    "height": 293,
+    "columns": 2,
+    "blockCount": 3,
+    "gapToBottom": 131,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "待回顾",
+      "里程碑"
+    ],
+    "footnote": null
+  },
+  "month-1440": {
+    "height": 358,
+    "columns": 2,
+    "blockCount": 3,
+    "gapToBottom": 196,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "待回顾",
+      "里程碑"
+    ],
+    "footnote": null
+  },
+  "day-1440": {
+    "height": 176,
+    "columns": 2,
+    "blockCount": 2,
+    "gapToBottom": 14,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "需要你处理"
+    ],
+    "footnote": null
+  },
+  "week-960": {
+    "height": 293,
+    "columns": 2,
+    "blockCount": 3,
+    "gapToBottom": 131,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "待回顾",
+      "里程碑"
+    ],
+    "footnote": null
+  },
+  "week-1200-200": {
+    "height": 598,
+    "columns": 1,
+    "blockCount": 3,
+    "gapToBottom": 326,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "待回顾",
+      "里程碑"
+    ],
+    "footnote": null
+  }
+}

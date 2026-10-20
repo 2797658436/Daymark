@@ -1,0 +1,61 @@
+{
+  "week-1440": {
+    "height": 188,
+    "columns": 3,
+    "blockCount": 2,
+    "gapToBottom": 24,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "里程碑1"
+    ],
+    "footnote": "本期没有待回顾的时段。"
+  },
+  "month-1440": {
+    "height": 253,
+    "columns": 3,
+    "blockCount": 2,
+    "gapToBottom": 24,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "里程碑2"
+    ],
+    "footnote": "本期没有待回顾的时段。"
+  },
+  "day-1440": {
+    "height": 186,
+    "columns": 3,
+    "blockCount": 1,
+    "gapToBottom": 24,
+    "overflow": 0,
+    "heading": [
+      "继续推进"
+    ],
+    "footnote": "本期没有待回顾的时段；本周期没有到期的里程碑。"
+  },
+  "week-960": {
+    "height": 188,
+    "columns": 2,
+    "blockCount": 2,
+    "gapToBottom": 24,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "里程碑1"
+    ],
+    "footnote": "本期没有待回顾的时段。"
+  },
+  "week-1200-200": {
+    "height": 479,
+    "columns": 1,
+    "blockCount": 2,
+    "gapToBottom": 226,
+    "overflow": 0,
+    "heading": [
+      "继续推进",
+      "里程碑1"
+    ],
+    "footnote": "本期没有待回顾的时段。"
+  }
+}

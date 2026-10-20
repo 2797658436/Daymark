@@ -1,0 +1,462 @@
+{
+  "1440-100-light": {
+    "blocks": 3,
+    "measured": [
+      {
+        "name": "块标题计数",
+        "fontSize": 11.52,
+        "weight": 500,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "理由摘要",
+        "fontSize": 12.48,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          86,
+          83,
+          77
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 7.664
+      },
+      {
+        "name": "待回顾时长标签",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "里程碑未达成标签",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          86,
+          83,
+          77
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 7.664
+      },
+      {
+        "name": "里程碑结果说明",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "脚注 / 弱化文字",
+        "fontSize": 12.16,
+        "weight": 400,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162,
+        "largeText": false
+      }
+    ],
+    "violations": [],
+    "violationsFootnote": []
+  },
+  "1440-100-dark": {
+    "blocks": 3,
+    "measured": [
+      {
+        "name": "块标题计数",
+        "fontSize": 11.52,
+        "weight": 500,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "理由摘要",
+        "fontSize": 12.48,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          205,
+          202,
+          191
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 9.357
+      },
+      {
+        "name": "待回顾时长标签",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "里程碑未达成标签",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          205,
+          202,
+          191
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 9.357
+      },
+      {
+        "name": "里程碑结果说明",
+        "fontSize": 11.52,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "脚注 / 弱化文字",
+        "fontSize": 12.16,
+        "weight": 400,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676,
+        "largeText": false
+      }
+    ],
+    "violations": [],
+    "violationsFootnote": []
+  },
+  "1200-200-light": {
+    "blocks": 3,
+    "measured": [
+      {
+        "name": "块标题计数",
+        "fontSize": 23.04,
+        "weight": 500,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "理由摘要",
+        "fontSize": 24.96,
+        "weight": 400,
+        "largeText": true,
+        "opacity": 1,
+        "foreground": [
+          86,
+          83,
+          77
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 7.664
+      },
+      {
+        "name": "待回顾时长标签",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "里程碑未达成标签",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          86,
+          83,
+          77
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 7.664
+      },
+      {
+        "name": "里程碑结果说明",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162
+      },
+      {
+        "name": "脚注 / 弱化文字",
+        "fontSize": 24.32,
+        "weight": 400,
+        "opacity": 1,
+        "foreground": [
+          112,
+          109,
+          102
+        ],
+        "background": [
+          255,
+          255,
+          255
+        ],
+        "ratio": 5.162,
+        "largeText": false
+      }
+    ],
+    "violations": [],
+    "violationsFootnote": []
+  },
+  "1200-200-dark": {
+    "blocks": 3,
+    "measured": [
+      {
+        "name": "块标题计数",
+        "fontSize": 23.04,
+        "weight": 500,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "理由摘要",
+        "fontSize": 24.96,
+        "weight": 400,
+        "largeText": true,
+        "opacity": 1,
+        "foreground": [
+          205,
+          202,
+          191
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 9.357
+      },
+      {
+        "name": "待回顾时长标签",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "里程碑未达成标签",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          205,
+          202,
+          191
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 9.357
+      },
+      {
+        "name": "里程碑结果说明",
+        "fontSize": 23.04,
+        "weight": 400,
+        "largeText": false,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676
+      },
+      {
+        "name": "脚注 / 弱化文字",
+        "fontSize": 24.32,
+        "weight": 400,
+        "opacity": 1,
+        "foreground": [
+          187,
+          183,
+          174
+        ],
+        "background": [
+          37,
+          37,
+          35
+        ],
+        "ratio": 7.676,
+        "largeText": false
+      }
+    ],
+    "violations": [],
+    "violationsFootnote": []
+  }
+}
