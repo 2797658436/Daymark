@@ -1124,8 +1124,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-detail-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); }
 .review-detail-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--line-soft); background: var(--panel); }
 
-/* 一块事实一张卡：凹面（`--bg`）压在气泡的 `--panel` 上，三种内容才不会摊成一片灰字。 */
-.review-detail-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg); }
+/* 一块事实一张卡，但**不填底色**：气泡本身已经是 `--panel`（白），再压一层
+   `--bg` 就成了凹坑，浅色下是一片脏灰、深色下是一块更黑的洞。现在只用
+   `--line-soft` 描边 + 圆角分组，靠留白和边框分层，和气泡同底。 */
+.review-detail-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; }
 .review-detail-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: 8px 12px; margin: 0; }
 .review-detail-stats > div { display: grid; gap: 1px; min-width: 0; }
 .review-detail-stats dt { color: var(--muted-strong); font-size: .7rem; }
