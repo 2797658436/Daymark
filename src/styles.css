@@ -205,6 +205,8 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .workspace-main { min-width: 0; overflow: auto; padding: 24px clamp(18px, 2.5vw, 36px) 36px; position: relative; scrollbar-gutter: stable; }
 .calendar-workspace { overflow: hidden; }
 .page-stack { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+/* 回顾页向左顶格（2026-10-20 用户要求，先看效果）：宽窗口下不再居中留白，内容从主区左边距起。 */
+.page-stack.review-page { margin-left: 0; }
 .without-task-pool .page-stack { max-width: 1280px; }
 .page-header { min-height: 64px; display: flex; justify-content: space-between; gap: 18px; align-items: center; padding-bottom: 4px; }
 .eyebrow { display: block; color: var(--accent-strong); text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; font-weight: 600; margin-bottom: 6px; }
