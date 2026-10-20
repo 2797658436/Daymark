@@ -2173,7 +2173,8 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
     try {
       await screen.findByRole("heading", { name: "本周回顾", level: 1 });
       // 项目下钻：明细区先看项目，再把它设成引擎查询的一部分。
-      await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看项目「学习项目」的明细" }));
+      // 项目名下钻现在有两个入口（圆环图例、项目卡头），点卡头那一个。
+      await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学习项目」的明细" }));
       await user.click(within(document.querySelector<HTMLElement>(".review-drilldown")!).getByRole("button", { name: "只看这个项目" }));
       expect(await screen.findByText("仅统计项目：学习项目")).toBeVisible();
 

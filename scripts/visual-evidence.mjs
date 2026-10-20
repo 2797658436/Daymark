@@ -490,7 +490,9 @@ function scenarios(port) {
       act: async (page) => {
         await page.getByRole("heading", { name: "本周回顾", level: 1 }).waitFor();
         await page.getByRole("group", { name: "回顾周期" }).getByRole("button", { name: "日" }).click();
-        await page.locator(".review-charts").waitFor();
+        // 日视图自 P4-08 之后的「合并卡」改版起不再有 `.review-charts`：投入去向与任务明细合成
+        // 一张 `.review-merged`。这一行从那时起就等不到了（P4-14 才发现），改成等合并卡。
+        await page.locator(".review-merged").waitFor();
       },
     },
     {

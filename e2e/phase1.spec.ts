@@ -1012,7 +1012,7 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
 
   // 默认停在当前周（锚点为 null 时按当前周期计算）。三个大字在页面第一行。
   await expect(page.locator('[data-review-stat="actual"]')).toContainText("60 分钟");
-  await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 百分点");
+  await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 净进度");
 
   // ① 汇总能被 ② 的等价数值表核对：周视图的四列表格同时给出投入与百分点。
   await openWeeklyTable(page, 0);
@@ -1030,8 +1030,12 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   // ③ 明细与 ② 一致；没有事件的时段任务显示「本周期无进度记录，当前 N%」，不冒充历史。
   const alphaRow = page.locator('[data-review-task="m11-alpha"]');
   await expect(alphaRow).toContainText("40% → 60%");
-  await expect(alphaRow).toContainText("净变化 +20 百分点");
+  // 「净变化」已经删掉：起止进度本身就说明了变化量，行里不再重复一遍。
+  await expect(alphaRow).not.toContainText("净变化");
   await expect(alphaRow).toContainText("投入 60 分钟");
+  // 明细按项目分组：组标题带项数与合计，项目名不再出现在行里。
+  await expect(page.locator(".review-task-group-head", { hasText: "回顾项目" })).toContainText("1 项");
+  await expect(alphaRow).not.toContainText("回顾项目");
   await expect(page.locator('[data-review-task="m11-fill-00"]')).toContainText("本周期无进度记录，当前 45%");
 
   // 日视图：就是那一天。

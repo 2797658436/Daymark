@@ -117,10 +117,10 @@ const taskRowButton = (title: string) => within(document.querySelector<HTMLEleme
 describe("review page", () => {
   it("lays the period page out in the spec order and keeps a numeric table behind the chart", () => {
     renderPage();
-    // ① 成果与待续 → ② 投入和进度图 → ③ 任务／项目明细。口径说明已按用户要求移除。
+    // 首屏是「三个数字 + 里程碑」的摘要行（不是一段），后面才是图表与明细。口径说明已按用户要求移除。
     const sections = Array.from(document.querySelectorAll<HTMLElement>(".review-page > section")).map((node) => node.className);
-    expect(sections.map((name) => name.split(" ").at(-1))).toEqual(["review-outcomes", "review-charts", "review-tasks"]);
-    expect(screen.getByRole("heading", { name: "成果与待续", level: 2 })).toBeVisible();
+    expect(sections.map((name) => name.split(" ").at(-1))).toEqual(["review-charts", "review-tasks"]);
+    expect(document.querySelector(".review-headline")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "投入和进度", level: 2 })).toBeVisible();
     expect(screen.getByRole("heading", { name: "任务／项目明细", level: 2 })).toBeVisible();
     // 投入与净进度合并成一张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
@@ -151,7 +151,7 @@ describe("review page", () => {
     expect(row.textContent).toBe("3月5日");
     expect(row.parentElement!.textContent).toBe("3月5日周四60 分钟+20 百分点");
     // 点页面别处收起。
-    await user.click(screen.getByRole("heading", { name: "成果与待续", level: 2 }));
+    await user.click(screen.getByRole("heading", { name: "本周回顾", level: 1 }));
     expect(document.querySelector(".review-chart-popover")).toBeNull();
   });
 
@@ -191,7 +191,7 @@ describe("review page", () => {
     const stats = Array.from(document.querySelectorAll<HTMLElement>("[data-review-stat]"));
     expect(stats.map((node) => node.dataset.reviewStat)).toEqual(["actual", "progress", "completed"]);
     expect(stats[0]).toHaveTextContent("60 分钟");
-    expect(stats[1]).toHaveTextContent("-10 百分点");
+    expect(stats[1]).toHaveTextContent("-10 净进度");
     expect(stats[2]).toHaveTextContent("0 项");
     // 页头不再重复这三个数字。
     expect(document.querySelector(".page-header .summary-pills")).toBeNull();
@@ -228,7 +228,8 @@ describe("review page", () => {
     } });
     const split = document.querySelector<HTMLElement>(".review-split")!;
     expect(split).not.toBeNull();
-    expect(split.textContent).toContain("投入去向");
+    // 「投入去向」四个字已经去掉：圆环本身就是它，名字只留给读屏（aria-label）。
+    expect(split.getAttribute("aria-label")).toBe("投入去向");
     expect(split.textContent).toContain("学会 Rust");
     expect(split.textContent).toContain("另一个项目");
     expect(split.textContent).toContain("60 分钟");
@@ -237,15 +238,13 @@ describe("review page", () => {
 
   it("folds a single day into one card: the ring beside the task rows", () => {
     renderPage({ preferences: { reviewPeriod: "day", reviewAnchorDate: "2026-03-05" } });
-    // 单日没有「按天比较」的意义：不画柱图，投入去向与任务明细合成一张卡。
+    // 单日没有「按天比较」的意义：不画柱图；圆环收进明细的左栏（上环下项目），右栏是项目卡。
     expect(figures()).toHaveLength(0);
-    const merged = document.querySelector<HTMLElement>(".review-merged")!;
-    expect(merged).not.toBeNull();
-    expect(within(merged).getByRole("heading", { name: "投入去向与任务", level: 2 })).toBeVisible();
-    // 投入去向始终在（有记录就是圆环，没记录就是空环占位），所以卡片固定两栏。
-    expect(document.querySelector(".review-merged-split")).not.toBeNull();
+    expect(document.querySelector(".review-tasks-body > .review-split")).not.toBeNull();
     expect(document.querySelector(".review-donut")).not.toBeNull();
-    expect(within(merged).getByRole("button", { name: "查看任务「Alpha 任务」的明细" })).toBeVisible();
+    const tasks = document.querySelector<HTMLElement>(".review-tasks")!;
+    expect(within(tasks).getByRole("heading", { name: "任务／项目明细", level: 2 })).toBeVisible();
+    expect(within(tasks).getByRole("button", { name: "查看任务「Alpha 任务」的明细" })).toBeVisible();
   });
 
   it("draws no all-zero chart and never reads 未记录 as a zero-percent execution rate", async () => {
@@ -377,7 +376,7 @@ describe("review page", () => {
     expect(screen.getByText(/来源不可用：这个任务已经不在工作区里/)).toBeVisible();
     // 页面其余部分仍然成立。
     expect(screen.getByRole("heading", { name: "任务／项目明细", level: 2 })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "成果与待续", level: 2 })).toBeVisible();
+    expect(document.querySelector(".review-headline")).not.toBeNull();
   });
 
   it("falls back to the page heading when there is no trigger left for the target", () => {
@@ -409,7 +408,7 @@ describe("review page", () => {
     expect(harness.onArrangeTask.mock.calls[0][0]).toMatchObject({ id: "t-alpha" });
 
     // 项目下钻：先看明细，再把它设成引擎查询的一部分。
-    await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
+    await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
     const detail = document.querySelector<HTMLElement>(".review-drilldown")!;
     expect(detail.textContent).toContain("第一阶段");
     expect(detail.textContent).toContain("到期冻结，后续推进不改写这个结果");
@@ -418,7 +417,39 @@ describe("review page", () => {
     // 项目筛选生效后：顶部出现范围说明，汇总只统计该项目。
     expect(await screen.findByText("仅统计项目：学会 Rust")).toBeVisible();
     expect(document.querySelector('[data-review-stat="actual"]')).toHaveTextContent("60 分钟");
-    expect(document.querySelector('[data-review-stat="progress"]')).toHaveTextContent("+20 百分点");
+    expect(document.querySelector('[data-review-stat="progress"]')).toHaveTextContent("+20 净进度");
+  });
+
+  it("states each headline count once instead of repeating a totals row", () => {
+    renderPage();
+    // 顶部统计卡是唯一出处：同一句话不许在页面里出现第二次。
+    const text = document.body.textContent ?? "";
+    for (const phrase of ["项有进度变化", "项仍可继续", "项完成"]) {
+      expect(text.split(phrase).length - 1).toBe(1);
+    }
+  });
+
+  it("drops the pending line when every ended session already has a record", () => {
+    // 只剩「明确未推进」的时段：不算待回顾，所以那行提示不出现（也不留空块）。
+    const workspace = fixture();
+    renderPage({ workspace: { ...workspace, executionSessions: [session("s-missed", { taskId: "t-beta", localDate: TODAY, endLocalDate: TODAY, startLocal: "09:00", endLocal: "10:00", status: "missed" })] } });
+    expect(document.querySelector(".review-pending-line")).toBeNull();
+    expect(screen.queryByText(/还没记录/)).toBeNull();
+    // 里程碑照旧。
+    expect(document.querySelector(".review-milestone-cell")).not.toBeNull();
+  });
+
+  it("keeps only the numbers when the period has nothing left to act on", () => {
+    renderPage({ workspace: {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [task("t-done", { title: "全部做完", progress: 100, status: "completed" })],
+      progressEvents: [event("e-done", { taskId: "t-done", fromProgress: 40, toProgress: 100, occurredAtUtc: localToUtc("2026-03-05", "09:00") })],
+    } });
+    // 没有里程碑、没有待回顾：首屏只剩数字那一格，且它占满整行（不留 24rem 的空列）。
+    expect(document.querySelectorAll(".review-headline > *")).toHaveLength(1);
+    expect(document.querySelector(".review-milestone-cell")).toBeNull();
+    expect(document.querySelector(".review-pending-line")).toBeNull();
+    expect(document.querySelector('[data-review-stat="actual"]')).not.toBeNull();
   });
 
   it("no longer renders the 口径说明 card", () => {
@@ -427,14 +458,23 @@ describe("review page", () => {
     expect(screen.queryByRole("heading", { name: "口径说明" })).toBeNull();
   });
 
-  it("explains 明确未推进, 跳过 and 取消安排 separately and lists 待回顾", () => {
+  it("explains 明确未推进 separately and keeps the 待回顾 list behind 查看", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     const notAdvanced = document.querySelector<HTMLElement>(".review-not-advanced")!;
     expect(notAdvanced.textContent).toContain("明确未推进");
     expect(notAdvanced.textContent).toContain("Beta 任务");
-    // 待回顾：已结束但没有记录的时段单独一块，并说明它不需要被当成失败。
-    expect(screen.getByRole("heading", { name: "待回顾", level: 3 })).toBeVisible();
-    expect(screen.getByText("1 个已结束的时段还没有记录")).toBeVisible();
-    expect(screen.getByText("1 个在本周期到期")).toBeVisible();
+    // 待回顾不再占块：首屏只有一行提示，名单在「查看」浮层里，时长由引擎给出。
+    expect(screen.queryByRole("heading", { name: /^待回顾/ })).toBeNull();
+    expect(document.querySelector(".review-pending-line")!.textContent).toContain("1 个已结束的时段还没记录");
+    await user.click(screen.getByRole("button", { name: "查看" }));
+    const popover = document.querySelector<HTMLElement>(".review-headline-popover")!;
+    expect(popover.textContent).toContain("独立任务");
+    expect(popover.textContent).toContain("60 分钟");
+    // 里程碑：条数在标题上，达成态给图标 + 文字两重编码。
+    expect(screen.getByRole("heading", { name: /^里程碑/, level: 2 }).textContent).toBe("里程碑1");
+    const tag = document.querySelector<HTMLElement>(".review-tag.is-unmet")!;
+    expect(tag.textContent).toBe("未达成");
+    expect(tag.querySelector("svg")).not.toBeNull();
   });
 });

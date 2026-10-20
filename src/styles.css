@@ -17,6 +17,10 @@
      和暖杏主色同族，深浅两套各自可辨（相邻分片对比 ≥ 3:1 由顺序保证）。 */
   --chart-1: #d2693b; --chart-2: #c99a3f; --chart-3: #6f8f6a;
   --chart-4: #8d7b9e; --chart-5: #5d8a9c; --chart-6: #b0705f;
+  /* 明细里项目名用的「同色深版」：扇区色当正文只有 2.4–3.9:1（AA 要 4.5），
+     所以每个色各留一个压暗版，色相不变、只降亮度（实测 4.51–4.68:1）。 */
+  --chart-1-ink: #be582c; --chart-2-ink: #926f29; --chart-3-ink: #617d5d;
+  --chart-4-ink: #806c93; --chart-5-ink: #537c8c; --chart-6-ink: #a86553;
   /* 滑块把手是「浮起」的表面：浅色主题比轨道亮，深色主题也必须比轨道亮，
      所以不能用 `--panel`（深色下它比 `--panel-strong` 更暗，把手会变成凹坑）。 */
   --thumb-surface: #ffffff; --thumb-border: var(--line-strong);
@@ -55,6 +59,9 @@
   --accent-tint: #5d3a26;
   --chart-1: #ef8b58; --chart-2: #e0b464; --chart-3: #8fb589;
   --chart-4: #b09ec2; --chart-5: #7fb3c6; --chart-6: #d38f7c;
+  /* 深色主题下这几个色本来就够亮（5.84–7.96:1），正文直接复用扇区色。 */
+  --chart-1-ink: var(--chart-1); --chart-2-ink: var(--chart-2); --chart-3-ink: var(--chart-3);
+  --chart-4-ink: var(--chart-4); --chart-5-ink: var(--chart-5); --chart-6-ink: var(--chart-6);
   --thumb-surface: #4a463f; --thumb-border: #6f6a61;
   --success: #86cda6; --danger: #ff9a91; --focus: #75c7de;
   --action: #ef9c6b; --action-hover: #ffc09a; --action-text: #23150d;
@@ -811,58 +818,84 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-stat + .review-stat { border-left: 1px solid var(--line-soft); padding-left: 20px; }
 .review-stat-value { font-size: 1.9rem; font-weight: 650; line-height: 1.1; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
 .review-stat-unit { color: var(--muted-strong); font-size: .82rem; font-weight: 500; letter-spacing: 0; }
-.review-stat-label { min-height: 1.2em; color: var(--muted-strong); font-size: .78rem; }
-.review-stat-note { color: var(--muted); font-size: .72rem; }
+/* 第二行：说这是什么；次要计数跟在后面，同属一行。 */
+.review-stat-caption { color: var(--muted-strong); font-size: .78rem; }
+.review-stat-detail { color: var(--muted); }
 @container (max-width: 42rem) {
   .review-stats { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .review-stat + .review-stat { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
 }
-.review-outcomes, .review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
+.review-charts, .review-tasks, .review-notes { display: grid; gap: 12px; }
 .review-charts { container-type: inline-size; }
-/* 日视图：投入去向（左，固定宽度）与任务明细（右）合成一张卡。 */
-.review-merged { display: grid; gap: 12px; container-type: inline-size; }
-.review-merged-split { display: grid; grid-template-columns: 24rem minmax(0, 1fr); gap: 28px; align-items: stretch; }
-.review-merged-split > .review-split { border-right: 1px solid var(--line-soft); padding-right: 28px; }
-.review-merged-tasks { display: grid; gap: 12px; align-content: start; min-width: 0; }
-@container (max-width: 52rem) {
-  .review-merged-split { grid-template-columns: minmax(0, 1fr); }
-  .review-merged-split > .review-split { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--line-soft); padding-bottom: 12px; }
-}
-/* 日／周：左列两张图，右列是**固定宽度**的投入去向（宽度不随内容伸缩，图例才稳定）。 */
-.review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 28px; align-items: stretch; }
+/* ② 投入和进度：周视图左图右环（环宽固定，图例才稳定），月视图上下排。 */
+/* 右栏 27rem：圆环在图例左侧，24rem 时图例只剩 159px，「线性代数课程（B 站）」会被截成省略号。
+   27rem 给图例留 208px，项目名能完整显示。 */
+/* 右栏与左栏同高（stretch），内容靠 align-content 在竖直方向居中 —— 圆环不贴着卡片顶边。 */
+.review-charts-row { display: grid; grid-template-columns: minmax(0, 1fr) 27rem; gap: 28px; align-items: stretch; }
 .review-charts-col { display: grid; gap: 12px; align-content: start; min-width: 0; }
-.review-charts-row > .review-split { border-left: 1px solid var(--line-soft); padding-left: 28px; }
-.review-charts-main { display: grid; gap: 12px; align-content: start; }
-.review-charts-main > .review-chart-figure + .review-chart-figure { border-top: 1px solid var(--line-soft); padding-top: 12px; }
-/* 周视图把数值表折进「详细」气泡后，图独占整列，可以高一点。 */
-.review-chart-figure.is-week .review-chart-plot { height: 172px; }
+/* 左右内边距对称，圆环才真的居中在那一栏里（只留左边距会偏 11px）。 */
+.review-charts-row > .review-split { border-left: 1px solid var(--line-soft); padding: 0 28px; }
 @container (max-width: 52rem) {
   .review-charts-row { grid-template-columns: minmax(0, 1fr); }
   .review-charts-row > .review-split { border-left: 0; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
 }
-.review-outcome-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; }
-.review-outcome-side { display: grid; gap: 14px; align-content: start; }
-/* 窄窗口与高缩放下并成一列：阈值用 rem，跟着界面缩放一起走。 */
-.review-outcomes { container-type: inline-size; }
-@container (max-width: 46rem) { .review-outcome-grid { grid-template-columns: minmax(0, 1fr); } }
-.review-outcome-summary { margin: 0; color: var(--muted-strong); font-size: .84rem; font-variant-numeric: tabular-nums; }
-.review-outcome-block { display: grid; gap: 6px; }
-.review-outcome-block h3, .review-not-advanced h3, .review-drilldown h3 { margin: 0; font-size: .82rem; color: var(--muted-strong); }
-.review-outcome-block p { margin: 0; }
-.review-task-list { display: flex; flex-wrap: wrap; gap: 5px; }
-.review-task-chip { padding: 4px 9px; border-radius: 999px; background: var(--panel-strong); color: var(--text); border: 1px solid var(--line-soft); font-size: .76rem; }
-.review-task-chip:hover { border-color: var(--line-strong); }
+/* 周视图右栏：圆环在左、图例在右（同一张卡里并排），整组上下居中。 */
+.review-charts-row > .review-split { align-content: center; }
+.review-charts-row > .review-split .review-split-body { align-items: center; }
+/* ③ 任务／项目明细：周／月只有项目与任务、占满整行；日视图是「左栏圆环 + 右栏项目卡」。 */
+.review-tasks { display: grid; gap: 12px; container-type: inline-size; }
+.review-tasks-body { display: grid; grid-template-columns: 24rem minmax(0, 1fr); gap: 20px; align-items: stretch; }
+@container (max-width: 56rem) { .review-tasks-body { grid-template-columns: minmax(0, 1fr); } }
+.review-task-main { display: grid; gap: 12px; align-content: start; min-width: 0; }
+/* 日视图左栏的圆环是一张卡（与右边项目卡同款），圆环在上、图例在下。 */
+.review-tasks-body > .review-split { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 16px 1.375rem 18px; }
+/* 左卡与右栏同高：圆环在剩下的空间里垂直居中，图例贴着卡片底边 ——
+   右侧项目越多卡片越高，圆环就在中间、项目名跟着往下走。 */
+.review-tasks-body > .review-split { align-content: stretch; grid-template-rows: minmax(0, 1fr); }
+.review-tasks-body > .review-split .review-split-body { display: grid; grid-template-rows: minmax(min-content, 1fr) auto; gap: 14px; justify-items: center; align-content: stretch; }
+/* 今日回顾的左栏：圆环比别处大（封顶 15rem），在剩下的空间里垂直居中。
+   宽度写 min(100%, 15rem) 而不是 `width:auto + height:100%` —— 外层有 container-type，
+   靠 aspect-ratio 从高度反推宽度的写法会被 containment 判成 0（实测 200% 下 0px）。 */
+.review-tasks-body > .review-split .review-donut-wrap { align-self: center; width: min(100%, 15rem); height: auto; aspect-ratio: 1; }
+.review-tasks-body > .review-split .review-split-main { width: 100%; align-self: end; }
+
+/* 首屏一行两块：左三个数字、右里程碑。里程碑数量由用户自己建，天然有限，所以敢放首屏；
+   继续推进／待回顾的条数不可控，已经不在这里（明细与浮层各自有出口）。
+   24rem 跟着根字号走，200% 下自动并成一列。 */
+/* 容器查询只对**后代**生效：container-type 挂在外面这层，.review-headline 才是被查询的后代。
+   直接给 .review-headline 自己写 container-type 再 @container 查它，永远不会命中（本仓踩过两次）。 */
+.review-headline-wrap { container-type: inline-size; }
+.review-headline { display: grid; grid-template-columns: minmax(0, 1fr) 24rem; gap: 16px; align-items: stretch; }
+/* 没有里程碑时只剩数字那一格：占满整行，右边不留一个 24rem 的空列。 */
+.review-headline > :only-child { grid-column: 1 / -1; }
+/* 56rem：960 窗口（内容 845px）下两栏会把三个数字挤到 148px 一格，宁可上下排。 */
+@container (max-width: 56rem) { .review-headline { grid-template-columns: minmax(0, 1fr); } }
+/* 里程碑格与统计卡同高（align-items: stretch）：一眼看过去是同一行里的两块。 */
+.review-milestone-cell { display: grid; gap: 6px; align-content: start; padding: 14px 18px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); }
+.review-cell-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.review-cell-head h2 { margin: 0; display: flex; align-items: baseline; gap: 6px; font-size: .84rem; font-weight: 600; color: var(--muted-strong); }
+/* 「详细」／「查看」：一格里的次要出口，字号压到 .72rem，不抢块标题。 */
+.review-cell-more { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; font-size: .72rem; }
+.review-cell-more:hover { text-decoration: underline; }
+/* 待回顾不占块，只留一行：它守的是「上面的数字是残缺的」这件事。 */
+.review-pending-line { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--muted-strong); font-size: .78rem; }
+.review-pending-line > svg { flex: none; color: var(--muted); }
+.review-headline-popover { width: 22rem; max-height: 60vh; overflow: auto; padding: 10px 12px; }
+.review-popover-list { display: grid; gap: 10px; }
+.review-block-count { color: var(--muted); font-size: .72rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 .review-inline-link { border: 0; background: transparent; padding: 0; color: var(--accent-strong); font: inherit; text-align: left; }
 .review-inline-link:hover { text-decoration: underline; }
 .review-muted { margin: 0; color: var(--muted); font-size: .78rem; }
 .review-notice { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted); font-size: .8rem; }
-.review-tag { padding: .14rem .5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.review-tag { display: inline-flex; align-items: center; gap: 3px; padding: .14rem .5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
 /* 里程碑占两行：名称／日期／达成态一行，结果文字单独一行。 */
 .review-detail-list li.review-milestone { display: grid; gap: 2px; }
 .review-milestone-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .review-milestone-note { margin: 0; color: var(--muted); font-size: .72rem; }
 .review-tag.is-unmet { color: var(--muted-strong); }
 .review-not-advanced { display: grid; gap: 6px; border-top: 1px solid var(--line-soft); padding-top: 10px; }
+/* 明细区与「明确未推进」的小标题：与里程碑格标题同一套层级。 */
+.review-not-advanced h3, .review-drilldown h3 { margin: 0; font-size: .84rem; font-weight: 600; line-height: 1.25; color: var(--muted-strong); display: flex; align-items: baseline; gap: 6px; }
 
 /* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
 .review-chart-figure { display: grid; gap: 8px; margin: 0; container-type: inline-size; }
@@ -997,14 +1030,18 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .review-split-empty { margin: 0; color: var(--muted); font-size: .78rem; }
 /* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
 /* 内容靠上、格子撑满整行：这样竖分隔线才会和左栏一样长。 */
-.review-split { display: grid; gap: 10px; align-content: start; }
-.review-charts > .review-split { border-top: 1px solid var(--line-soft); padding-top: 12px; }
-.review-split-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-.review-split-head strong { font-size: 1rem; font-weight: 600; }
-.review-split-head span { color: var(--muted); font-size: .74rem; }
-.review-split-body { display: flex; align-items: center; gap: 20px; }
+/* 投入去向：不写标题（圆环本身就说完了），左环右图例。
+   DOM 里图例在前、圆环在后，靠 order 把圆环翻到左边，读屏顺序不变。 */
+/* 右侧留 6px：图例行用 `margin-inline: -6px` 让悬停底色比文字宽一点，
+   不留这点余量它会顶出卡片右缘（1200 宽下实测溢出 22px）。 */
+.review-split { display: grid; gap: 10px; align-content: start; padding-right: 6px; }
+.review-split-body { display: flex; align-items: center; gap: 18px; }
+.review-donut-wrap { order: -1; }
 .review-split-main { flex: 1 1 auto; min-width: 0; display: grid; gap: 6px; align-content: start; }
-.review-split-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+/* 图例按可用宽度自动分列：周视图那一栏（24rem）只排得下一列，月／日整宽时排成三列，
+   否则「分钟」会被推到 900px 之外，看着又是一片空。 */
+/* min(17rem, 100%)：周视图那一栏只剩 206px 时，轨道要能跟着缩，否则图例把卡片顶出右缘。 */
+.review-split-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr)); gap: 6px 28px; margin: 0; padding: 0; list-style: none; }
 .review-split-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-inline: -6px; padding: 3px 6px; border-radius: 7px; transition: background .12s ease; }
 .review-split-list li.is-hot { background: var(--accent-softer); }
 .review-split-dot { width: 9px; height: 9px; border-radius: 3px; }
@@ -1018,21 +1055,49 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .floating-panel.review-split-popover { width: 16rem; padding: 10px 12px; }
 .review-split-popover-list { display: grid; gap: 6px; max-height: 13rem; overflow: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
 .review-split-popover-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted-strong); font-size: .78rem; }
-.review-donut-wrap { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 132px; height: 132px; }
+/* 尺寸用 rem：界面缩放到 200% 时圆环跟着长，不会在一堆放大字里缩成一小块。
+   container-type 用 inline-size 而不是 size：size 会让 `width: auto` 的日视图圆环塌成 0（实测 200% 下 0px），
+   环心文字用 cqw 取宽度百分比 —— 圆环是正方形，cqw 和 cqh 等价。 */
+.review-donut-wrap { position: relative; flex: 0 0 auto; display: grid; place-items: center; width: 9.375rem; height: 9.375rem; container-type: inline-size; }
 .review-donut { width: 100%; height: 100%; overflow: visible; }
 .review-donut-arc { transition: opacity .12s ease; }
 .review-donut-arc.is-dim { opacity: .26; }
-.review-donut-center { position: absolute; display: grid; place-items: center; align-content: center; width: 74px; height: 74px; border-radius: 50%; background: var(--panel); text-align: center; pointer-events: none; }
-.review-donut-center strong { font-size: 1.2rem; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.review-donut-center span { color: var(--muted); font-size: .66rem; }
+/* 环心跟着圆环一起缩放：圆环内孔是 viewBox 的 54%（r=38、stroke=22），写死 px 会在大环里缩成一点。 */
+.review-donut-center { position: absolute; display: grid; place-items: center; align-content: center; width: 54%; height: 54%; border-radius: 50%; background: var(--panel); text-align: center; pointer-events: none; }
+/* 环心的字跟着圆环走：16cqh / 7.5cqh = 环直径的 16% 与 7.5%（150px 环 → 24 / 11px，240px 环 → 38 / 18px）。
+   上下用 rem 夹住，极小环不会糊、极大环不会溢出内孔。 */
+.review-donut-center strong { font-size: clamp(1rem, 16cqw, 2.6rem); font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.review-donut-center span { color: var(--muted); font-size: clamp(.66rem, 7.5cqw, 1.1rem); }
 
 /* ③ 任务／项目明细：行会换行，窄窗口与 200% 缩放下不横向溢出。 */
-.review-detail-rows { display: grid; gap: 8px; }
-.review-detail-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); }
-.review-detail-main { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.review-detail-title { font-size: .86rem; }
-.review-detail-range, .review-detail-metric { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+/* 任务明细照设置页的形态做：每个项目一张圆角卡（卡头＝项目名下钻入口 + 项数与合计），
+   卡内一行一个任务，行与行用分隔线连；行是「标题 + 说明」两行，左列不会空成一条缝。 */
+.review-task-groups { display: grid; gap: 12px; }
+.review-task-group { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 0 1.375rem .25rem; }
+.review-task-group-head { display: flex; align-items: center; gap: 9px; padding: 15px 0 12px; border-bottom: 1px solid var(--line-soft); }
+/* 卡头色点：与左边圆环里那一块同色，把「这一组」和「圆环的这一段」对上。 */
+.review-task-group-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.review-task-group-head h3 { margin: 0; font-size: 1rem; font-weight: 600; color: var(--text); min-width: 0; }
+.review-task-group-head h3 .review-inline-link { color: inherit; font-weight: inherit; }
+.review-task-group-head h3 .review-inline-link:hover { color: var(--accent-strong); }
+/* 只给「N 项 · 合计」推右：写成 span 会把色点也推走，卡头就变成居中了。 */
+.review-task-group-count { margin-left: auto; flex: none; color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+/* 任务行缩进一档：项目在卡头、任务在卡内，缩进就是层级。
+   缩进写在行上（不是容器上），分隔线才会通到卡片左缘，看着像分组而不是缩进的块。 */
+.review-detail-rows { display: grid; }
+.review-detail-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 13px 0 13px 3.25rem; border-top: 1px solid var(--line-soft); }
+.review-detail-rows > .review-detail-row:first-child { border-top: 0; }
+.review-detail-main { display: grid; gap: 3px; min-width: 0; }
+/* 任务名是这一行的主体：用正文字色而不是强调色 —— 11 行橙色标题会把整页拉成一片。 */
+.review-detail-title { font-size: 1rem; font-weight: 600; }
+.review-detail-title .review-inline-link { color: var(--text); }
+.review-detail-title .review-inline-link:hover { color: var(--accent-strong); }
+.review-detail-meta { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; }
+/* 「待续」在行里只做标记，不做胶囊：11 行里有一半带它，胶囊会显得参差。 */
+.review-detail-flag { padding: 0 .45rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; }
 .review-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* 「明确未推进」与项目卡同列，也给它一张同款卡。 */
+.review-tasks > .review-not-advanced { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); padding: 14px 1.375rem; }
 
 /* 页面内明细区：非模态，Tab 可进出；打开时聚焦容器，所以焦点环要可见。 */
 .review-drilldown { display: grid; gap: 10px; border-color: var(--line); }

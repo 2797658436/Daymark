@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIncreasing, ChevronDown, Eraser, List, Maximize2, Pencil, Sparkles } from "lucide-react";
+import { ChartNoAxesColumnIncreasing, Check, ChevronDown, CircleAlert, Eraser, List, Maximize2, Pencil, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
@@ -20,9 +20,10 @@ export type { ReviewSelection } from "./review-detail";
 /**
  * 日／周／月回顾页面（阶段 4 P4-08，规格 §7.4 / M11）。
  *
- * 页面顺序按规格固定：① 成果与待续 → ② 投入和进度图 → ③ 任务／项目明细，最后是页面内
- * 明细区与口径说明。它**只呈现** `review.ts` 的只读投影：不评分、不算连续天数、不把
- * 「未记录」读成失败，也不在组件里另写统计公式（需要新派生值就加进引擎）。
+ * 页面顺序按规格固定：① 周期总览（三个数字 + 到期里程碑，原「成果与待续」段并进来）
+ * → ② 投入和进度图 → ③ 任务／项目明细，最后是页面内明细区。它**只呈现** `review.ts` 的
+ * 只读投影：不评分、不算连续天数、不把「未记录」读成失败，也不在组件里另写统计公式
+ * （需要新派生值就加进引擎）。
  *
  * 状态归属：
  * - `reviewPeriod`／`reviewAnchorDate` 是**偏好**，经 App 的 `updatePreferences` 写进既有
@@ -31,8 +32,6 @@ export type { ReviewSelection } from "./review-detail";
  */
 
 const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
-/** 「继续推进」最多直接列几项；再多就交给下方任务明细，避免摘要变成一墙胶囊。 */
-const CARRYOVER_PREVIEW = 6;
 /** 投入去向最多画几条；再多的合并成一行合计。 */
 const SPLIT_PREVIEW = 6;
 /** 周视图的刻度要带星期：只有 7 列，放得下「周一 10/19」。 */
@@ -152,10 +151,56 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selection, closeDetail]);
-  const taskChip = (taskId: string) => <button key={taskId} type="button" className="review-task-chip" data-review-trigger={`task:${taskId}`} aria-label={`查看任务「${titleOf(taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: taskId }, event.currentTarget)}>{titleOf(taskId)}</button>;
+  // 顶部这张卡把单位换成「净进度」：一行放下「+10 净进度」，写「+10 百分点」再单起一行太长。
+  // 数字仍由 formatPercentPoints 统一格式化（符号 + 四舍五入），这里只换单位词。
+  const netDeltaValue = `${formatPercentPoints(review.progress.netDelta).replace(" 百分点", "")} 净进度`;
 
   const hasFacts = review.tasks.length > 0 || review.milestones.length > 0 || review.pendingReview.length > 0
     || review.notAdvanced.count > 0 || review.actual.runningRecords.length > 0;
+
+  // 首屏只留「数字 + 里程碑」：里程碑数量由用户自己建，天然有限；待回顾与待续的数量不可控，
+  // 所以不占首屏 —— 待回顾缩成一行提示（有才出现），名单进浮层；待续的名单本来就在明细里。
+  // 这行提示守的是数据可信度：上面的投入只算「已记录」，没记录的时段得让人知道。
+  const pendingNotice = review.pendingReview.length > 0 && review.actual.runningRecords.length > 0
+    ? `${review.pendingReview.length} 个已结束的时段还没记录、${review.actual.runningRecords.length} 条还在进行中，都不计入上面的投入`
+    : review.pendingReview.length > 0
+      ? `${review.pendingReview.length} 个已结束的时段还没记录，不计入上面的投入`
+      : review.actual.runningRecords.length > 0
+        ? `${review.actual.runningRecords.length} 条执行还在进行中，不计入上面的投入`
+        : null;
+
+  /** 里程碑一行：名称／日期／达成态 + 结果文字。首屏只放第一条，完整列表在「详细」浮层里。 */
+  const milestoneRow = (milestone: ReviewResult["milestones"][number]) => (
+    <article key={milestone.milestoneId} className="review-milestone">
+      <div className="review-milestone-head">
+        <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
+        <time>{formatDayLabel(milestone.targetLocalDate)}</time>
+        {/* 达成态不只靠色差：图标 + 文字两重编码，也不用失败红。 */}
+        <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>
+          {milestone.reached ? <Check size={11} aria-hidden="true" /> : <CircleAlert size={11} aria-hidden="true" />}
+          {milestone.reached ? "达成" : "未达成"}
+        </span>
+      </div>
+      {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
+      <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
+    </article>
+  );
+
+  /** 待回顾的名单：首屏只留一行提示，名单在「查看」浮层里。 */
+  const pendingList = <ul className="review-detail-list">
+    {review.pendingReview.map((session) => <li key={session.id}>
+      <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
+      <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
+      {/* 时长由引擎算好：这一行要直接回答「现在要不要处理」。 */}
+      <span className="review-tag">{session.durationMinutes} 分钟</span>
+    </li>)}
+    {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这份名单，用标签区分。 */}
+    {review.actual.runningRecords.map((record) => <li key={record.id}>
+      <span className="review-tag">进行中</span>
+      <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
+      <time>开始于 {formatClock(record.actualStartUtc)}</time>
+    </li>)}
+  </ul>;
 
   const tickOf = (date: string) => {
     if (period === "day") return formatDayLabel(date);
@@ -188,6 +233,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const [metric, setMetric] = useState<"minutes" | "delta">("minutes");
   const [expanded, setExpanded] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
+  /** 首屏两个浮层共用一套状态：里程碑「详细」与待回顾「查看」，同一时刻只开一个。 */
+  const [headlinePanel, setHeadlinePanel] = useState<{ kind: "milestones" | "pending"; anchor: DOMRect } | null>(null);
+  const toggleHeadlinePanel = (kind: "milestones" | "pending", trigger: HTMLElement) => {
+    setHeadlinePanel((current) => current?.kind === kind ? null : { kind, anchor: trigger.getBoundingClientRect() });
+  };
   const detailAnchor = useRef<HTMLButtonElement | null>(null);
   const isMinutes = metric === "minutes";
   const chartRows = isMinutes ? minuteRows : deltaRows;
@@ -235,35 +285,77 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     detailOpen={detailOpen} onDetailOpen={setDetailOpen} detailAnchor={detailAnchor} />;
 
   // 没有记录时也给一个「0 分钟」的占位圆环：比整块消失更能说明「这里本来该有东西」。
-  const splitChart = <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)}
+  /** 圆环与项目卡头同源取色：按「投入去向」的顺序取 `--chart-N`，前 6 个才有独立色，
+   *  其余（含被折进「另外 N 个去处」的）用中性色 —— 与圆环里那一段的颜色一致。 */
+  const projectColorOf = (id: string | null) => {
+    const position = review.actual.byProject.slice(0, SPLIT_PREVIEW).findIndex((entry) => entry.projectId === id);
+    return position === -1 ? "var(--line-strong)" : `var(--chart-${(position % 6) + 1})`;
+  };
+
+  /** 项目名用的**同色深版**：和色点同色相，但压到正文对比度达标（扇区色直接当字只有 2.4–3.9:1）。 */
+  const projectInkOf = (id: string | null) => {
+    const position = review.actual.byProject.slice(0, SPLIT_PREVIEW).findIndex((entry) => entry.projectId === id);
+    return position === -1 ? "var(--muted-strong)" : `var(--chart-${(position % 6) + 1}-ink)`;
+  };
+
+  const splitChart = <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)} colorOf={projectColorOf}
     onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />;
 
-  const taskRows = review.tasks.length > 0
-    ? <div className="review-detail-rows">{review.tasks.map((detail) => {
-      const task = index.tasksById.get(detail.taskId);
-      return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
-        <div className="review-detail-main">
-          <strong className="review-detail-title">{task
-            ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
-            : <span>来源不可用</span>}</strong>
-          {detail.projectId
-            ? <button type="button" className="review-inline-link" data-review-trigger={`project:${detail.projectId}`} aria-label={`查看项目「${projectTitleOf(detail.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: detail.projectId! }, event.currentTarget)}>{projectTitleOf(detail.projectId)}</button>
-            : <span className="review-muted">独立任务</span>}
+  /** 一行任务：左边「任务名 + 一行副标题（待续 · 进度区间 · 投入）」，右边两个动作。
+   *  两行结构是照设置页的设置行来的：标题一行、说明一行，左列就不会空成一条缝。 */
+  const taskRow = (detail: ReviewResult["tasks"][number]) => {
+    const task = index.tasksById.get(detail.taskId);
+    return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
+      <div className="review-detail-main">
+        <strong className="review-detail-title">{task
+          ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
+          : <span>来源不可用</span>}</strong>
+        <p className="review-detail-meta">
           <span className="review-detail-range">{formatTaskProgressRange(detail)}</span>
-          <span className="review-detail-metric">净变化 {formatPercentPoints(detail.netDelta)}</span>
           <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
-          {detail.pendingReviewCount > 0 && <span className="review-detail-metric">待回顾 {detail.pendingReviewCount}</span>}
-          {detail.carryover && <span className="muted-chip">待续</span>}
-        </div>
-        {task && <div className="review-detail-actions">
-          <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
-          {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
-          {task.status === "active"
-            ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
-            : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
-        </div>}
-      </article>;
-    })}</div>
+        </p>
+      </div>
+      {(task || detail.carryover) && <div className="review-detail-actions">
+        {/* 「待续」放右列：留在说明行里会把各行的进度文字推得参差不齐。 */}
+        {detail.carryover && <span className="review-detail-flag">待续</span>}
+        {task && <>
+        <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
+        {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
+        {task.status === "active"
+          ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
+          : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
+        </>}
+      </div>}
+    </article>;
+  };
+
+  /** 按项目分组：组按首次出现排，组内保持引擎给的顺序。分组只是展示顺序，
+   *  组头的小计是把引擎已经算好的 `recordedMs` 相加，不引入新的口径。 */
+  const taskGroups = (() => {
+    const groups = new Map<string, { key: string; projectId: string | null; title: string; items: ReviewResult["tasks"] }>();
+    for (const detail of review.tasks) {
+      const key = detail.projectId ?? "__independent__";
+      if (!groups.has(key)) {
+        groups.set(key, { key, projectId: detail.projectId, title: detail.projectId ? projectTitleOf(detail.projectId) : "独立任务", items: [] });
+      }
+      groups.get(key)!.items.push(detail);
+    }
+    return [...groups.values()];
+  })();
+
+  const taskRows = review.tasks.length > 0
+    ? <div className="review-task-groups">{taskGroups.map((group, groupIndex) => <section className="review-task-group" key={group.key} aria-labelledby={`review-group-${groupIndex}`}>
+      <div className="review-task-group-head">
+        {/* 色点与左边圆环的扇区同色：一眼能把这一组和圆环里那一块对上。 */}
+        <span className="review-task-group-dot" style={{ background: projectColorOf(group.projectId) }} aria-hidden="true" />
+        {/* 卡头就是项目的下钻入口：项目名从行里移到卡头，入口不能跟着消失。 */}
+        <h3 id={`review-group-${groupIndex}`} style={{ color: projectInkOf(group.projectId) }}>{group.projectId
+          ? <button type="button" className="review-inline-link" data-review-trigger={`project:${group.projectId}`} aria-label={`查看项目「${group.title}」的明细`} onClick={(event) => openDetail({ kind: "project", id: group.projectId! }, event.currentTarget)}>{group.title}</button>
+          : group.title}</h3>
+        <span className="review-task-group-count">{group.items.length} 项 · {formatRecordedMs(group.items.reduce((sum, item) => sum + item.recordedMs, 0))}</span>
+      </div>
+      <div className="review-detail-rows">{group.items.map(taskRow)}</div>
+    </section>)}</div>
     : <p className="review-muted">本周期没有任务事实。</p>;
 
   // 明确未推进／跳过／取消安排分别说明：它们是用户显式给出的结果，不是时间流逝的推断。
@@ -294,14 +386,36 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       </div>
     </header>
 
-    {/* 第一行就是三个大字：投入、净进度、曾完成。此前它们缩在页头右侧的胶囊里，
-        和下面的图表、明细争夺同一行空间，读起来像备注而不是结论。
-        用 div + role=group 而不是 section：规格里的三段顺序（成果→图表→明细）不该被摘要打断。 */}
-    {hasFacts && <div className="review-stats" role="group" aria-label="本周期总览">
-      <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} label="实际投入" />
-      <Stat kind="progress" value={formatPercentPoints(review.progress.netDelta)} label="净进度" note={`${review.progress.changedTaskIds.length} 项有进度变化`} />
-      <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项完成`} note={`${review.carryoverTaskIds.length} 项仍可继续`} />
+    {/* 首屏一行两块：左边三个数字，右边里程碑。
+        里程碑是这一页唯一独占的信息（按周期聚合到期、达成态、冻结结果），而且数量由用户
+        自己建、天然有限，所以敢放首屏；「继续推进」与「待回顾」的条数不可控（0 到十几个），
+        放进固定高度的首屏必然把卡片撑高 —— 前者的名单本来就在 ③ 明细里，后者缩成一行提示。
+        统计仍是 div + role=group：它是摘要，不是规格里的「一段」。 */}
+    {hasFacts && <div className="review-headline-wrap">
+    <div className="review-headline">
+      <div className="review-stats" role="group" aria-label="本周期总览">
+        <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} caption="实际投入" />
+        <Stat kind="progress" value={netDeltaValue} caption={`${review.progress.changedTaskIds.length} 项有进度变化`} />
+        <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项完成`} caption={`${review.carryoverTaskIds.length} 项仍可继续`} />
+      </div>
+      {review.milestones.length > 0 && <section className="review-milestone-cell" aria-labelledby="review-milestone-title">
+        <div className="review-cell-head">
+          <h2 id="review-milestone-title">里程碑<span className="review-block-count">{review.milestones.length}</span></h2>
+          <button type="button" className="review-cell-more" aria-expanded={headlinePanel?.kind === "milestones"}
+            onClick={(event) => toggleHeadlinePanel("milestones", event.currentTarget)}>查看全部</button>
+        </div>
+        {milestoneRow(review.milestones[0])}
+      </section>}
+    </div>
     </div>}
+
+    {/* 待回顾不占块：一行说清「上面的数字是残缺的」，名单在「查看」浮层里。 */}
+    {hasFacts && pendingNotice && <p className="review-pending-line">
+      <CircleAlert size={13} aria-hidden="true" />
+      <span>{pendingNotice}</span>
+      <button type="button" className="review-cell-more" aria-expanded={headlinePanel?.kind === "pending"}
+        onClick={(event) => toggleHeadlinePanel("pending", event.currentTarget)}>查看</button>
+    </p>}
 
     {projectId !== null && <p className="review-scope" role="status">
       <span className="muted-chip">仅统计项目：{projectTitleOf(projectId)}</span>
@@ -311,103 +425,45 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     {!hasFacts && <ReviewEmpty icon={<ChartNoAxesColumnIncreasing />} title="有实际推进后，这里会出现回顾" text="没有记录时不绘制全零图表，也不会把未记录解释为失败。" action={<Button variant="primary" onClick={onGoToday}>前往今日</Button>} />}
 
     {hasFacts && <>
-      {/* ① 成果与待续 */}
-      <section className="surface-card review-outcomes" aria-labelledby="review-outcomes-title">
-        <div className="section-heading"><h2 id="review-outcomes-title">成果与待续</h2></div>
-        {/* 一行总账替代原来的四段计数句子：同样的数字只出现一次，细节交给下面三块与任务明细。 */}
-        <p className="review-outcome-summary">
-          {review.progress.changedTaskIds.length} 项有进度变化 · {review.carryoverTaskIds.length} 项仍可继续安排
-          {review.progress.completedTaskIds.length > 0 && ` · ${review.progress.completedTaskIds.length} 项完成`}
-        </p>
-        <div className="review-outcome-grid">
-          <article className="review-outcome-block">
-            <h3>继续推进</h3>
-            {review.carryoverTaskIds.length > 0 ? <>
-              <div className="review-task-list">{review.carryoverTaskIds.slice(0, CARRYOVER_PREVIEW).map(taskChip)}</div>
-              {review.carryoverTaskIds.length > CARRYOVER_PREVIEW && <p className="review-muted">还有 {review.carryoverTaskIds.length - CARRYOVER_PREVIEW} 项，见下方任务明细。</p>}
-            </> : <p className="review-muted">本周期没有需要继续推进的任务。</p>}
-          </article>
-          {/* 待回顾与里程碑同属「需要你处理」，竖着排在一列：它们很少同时为空，
-              分三列会让中间空出一整栏。两者都为空时并成一句，别让空状态占掉半张卡。 */}
-          {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0 || review.milestones.length > 0)
-            ? <div className="review-outcome-side">
-              <article className="review-outcome-block">
-                <h3>待回顾</h3>
-                {(review.pendingReview.length > 0 || review.actual.runningRecords.length > 0) ? <>
-                  <p>{review.pendingReview.length} 个已结束的时段还没有记录</p>
-                  <ul className="review-detail-list">
-                    {review.pendingReview.map((session) => <li key={session.id}>
-                      <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
-                      <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
-                    </li>)}
-                    {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这一块，用标签区分。 */}
-                    {review.actual.runningRecords.map((record) => <li key={record.id}>
-                      <span className="review-tag">进行中</span>
-                      <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
-                      <time>开始于 {formatClock(record.actualStartUtc)}</time>
-                    </li>)}
-                  </ul>
-                </> : <p className="review-muted">没有需要回顾的时段。</p>}
-              </article>
-              <article className="review-outcome-block">
-                <h3>里程碑</h3>
-                {review.milestones.length > 0 ? <>
-                  <p>{review.milestones.length} 个在本周期到期</p>
-                  <ul className="review-detail-list">{review.milestones.map((milestone) => <li key={milestone.milestoneId} className="review-milestone">
-                    <div className="review-milestone-head">
-                      <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
-                      <time>{formatDayLabel(milestone.targetLocalDate)}</time>
-                      <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>{milestone.reached ? "达成" : "未达成"}</span>
-                    </div>
-                    {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
-                    <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
-                  </li>)}</ul>
-                </> : <p className="review-muted">本周期没有到期的里程碑。</p>}
-              </article>
-            </div>
-            : <article className="review-outcome-block">
-              <h3>需要你处理</h3>
-              <p className="review-muted">本期没有待回顾的时段，也没有到期的里程碑。</p>
-            </article>}
-        </div>
-      </section>
-
-      {period === "day"
-        // 单日没有「按天比较」的意义：上面的三个大字已经给了投入与净进度，
-        // 这里只留投入去向与任务明细，合成一张卡（左圆环、右明细）。
-        ? <section className="surface-card review-merged" aria-labelledby="review-merged-title">
-          <div className="section-heading"><h2 id="review-merged-title">投入去向与任务</h2><span>{review.tasks.length} 项有事实</span></div>
-          <div className={splitChart ? "review-merged-split" : undefined}>
-            {splitChart}
-            <div className="review-merged-tasks">{taskRows}{notAdvanced}</div>
-          </div>
-        </section>
-        : <>
-          {/* ② 投入和进度图：一张图、一个单位，切换看投入还是净进度 */}
-          <section className="surface-card review-charts" aria-labelledby="review-charts-title">
-            {/* 周视图分两栏：标题（含切换与按钮）和柱状图同属左栏，右栏从第一行就是投入去向。
-                月视图 31 列需要整宽，标题在上、圆环在下。 */}
-            {period === "week" ? <div className="review-charts-row">
-              <div className="review-charts-col">
-                {chartsHeading}
-                {mergedChart}
-              </div>
-              {splitChart}
-            </div> : <>
+      {/* ② 投入和进度图 + 投入去向：日视图没有「按天比较」的意义，圆环挪进下面的明细里当左栏。 */}
+      {period !== "day" && <section className="surface-card review-charts" aria-labelledby="review-charts-title">
+          {/* 周视图分两栏：左栏是标题（含切换与按钮）和柱状图，右栏是投入去向。
+              月视图 31 列需要整宽，标题在上、圆环在下。 */}
+          {period === "week" ? <div className="review-charts-row">
+            <div className="review-charts-col">
               {chartsHeading}
               {mergedChart}
-              {splitChart}
-            </>}
-          </section>
+            </div>
+            {splitChart}
+          </div> : <>
+            {chartsHeading}
+            {mergedChart}
+            {splitChart}
+          </>}
+        </section>}
 
-          {/* ③ 任务／项目明细 */}
-          <section className="surface-card review-tasks" aria-labelledby="review-tasks-title">
-            <div className="section-heading"><h2 id="review-tasks-title">任务／项目明细</h2><span>{review.tasks.length} 项有事实</span></div>
-            {taskRows}
-            {notAdvanced}
-          </section>
-        </>}
+      {/* ③ 任务／项目明细：周／月只有项目与任务、占满整行；日视图把圆环收进左栏（上环下项目）。 */}
+      <section className="review-tasks" aria-labelledby="review-tasks-title">
+        <div className="section-heading"><h2 id="review-tasks-title">任务／项目明细</h2><span>{review.tasks.length} 项有事实</span></div>
+        {period === "day"
+          ? <div className="review-tasks-body">
+            {splitChart}
+            <div className="review-task-main">{taskRows}{notAdvanced}</div>
+          </div>
+          : <>{taskRows}{notAdvanced}</>}
+      </section>
     </>}
+
+    {/* 首屏两个浮层：里程碑的完整列表、待回顾的完整名单。用浮层而不是展开，
+        是为了让首屏高度只由「有没有」决定，不由「有几条」决定。 */}
+    {headlinePanel?.kind === "milestones" && <FloatingPanel kind="action" label="本周期到期的里程碑" anchor={headlinePanel.anchor}
+      closeOnOutsideClick className="review-headline-popover" onClose={() => setHeadlinePanel(null)}>
+      <div className="review-popover-list">{review.milestones.map(milestoneRow)}</div>
+    </FloatingPanel>}
+    {headlinePanel?.kind === "pending" && <FloatingPanel kind="action" label="还没有记录的时段" anchor={headlinePanel.anchor}
+      closeOnOutsideClick className="review-headline-popover" onClose={() => setHeadlinePanel(null)}>
+      {pendingList}
+    </FloatingPanel>}
 
     {selection && <ReviewDetail containerRef={detailRef} index={index} review={review} selection={selection} projectId={projectId}
       onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
@@ -423,12 +479,13 @@ function ReviewEmpty({ icon, title, text, action }: { icon: ReactNode; title: st
 /** 第一行的三个大字。数值用 `data-review-stat` 标出，方便核对与测试。
  *  数字与单位分开排：单位跟数字同高会把「1481 分钟」读成两个等重的信息。
  *  没有标签的那一块仍然占住标签行（`min-height`），否则下面的注释会跟旁边错行。 */
-function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "completed"; value: string; label?: string; note?: string }) {
+/** 统计卡固定两行：第一行「数字 + 单位」，第二行说这是什么。
+ *  次要计数跟在第二行后面（同一行），不再单起一行 —— 三个卡高度才会一样。 */
+function Stat({ kind, value, caption, detail }: { kind: "actual" | "progress" | "completed"; value: string; caption: string; detail?: string }) {
   const [amount, unit] = value.split(" ");
   return <div className="review-stat" data-review-stat={kind}>
     <span className="review-stat-value">{amount}{unit && <>{" "}<span className="review-stat-unit">{unit}</span></>}</span>
-    <span className="review-stat-label">{label ?? ""}</span>
-    {note && <span className="review-stat-note">{note}</span>}
+    <span className="review-stat-caption">{caption}{detail && <span className="review-stat-detail"> · {detail}</span>}</span>
   </div>;
 }
 
@@ -440,9 +497,11 @@ function Stat({ kind, value, label, note }: { kind: "actual" | "progress" | "com
  * 可读的等价物是左边那列图例；悬停某一段或某一行时，环心换成那一段的百分比。
  * 项目名可点，进入该项目在本周期的明细。
  */
-function SplitChart({ entries, titleOf, onOpen }: {
+function SplitChart({ entries, titleOf, colorOf, onOpen }: {
   entries: { projectId: string | null; recordedMs: number }[];
   titleOf: (projectId: string | null) => string;
+  /** 与项目卡头的色点同源，保证圆环和右边那一组是同一个颜色。 */
+  colorOf: (projectId: string | null) => string;
   onOpen: (projectId: string | null, trigger: HTMLElement) => void;
 }) {
   const [hot, setHot] = useState<string | null>(null);
@@ -460,7 +519,7 @@ function SplitChart({ entries, titleOf, onOpen }: {
   let cursor = 0;
   visible.forEach((entry, index) => {
     const percent = (entry.recordedMs / total) * 100;
-    arcs.push({ key: entry.projectId ?? "independent", label: titleOf(entry.projectId), recordedMs: entry.recordedMs, color: `var(--chart-${(index % 6) + 1})`, percent, offset: cursor });
+    arcs.push({ key: entry.projectId ?? "independent", label: titleOf(entry.projectId), recordedMs: entry.recordedMs, color: colorOf(entry.projectId), percent, offset: cursor });
     cursor += percent;
   });
   if (restMs > 0) arcs.push({ key: "rest", label: `另外 ${rest.length} 个去处`, recordedMs: restMs, color: "var(--line-strong)", percent: (restMs / total) * 100, offset: cursor });
@@ -476,8 +535,7 @@ function SplitChart({ entries, titleOf, onOpen }: {
     <span className="review-split-value">{formatRecordedMs(arc.recordedMs)}</span>
   </li>;
 
-  return <section className="review-split" aria-labelledby="review-split-title">
-    <div className="review-split-head"><strong id="review-split-title">投入去向</strong></div>
+  return <section className="review-split" aria-label="投入去向">
     <div className="review-split-body">
       {total === 0
         // 没有记录时给一个空环：整块消失会让人以为这里本来就没有这个板块。

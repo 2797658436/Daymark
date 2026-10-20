@@ -2,7 +2,7 @@ import { FolderKanban, Pencil, Sparkles, X } from "lucide-react";
 import type { KeyboardEvent, RefObject } from "react";
 
 import { Button } from "../ui/button";
-import { formatPercentPoints, formatRecordedMs, formatTaskProgressRange, type ReviewCarryoverReason, type ReviewResult, type ReviewTaskDetail } from "../../lib/review";
+import { CARRYOVER_REASON_LABEL, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, type ReviewResult, type ReviewTaskDetail } from "../../lib/review";
 import type { ExecutionRecord, ExecutionSession, Task } from "../../lib/native";
 import type { WorkspaceIndex } from "../../lib/workspaceSelectors";
 
@@ -50,13 +50,6 @@ const SESSION_STATUS_LABEL: Record<ExecutionSession["status"], string> = {
   cancelled: "已取消安排",
 };
 
-/** 待续的原因说清是哪一种：「推进过但没完成」与「根本没推进」不是一件事。 */
-const CARRYOVER_REASON_LABEL: Record<ReviewCarryoverReason, string> = {
-  incompleteAdvance: "周期内有未完成的进度推进",
-  pendingReview: "有已结束但还没有记录的时段",
-  notAdvanced: "有明确未推进／跳过／取消安排的时段",
-  skippedOccurrence: "有跳过的习惯发生项",
-};
 
 export function ReviewDetail({ index, review, selection, projectId, onClose, onEditTask, onArrangeTask, onOpenProject, onProjectId, onOpenTask, containerRef }: ReviewDetailProps) {
   const task = selection.kind === "task" ? index.tasksById.get(selection.id) : undefined;

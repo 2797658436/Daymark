@@ -381,7 +381,8 @@ describe("pending review, explicit skips and carryover", () => {
       executionSessions: [session("s-1", { taskId: "reviewed" }), session("s-2", { taskId: "skipped", status: "skipped" })],
     });
     const review = buildReview(snapshot, { period: "day", anchorDate: "2026-03-07", projectId: null }, NOON);
-    expect(review.carryoverTaskIds).toEqual(["advanced", "downgraded", "reviewed", "skipped"]);
+    // 顺序按理由优先级：有待回顾 > 计划未做 > 进度未走完（同类保持原顺序）。
+    expect(review.carryoverTaskIds).toEqual(["reviewed", "skipped", "advanced", "downgraded"]);
     expect(review.tasks.filter((detail) => detail.carryover).map((detail) => detail.taskId)).toEqual(["advanced", "downgraded", "reviewed", "skipped"]);
     // 待续只给出 ID 与明细，不复制任务：快照本身没有被改写。
     expect(snapshot.tasks.map((item) => item.id)).toEqual(["advanced", "downgraded", "completed", "paused", "reviewed", "skipped", "idle"]);

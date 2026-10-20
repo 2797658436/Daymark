@@ -1,5 +1,6 @@
 import type { ExecutionRecord, ExecutionSession, HabitOccurrence, ProgressEvent, TaskStatus, WorkspaceSnapshot } from "./native";
 import { addLocalDays, isLocalDate, localDateOf } from "./deadlines";
+import { sessionMinutes } from "./calendarPlacement";
 import { createWorkspaceIndex, isPendingReviewIn, milestoneReached, milestoneSummary, projectProgress, projectTasksOf, type WorkspaceIndex } from "./workspaceSelectors";
 
 /**
@@ -139,6 +140,21 @@ export interface ReviewMilestoneSummary {
  */
 export type ReviewCarryoverReason = "incompleteAdvance" | "pendingReview" | "notAdvanced" | "skippedOccurrence";
 
+/**
+ * 待续理由的**长句**：明细区逐条解释用（`review-detail.tsx` 直接 import）。
+ * 与下面的短标签是同一个 `reason` 的两种文案，必须住在同一个模块里 —— 否则两个文件
+ * 各写一份，改一处就会漂。
+ */
+export const CARRYOVER_REASON_LABEL: Record<ReviewCarryoverReason, string> = {
+  incompleteAdvance: "周期内有未完成的进度推进",
+  pendingReview: "有已结束但还没有记录的时段",
+  notAdvanced: "有明确未推进／跳过／取消安排的时段",
+  skippedOccurrence: "有跳过的习惯发生项",
+};
+
+/** 理由的展示顺序：先说「为什么还没完」，再说「推进过但没走完」。 */
+export const CARRYOVER_REASON_ORDER: ReviewCarryoverReason[] = ["pendingReview", "notAdvanced", "skippedOccurrence", "incompleteAdvance"];
+
 export interface ReviewTaskDetail {
   taskId: string;
   title: string;
@@ -182,6 +198,9 @@ export interface ReviewTaskDetail {
   carryoverReasons: ReviewCarryoverReason[];
 }
 
+/** 待回顾条目：`ExecutionSession` 的全部字段 + 引擎算好的时长（跨午夜由引擎处理）。 */
+export type ReviewPendingSession = ExecutionSession & { durationMinutes: number };
+
 export interface ReviewResult {
   period: ReviewPeriod;
   anchorDate: string;
@@ -195,7 +214,7 @@ export interface ReviewResult {
   actual: ReviewActualSummary;
   plan: ReviewPlanSummary;
   /** 待回顾：派生状态，不写 `missed`；判断来自 `workspaceSelectors` 的唯一实现。 */
-  pendingReview: ExecutionSession[];
+  pendingReview: ReviewPendingSession[];
   notAdvanced: ReviewNotAdvancedSummary;
   /** 待续任务 ID（按任务去重）；只提供查看或安排，不复制任务。 */
   carryoverTaskIds: string[];
@@ -347,7 +366,11 @@ function buildRange(
   }
 
   const periodSessions = index.workspace.executionSessions.filter((session) => taskIds.has(session.taskId) && dayIndex.has(session.localDate));
-  const pendingReview = periodSessions.filter((session) => isPendingReviewIn(index, session, now));
+  // 时长由引擎算（跨午夜在 `sessionMinutes` 里处理）：页面要回答「现在要不要处理」，
+  // 但不在组件里减时间戳。
+  const pendingReview: ReviewPendingSession[] = periodSessions
+    .filter((session) => isPendingReviewIn(index, session, now))
+    .map((session) => ({ ...session, durationMinutes: sessionMinutes(session) }));
   for (const session of pendingReview) days[dayIndex.get(session.localDate)!].pendingReviewCount += 1;
 
   // 明确未推进／跳过：读显式状态。已经产生实际记录的 `missed` 时段按实际投入计入，不重复
@@ -368,12 +391,22 @@ function buildRange(
   const pendingReviewTaskIds = new Set(pendingReview.map((session) => session.taskId));
   const notAdvancedTaskIds = new Set([...missedSessions, ...skippedSessions, ...cancelledSessions].map((session) => session.taskId));
   const skippedOccurrenceTaskIds = new Set(skippedOccurrences.map((occurrence) => habitTaskIds.get(occurrence.habitId)!));
+  const reasonHit = (reason: ReviewCarryoverReason, taskId: string) => reason === "pendingReview" ? pendingReviewTaskIds.has(taskId)
+    : reason === "notAdvanced" ? notAdvancedTaskIds.has(taskId)
+      : reason === "skippedOccurrence" ? skippedOccurrenceTaskIds.has(taskId)
+        : incompleteAdvanceTaskIds.has(taskId);
+  /** 任务在展示顺序里最靠前的那条理由的位次；没有命中排到最后。 */
+  const reasonRank = (taskId: string) => {
+    const position = CARRYOVER_REASON_ORDER.findIndex((reason) => reasonHit(reason, taskId));
+    return position === -1 ? CARRYOVER_REASON_ORDER.length : position;
+  };
+  // 排序按理由优先级，不按任务顺序：先说「有待回顾」「计划没做」，再说「推进过但没走完」。
   const carryoverTaskIds = scopedTasks
     .filter((task) => task.status === "active"
       && (incompleteAdvanceTaskIds.has(task.id) || pendingReviewTaskIds.has(task.id) || notAdvancedTaskIds.has(task.id) || skippedOccurrenceTaskIds.has(task.id)))
+    .sort((left, right) => reasonRank(left.id) - reasonRank(right.id))
     .map((task) => task.id);
   const carryover = new Set(carryoverTaskIds);
-
   // 明细：只列出周期内确有事实的任务 —— 没有事实的任务不显示，也就不存在伪造的 0% 执行率。
   // 先按任务分组一次，避免每行再扫一遍全量数组（规格 §8 的同一要求）。
   const eventsByTask = groupByTask(periodEvents, (event) => event.taskId);
