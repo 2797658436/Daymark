@@ -1123,6 +1123,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 只在还能往下滚时软化 6px 边：再长就会把下一行标题压成灰影（用户反馈过）。 */
 .review-detail-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 6px), transparent); }
 .review-detail-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px 12px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+/* 状态靠右下角：动作在左、状态在右，一行里两件事不混在一起。 */
+.review-detail-status { margin-left: auto; }
 
 /* 一块事实一张卡，但**不填底色**：气泡本身已经是 `--panel`（白），再压一层
    `--bg` 就成了凹坑，浅色下是一片脏灰、深色下是一块更黑的洞。现在只用

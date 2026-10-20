@@ -274,10 +274,10 @@ function TaskActions({ task, projectTitle, onEditTask, onArrangeTask, onOpenProj
 }) {
   return <>
     <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
-    {task.status === "active"
-      ? <Button variant="primary" aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
-      : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
+    {task.status === "active" && <Button variant="primary" aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>}
     {task.projectId && <Button aria-label={`定位项目 ${projectTitle ?? "来源不可用"}`} onClick={() => onOpenProject(task.projectId!, null)}><FolderKanban size={14} />定位项目</Button>}
+    {/* 状态不是动作：挪到动作条最右，别夹在「编辑」和「定位项目」中间冒充按钮。 */}
+    {task.status !== "active" && <span className="muted-chip review-detail-status">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
   </>;
 }
 
