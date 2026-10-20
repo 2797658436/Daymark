@@ -401,10 +401,17 @@ describe("review page", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const harness = renderPage();
 
-    await user.click(screen.getByRole("button", { name: "编辑任务 Alpha 任务" }));
+    // 行内只剩「任务名」一个入口：回顾页是只读投影，写动作一律在下钻明细里。
+    const alphaRow = document.querySelector<HTMLElement>('[data-review-task="t-alpha"]')!;
+    expect(within(alphaRow).getAllByRole("button")).toHaveLength(1);
+
+    // 下钻到任务明细后再把原始对象交给 App：锚点元素仍是那个按钮。
+    await user.click(taskRowButton("Alpha 任务"));
+    const taskDetail = document.querySelector<HTMLElement>(".review-drilldown")!;
+    await user.click(within(taskDetail).getByRole("button", { name: "编辑任务 Alpha 任务" }));
     expect(harness.onEditTask.mock.calls[0][0]).toMatchObject({ id: "t-alpha", title: "Alpha 任务" });
     expect(harness.onEditTask.mock.calls[0][1]).toBeInstanceOf(HTMLElement);
-    await user.click(screen.getByRole("button", { name: "安排任务 Alpha 任务" }));
+    await user.click(within(taskDetail).getByRole("button", { name: "安排任务 Alpha 任务" }));
     expect(harness.onArrangeTask.mock.calls[0][0]).toMatchObject({ id: "t-alpha" });
 
     // 项目下钻：先看明细，再把它设成引擎查询的一部分。

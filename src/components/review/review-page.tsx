@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIncreasing, Check, ChevronDown, CircleAlert, Eraser, List, Maximize2, Pencil, Sparkles } from "lucide-react";
+import { ChartNoAxesColumnIncreasing, Check, ChevronDown, CircleAlert, Eraser, List, Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
@@ -301,8 +301,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const splitChart = <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)} colorOf={projectColorOf}
     onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />;
 
-  /** 一行任务：左边「任务名 + 一行副标题（待续 · 进度区间 · 投入）」，右边两个动作。
-   *  两行结构是照设置页的设置行来的：标题一行、说明一行，左列就不会空成一条缝。 */
+  /** 一行任务：任务名 + 一行副标题（进度区间 · 投入 · 待续）。
+   *  两行结构是照设置页的设置行来的：标题一行、说明一行，左列就不会空成一条缝。
+   *  **行里不放写入口**：回顾页是只读投影，编辑与安排在下钻明细里 —— 那里带着原始事件、
+   *  计划时段与备注，动作才有上下文；行内每行两个按钮会把明细区变成待办清单，200% 下
+   *  还会把任务名挤到折行。行内只留「待续」这个**事实**标记。 */
   const taskRow = (detail: ReviewResult["tasks"][number]) => {
     const task = index.tasksById.get(detail.taskId);
     return <article className="review-detail-row" key={detail.taskId} data-review-task={detail.taskId}>
@@ -313,19 +316,10 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <p className="review-detail-meta">
           <span className="review-detail-range">{formatTaskProgressRange(detail)}</span>
           <span className="review-detail-metric">投入 {formatRecordedMs(detail.recordedMs)}</span>
+          {/* 「待续」和另外两个事实同一行：留在说明行里，右列就不会再出现一排按钮。 */}
+          {detail.carryover && <span className="review-detail-flag">待续</span>}
         </p>
       </div>
-      {(task || detail.carryover) && <div className="review-detail-actions">
-        {/* 「待续」放右列：留在说明行里会把各行的进度文字推得参差不齐。 */}
-        {detail.carryover && <span className="review-detail-flag">待续</span>}
-        {task && <>
-        <Button aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEditTask(task, event.currentTarget)}><Pencil size={14} />编辑</Button>
-        {/* 每行都放实心主按钮会把整页的视觉重量压到明细区：安排是次要动作，用次级按钮。 */}
-        {task.status === "active"
-          ? <Button aria-label={`安排任务 ${task.title}`} onClick={() => onArrangeTask(task)}><Sparkles size={14} />安排</Button>
-          : <span className="muted-chip">{task.status === "paused" ? "已暂停，不能重新安排" : "已完成"}</span>}
-        </>}
-      </div>}
     </article>;
   };
 

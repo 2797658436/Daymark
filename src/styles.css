@@ -1085,7 +1085,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 任务行缩进一档：项目在卡头、任务在卡内，缩进就是层级。
    缩进写在行上（不是容器上），分隔线才会通到卡片左缘，看着像分组而不是缩进的块。 */
 .review-detail-rows { display: grid; }
-.review-detail-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 13px 0 13px 3.25rem; border-top: 1px solid var(--line-soft); }
+/* 行里不再有动作列：单列排布，任务名拿到整行宽度（200% 缩放下也不会被按钮挤到折行）。 */
+.review-detail-row { display: grid; padding: 13px 0 13px 3.25rem; border-top: 1px solid var(--line-soft); }
 .review-detail-rows > .review-detail-row:first-child { border-top: 0; }
 .review-detail-main { display: grid; gap: 3px; min-width: 0; }
 /* 任务名是这一行的主体：用正文字色而不是强调色 —— 11 行橙色标题会把整页拉成一片。 */
