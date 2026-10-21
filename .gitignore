@@ -1,5 +1,6 @@
 node_modules/
 _quarantine/
+.tmp/
 .workbuddy/
 dist/
 coverage/
