@@ -21,10 +21,13 @@
  * 「变了哪几处」），第二、三张依次落成 `-crop2.png`、`-crop3.png`。
  *
  * 用法：
- *   node scripts/visual-evidence.mjs                 # 全套
+ *   node scripts/visual-evidence.mjs                 # 全套（headless）
  *   node scripts/visual-evidence.mjs --skip-build    # 复用已有 dist/
  *   node scripts/visual-evidence.mjs --only review   # 只跑名字含 review 的场景
  *   node scripts/visual-evidence.mjs --only calendar --out output/visual-p4-11-after
+ *   node scripts/visual-evidence.mjs --headed        # 只有 headless 不渲染的东西才用
+ *       （例如滚动条：headless Chromium 用 overlay，不画 ::-webkit-scrollbar；
+ *        一次运行只开一个窗口，所有场景共用同一个 browser，跑完自动关闭）
  */
 
 import { spawn } from "node:child_process";
