@@ -185,7 +185,7 @@ flowchart LR
 | [`src/lib/native.ts`](../src/lib/native.ts) | `NativeApi` 类型边界、Tauri IPC 适配、文件对话框和浏览器 `localStorage` 预览实现。 |
 | [`src/lib/settings.ts`](../src/lib/settings.ts) | 显示、页面、日历（含日／周浏览位置）、提醒、启动摘要、回顾周期与默认时段设置的默认值、规范化与顺序写入；`PAGE_IDS` 是合法页面 ID 的**唯一出处**（`PageId` 由它派生，`lastPage` 白名单直接读它），`CalendarPosition`／`CalendarPositions` 类型的唯一出处；Tauri Store 与浏览器后端。 |
 | [`src/lib/courseImport.ts`](../src/lib/courseImport.ts) | 把常见分集文本与末尾时长解析为可编辑、可取消选择的有序任务草稿。 |
-| [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、可调宽任务池、窄窗覆盖规则、纵向日历、焦点、缩放重排和减少动态规则；月历是**两层**网格（`.month-calendar` 排 7 行、`.month-calendar-row` 排 7 列，P4-11）；P4-12 起实际记录叠加层用**专用前景 token** `--actual-record-text`；**P4-13 起**这一层改用一对成对的语义 token（`--actual-record-surface` 声明一次、`--actual-record-text` 按主题覆盖），日历内部还多了一张写在文件里的**图层表**（0–10 轨道内容 / 19 吸顶日期头 / 20 吸顶分隔条与周吸顶头 / 22 覆盖详情面板 / 24–35 临时层 / 30 浮动按钮），见 §10。 |
+| [`src/styles.css`](../src/styles.css) | 扁平暖杏语义变量、浅／深色令牌、两／三栏布局、可调宽任务池、窄窗覆盖规则、纵向日历、焦点、缩放重排和减少动态规则；月历是**两层**网格（`.month-calendar` 排 7 行、`.month-calendar-row` 排 7 列，P4-11）；P4-12 起实际记录叠加层用**专用前景 token** `--actual-record-text`；**P4-13 起**这一层改用一对成对的语义 token（`--actual-record-surface` 声明一次、`--actual-record-text` 按主题覆盖），日历内部还多了一张写在文件里的**图层表**（0–10 轨道内容 / 19 吸顶日期头 / 20 吸顶分隔条与周吸顶头 / 22 覆盖详情面板 / 24–35 临时层 / 30 浮动按钮），见 §10；2026-10-21 起滚动条也统一在这一层（成对 token `--scrollbar-*` + `*::-webkit-scrollbar`，见 §10）。 |
 | [`src/components/ui/button.tsx`](../src/components/ui/button.tsx) | 共享按钮组件；通过 CVA 提供按钮变体、尺寸和转发 ref。 |
 | [`src/components/ui/floating-panel.tsx`](../src/components/ui/floating-panel.tsx) | 锚点气泡：位置、12px 边界避让、内容测量与外部指针守卫。模态语义（`aria-modal`、inert、Tab／Esc）由浮层宿主按 `kind` 注入，自身不决定。 |
 | [`src/components/ui/overlay-host.tsx`](../src/components/ui/overlay-host.tsx) | 浮层宿主：层级顺序、`.app-shell` 的 inert **引用计数**、Tab 循环与 Esc 的顶层唯一性、输入法组合期 Enter／Escape 的例外、关闭后的焦点归还。不承担业务保存与气泡几何。 |
@@ -325,7 +325,7 @@ flowchart LR
 - `scale`: 100–200
 - `lastPage`: `today | calendar | deadlines | projects | review | data | appearance`（合法值出自 `settings.ts` 的 `PAGE_IDS` 常量，`PageId` 类型由它派生、规范化白名单也直接读它）；旧 `overview` 在读取时迁移为 `today`
 - `calendarView`: `day | week | month`
-- `calendarDayMode`: `defaultSlots | fullDay`；日视图显示模式，默认 `fullDay` 兼容旧设置，用户切换后持久化
+- `calendarDayMode`: `defaultSlots | fullDay`；日视图显示模式，默认 `fullDay` 兼容旧设置，用户切换后持久化；设置页用与日历工具栏一致的分段按钮切换，而不是下拉框
 - `calendarAnchors`: 日／周／月各自最近一次的本地日期锚点；缺失或非法日期回退为 `null`
 - `calendarZoom`: 日／周／月各自最近的 `compact | standard | detailed` 可见档位；点击入口会把连续比例恢复到该档预设
 - `calendarScale`: 日／周／月各自的实际纵向比例；日／周为每小时 28–192px 的连续值（滚轮钳制读同一区间），月视图为 52–160px 的档位行高；缺失或越界时回退到 `calendarZoom` 对应预设。合法区间与预设同源于 `CALENDAR_SCALE_RANGE`／`CALENDAR_SCALE_PRESET`，规范化不会产出自己判为非法的值
@@ -333,10 +333,10 @@ flowchart LR
 - `showActualRecords`: 是否在日／周日历叠加实际执行记录，默认关闭；只改变呈现，不写入或移动计划时段
 - `showActualRecordsControl`: 是否在日历工具栏显示实际记录开关，默认开启；隐藏入口不会改变 `showActualRecords` 的已保存值
 - `snapMinutes`: `off | 15 | 30 | 60`；`off` 表示拖拽与缩放不吸附
-- `defaultSessionMinutes`、`minimumSessionMinutes`: 自动排程的默认单次投入和最低有效时长
+- `defaultSessionMinutes`、`minimumSessionMinutes`: 自动排程的默认单次投入（5–240 分钟）与最低有效时长（5–240 分钟的整数；设置页是分钟输入框，常用 5／10／15／20／30 仍可一键选择）。合法区间与预设同源于 `settings.ts` 的 `MINIMUM_SESSION_MINUTES_RANGE`／`MINIMUM_SESSION_MINUTES_PRESETS`，界面与规范化不会分叉
 - `autoScheduleAssist`: 是否在任务池显示可排程提示；不会后台应用草案
 - `checkInEnabled`: 是否显示开始／结束本次入口，默认关闭
-- `checkInGraceMinutes`、`rescuePromptsEnabled`: 挽救提示的宽限期与开关；仅在签到开启时生效
+- `checkInGraceMinutes`、`rescuePromptsEnabled`: 挽救提示的宽限期（1–60 分钟的整数；设置页是分钟输入框，常用 3／5／10／15 仍可一键选择，区间与预设同源于 `CHECK_IN_GRACE_MINUTES_RANGE`／`CHECK_IN_GRACE_MINUTES_PRESETS`）与开关；仅在签到开启时生效
 - `remindersEnabled` 与 `reminderLeadMinutes`: 执行提醒及 0–120 分钟提前量
 - `startupSummary`: `everyLaunch | daily | never`，并以 `lastStartupSummaryLocalDate` 记录每天首次提醒
 - `reviewPeriod`: `day | week | month`，默认 `week`；`reviewAnchorDate`: 本地日期或 `null`，默认 `null`。P4-08 起回顾页**真正读写**它们：周期选择与上一／下一周期经既有 `updatePreferences` 进入同一条写入队列，`null` 表示「按当前周期计算」（时钟由页面注入引擎），非法值回退默认值。这两项是回顾页唯一的持久化状态 —— 项目筛选、明细区选择与滚动位置都不写 Store
@@ -399,6 +399,7 @@ flowchart TD
 ## 10. 主题与基础无障碍
 
 - [`src/styles.css`](../src/styles.css) 以 `--bg`、`--panel`、`--panel-strong`、`--text`、`--accent`、`--success`、`--danger`、`--focus` 等语义变量实现暖杏主题；组件不能写入与语义脱离的状态颜色。
+- **滚动条全仓只有一套**（2026-10-21）：`src/styles.css` 的 `*::-webkit-scrollbar` 伪元素 —— 透明轨道、无上下箭头、8px 槽（`.5rem`；100% 时滑块 6px，200% 时槽 16px／滑块 12px，跟随根字号缩放）、两端全圆角；悬停加深（Chromium 不支持 `::-webkit-scrollbar-thumb:active`，所以没有单独的拖动色）。颜色是成对 token `--scrollbar-thumb`／`--scrollbar-thumb-hover`（浅色 `#8e8a82`／`#6f6b63`，深色 `#7d786f`／`#a8a298`），滑块对 `--panel` 与 `--bg` 都 ≥ 3:1。**不要再给单个容器写 `scrollbar-width`／`scrollbar-color`** —— 标准属性会关掉这套伪元素样式、退回系统滚动条；容器只负责 `overflow`。唯一例外是 `.wheel-column`（时间选择器滚轮列）故意隐藏滚动条。headless Chromium 用 overlay 滚动条，所以 E2E 截图里看不到它（`scrollbar-gutter: stable` 仍按 8px 预留）；肉眼验证必须用 headed Chromium／WebView2。
 - `data-theme="dark"` 覆盖同一组变量；`appearance=system` 由系统媒体查询实时选择浅／深色。
 - `data-motion="reduce"` 和系统 `prefers-reduced-motion` 将位移、过渡和循环动画降到最小，但保留文字／图标状态反馈。
 - 根字号按 100%–200% 设置，窄宽度媒体查询负责重排；核心操作不能因缩放被裁掉。
