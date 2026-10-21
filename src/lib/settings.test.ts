@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { CALENDAR_SCALE_RANGE, PAGE_IDS, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend } from "./settings";
+import {
+  CALENDAR_SCALE_RANGE, CHECK_IN_GRACE_MINUTES_PRESETS, CHECK_IN_GRACE_MINUTES_RANGE, MINIMUM_SESSION_MINUTES_PRESETS,
+  MINIMUM_SESSION_MINUTES_RANGE, PAGE_IDS, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend,
+} from "./settings";
 
 class MemoryBackend implements SettingsBackend {
   value: unknown;
@@ -123,8 +126,41 @@ describe("settings persistence", () => {
       rescuePromptsEnabled: false,
       lastPage: "review",
     });
-    expect(repository.normalize({ defaultSessionMinutes: 0, minimumSessionMinutes: 12, checkInGraceMinutes: 99 }))
+    expect(repository.normalize({ defaultSessionMinutes: 0, minimumSessionMinutes: 4, checkInGraceMinutes: 99 }))
       .toMatchObject({ defaultSessionMinutes: 60, minimumSessionMinutes: 15, checkInGraceMinutes: 5 });
+  });
+
+  /**
+   * 这两项从固定档位下拉框改成分钟输入框后，规范化必须接受区间内**任意整数分钟**，
+   * 而不是只认旧的档位；同时边界外、小数、字符串仍要回退默认值。
+   * 界面输入框的 min／max 与这里读同一组区间常量。
+   */
+  it("accepts any whole minute inside the input ranges and rejects everything else", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+
+    expect(repository.normalize({ minimumSessionMinutes: 12, checkInGraceMinutes: 20 }))
+      .toMatchObject({ minimumSessionMinutes: 12, checkInGraceMinutes: 20 });
+    expect(repository.normalize({ minimumSessionMinutes: 5, checkInGraceMinutes: 1 }))
+      .toMatchObject({ minimumSessionMinutes: 5, checkInGraceMinutes: 1 });
+    expect(repository.normalize({ minimumSessionMinutes: 240, checkInGraceMinutes: 60 }))
+      .toMatchObject({ minimumSessionMinutes: 240, checkInGraceMinutes: 60 });
+
+    for (const [minimumSessionMinutes, checkInGraceMinutes] of [[4, 0], [241, 61], [12.5, 7.5], ["12", "10"], [null, null]] as const) {
+      expect(repository.normalize({ minimumSessionMinutes, checkInGraceMinutes }))
+        .toMatchObject({ minimumSessionMinutes: 15, checkInGraceMinutes: 5 });
+    }
+    expect(MINIMUM_SESSION_MINUTES_RANGE).toEqual([5, 240]);
+    expect(CHECK_IN_GRACE_MINUTES_RANGE).toEqual([1, 60]);
+    // 与日历缩放同一条护栏：默认值和预设必须落在规范化接受的区间里，否则界面给的
+    // 一键值会被保存时静默回退，用户看到「点了没反应」。
+    const check = (range: readonly [number, number], presets: readonly number[], fallback: number) => {
+      for (const value of [...presets, fallback]) {
+        expect(value, `${value} 必须落在 ${range[0]}–${range[1]}`).toBeGreaterThanOrEqual(range[0]);
+        expect(value, `${value} 必须落在 ${range[0]}–${range[1]}`).toBeLessThanOrEqual(range[1]);
+      }
+    };
+    check(MINIMUM_SESSION_MINUTES_RANGE, MINIMUM_SESSION_MINUTES_PRESETS, DEFAULT_SETTINGS.minimumSessionMinutes);
+    check(CHECK_IN_GRACE_MINUTES_RANGE, CHECK_IN_GRACE_MINUTES_PRESETS, DEFAULT_SETTINGS.checkInGraceMinutes);
   });
 
   it("accepts turning calendar snapping off and rejects unknown snap values", () => {

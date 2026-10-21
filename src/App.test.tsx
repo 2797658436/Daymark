@@ -1205,6 +1205,54 @@ describe("phase 1 manual alpha", () => {
   });
 
   /**
+   * 开始宽限期与最低有效时长从固定档位下拉框改成分钟输入框：保留常用值快捷按钮，
+   * 但允许直接键入任意区间内的整数分钟。输入在失焦时提交，和既有的分钟输入控件一致。
+   */
+  it("edits the start grace period and minimum effective duration as minute inputs", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    await user.click(screen.getByRole("checkbox", { name: /记录开始／结束本次/ }));
+    const grace = screen.getByLabelText("开始宽限期");
+    expect(grace).toHaveAttribute("type", "number");
+    expect(grace).toHaveAttribute("min", "1");
+    expect(grace).toHaveAttribute("max", "60");
+    await user.clear(grace); await user.type(grace, "12"); await user.tab();
+    await waitFor(() => expect(backend.value).toMatchObject({ checkInGraceMinutes: 12 }));
+
+    const minimum = screen.getByLabelText("最低有效时长");
+    expect(minimum).toHaveAttribute("type", "number");
+    expect(minimum).toHaveAttribute("min", "5");
+    expect(minimum).toHaveAttribute("max", "240");
+    await user.clear(minimum); await user.type(minimum, "25"); await user.tab();
+    await waitFor(() => expect(backend.value).toMatchObject({ minimumSessionMinutes: 25 }));
+
+    // 常用值仍然一键可选，不用重新输入。
+    const minimumField = minimum.closest(".number-field-wrap") as HTMLElement;
+    await user.click(within(minimumField).getByRole("button", { name: "设为 15 分钟" }));
+    await waitFor(() => expect(backend.value).toMatchObject({ minimumSessionMinutes: 15 }));
+  });
+
+  /** 日视图默认显示改成显式按钮（与日历工具栏的日视图切换同构），不再是下拉框。 */
+  it("switches the default day view with explicit buttons instead of a select", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    expect(screen.queryByRole("combobox", { name: "日视图默认显示" })).not.toBeInTheDocument();
+    const group = screen.getByRole("radiogroup", { name: "日视图默认显示" });
+    expect(within(group).getByRole("radio", { name: "全天" })).toBeChecked();
+
+    await user.click(within(group).getByRole("radio", { name: "默认时段" }));
+    expect(within(group).getByRole("radio", { name: "默认时段" })).toBeChecked();
+    await waitFor(() => expect(backend.value).toMatchObject({ calendarDayMode: "defaultSlots" }));
+
+    await user.click(within(group).getByRole("radio", { name: "全天" }));
+    await waitFor(() => expect(backend.value).toMatchObject({ calendarDayMode: "fullDay" }));
+  });
+
+  /**
    * 单项重置：只在偏离默认值的那一行出现，点它只还原这一项。
    * 位置固定在控件框外的槽位里，所以「没偏离」的行里不该有可点的重置按钮。
    */

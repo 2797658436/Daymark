@@ -58,10 +58,12 @@ export interface AppSettings {
   taskPoolWidth: number | null;
   snapMinutes: "off" | 15 | 30 | 60;
   defaultSessionMinutes: number;
-  minimumSessionMinutes: 5 | 10 | 15 | 20 | 30;
+  /** 自动排程的最低有效时长；合法区间见 `MINIMUM_SESSION_MINUTES_RANGE`。 */
+  minimumSessionMinutes: number;
   autoScheduleAssist: boolean;
   checkInEnabled: boolean;
-  checkInGraceMinutes: 3 | 5 | 10 | 15;
+  /** 开始宽限期；合法区间见 `CHECK_IN_GRACE_MINUTES_RANGE`。 */
+  checkInGraceMinutes: number;
   rescuePromptsEnabled: boolean;
   remindersEnabled: boolean;
   reminderLeadMinutes: number;
@@ -105,6 +107,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewAnchorDate: null,
   defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
 };
+
+/**
+ * 分钟型偏好的合法区间与常用预设。
+ *
+ * 设置页的输入框（`NumberField` 的 min／max／presets）和 `normalizeSettings` 必须读同一份
+ * 定义：一旦分叉，界面允许输入的值会被规范化静默回退，用户看到「改了却没保存」。
+ * 默认值（`DEFAULT_SETTINGS`）也必须落在区间内。
+ */
+export const MINIMUM_SESSION_MINUTES_RANGE = [5, 240] as const;
+export const MINIMUM_SESSION_MINUTES_PRESETS = [5, 10, 15, 20, 30] as const;
+export const CHECK_IN_GRACE_MINUTES_RANGE = [1, 60] as const;
+export const CHECK_IN_GRACE_MINUTES_PRESETS = [3, 5, 10, 15] as const;
 
 export interface SettingsBackend {
   read(): Promise<unknown>;
@@ -192,10 +206,10 @@ function normalizeSettings(value: unknown): AppSettings {
     taskPoolWidth: typeof candidate.taskPoolWidth === "number" && Number.isFinite(candidate.taskPoolWidth) && candidate.taskPoolWidth >= 260 && candidate.taskPoolWidth <= 560 ? Math.round(candidate.taskPoolWidth) : DEFAULT_SETTINGS.taskPoolWidth,
     snapMinutes: isOneOf(candidate.snapMinutes, ["off", 15, 30, 60] as const) ? candidate.snapMinutes : DEFAULT_SETTINGS.snapMinutes,
     defaultSessionMinutes: typeof candidate.defaultSessionMinutes === "number" && Number.isInteger(candidate.defaultSessionMinutes) && candidate.defaultSessionMinutes >= 5 && candidate.defaultSessionMinutes <= 240 ? candidate.defaultSessionMinutes : DEFAULT_SETTINGS.defaultSessionMinutes,
-    minimumSessionMinutes: isOneOf(candidate.minimumSessionMinutes, [5, 10, 15, 20, 30] as const) ? candidate.minimumSessionMinutes : DEFAULT_SETTINGS.minimumSessionMinutes,
+    minimumSessionMinutes: normalizeIntegerInRange(candidate.minimumSessionMinutes, MINIMUM_SESSION_MINUTES_RANGE, DEFAULT_SETTINGS.minimumSessionMinutes),
     autoScheduleAssist: typeof candidate.autoScheduleAssist === "boolean" ? candidate.autoScheduleAssist : DEFAULT_SETTINGS.autoScheduleAssist,
     checkInEnabled: typeof candidate.checkInEnabled === "boolean" ? candidate.checkInEnabled : DEFAULT_SETTINGS.checkInEnabled,
-    checkInGraceMinutes: isOneOf(candidate.checkInGraceMinutes, [3, 5, 10, 15] as const) ? candidate.checkInGraceMinutes : DEFAULT_SETTINGS.checkInGraceMinutes,
+    checkInGraceMinutes: normalizeIntegerInRange(candidate.checkInGraceMinutes, CHECK_IN_GRACE_MINUTES_RANGE, DEFAULT_SETTINGS.checkInGraceMinutes),
     rescuePromptsEnabled: typeof candidate.rescuePromptsEnabled === "boolean" ? candidate.rescuePromptsEnabled : DEFAULT_SETTINGS.rescuePromptsEnabled,
     remindersEnabled: typeof candidate.remindersEnabled === "boolean" ? candidate.remindersEnabled : DEFAULT_SETTINGS.remindersEnabled,
     reminderLeadMinutes: typeof candidate.reminderLeadMinutes === "number" && candidate.reminderLeadMinutes >= 0 && candidate.reminderLeadMinutes <= 120 ? candidate.reminderLeadMinutes : DEFAULT_SETTINGS.reminderLeadMinutes,
@@ -296,4 +310,9 @@ function normalizeTimeSlots(value: unknown): DefaultTimeSlot[] {
 
 function isOneOf<T>(value: unknown, options: readonly T[]): value is T {
   return options.includes(value as T);
+}
+
+/** 只接受区间内的整数分钟；小数、字符串、越界值一律回退默认值。 */
+function normalizeIntegerInRange(value: unknown, [minimum, maximum]: readonly [number, number], fallback: number) {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }

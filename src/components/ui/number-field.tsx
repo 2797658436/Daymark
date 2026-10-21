@@ -12,7 +12,7 @@ interface NumberFieldProps {
   /** 允许清空（可选字段，例如「预计耗时」）。清空后回调 `null`。 */
   nullable?: boolean;
   /** 常用值。只在 [min, max] 内的会显示成一行快捷选项。 */
-  presets?: number[];
+  presets?: readonly number[];
   disabled?: boolean;
   onChange: (value: number | null) => void;
 }

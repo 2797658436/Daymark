@@ -39,7 +39,8 @@ import {
   type HabitOccurrence, type NativeApi, type ProgressEvent, type Project, type ProjectMilestone, type RecurringHabit, type Task, type TimeBlock, type WorkspaceSnapshot,
 } from "./lib/native";
 import {
-  CALENDAR_SCALE_RANGE, calendarScaleForZoom, createSettingsRepository, DEFAULT_SETTINGS, type AppSettings, type DefaultTimeSlot, type PageId, type SettingsRepository,
+  CALENDAR_SCALE_RANGE, calendarScaleForZoom, CHECK_IN_GRACE_MINUTES_PRESETS, CHECK_IN_GRACE_MINUTES_RANGE, createSettingsRepository,
+  DEFAULT_SETTINGS, MINIMUM_SESSION_MINUTES_PRESETS, MINIMUM_SESSION_MINUTES_RANGE, type AppSettings, type DefaultTimeSlot, type PageId, type SettingsRepository,
 } from "./lib/settings";
 
 type SaveState = "saved" | "saving" | "unsaved";
@@ -1950,6 +1951,8 @@ const MOTION_OPTIONS: Array<{ value: AppSettings["motion"]; label: string }> = [
   { value: "reduce", label: "减少" },
   { value: "full", label: "完整" },
 ];
+const [CHECK_IN_GRACE_MIN, CHECK_IN_GRACE_MAX] = CHECK_IN_GRACE_MINUTES_RANGE;
+const [MINIMUM_SESSION_MIN, MINIMUM_SESSION_MAX] = MINIMUM_SESSION_MINUTES_RANGE;
 
 function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
   const slots = preferences.defaultTimeSlots;
@@ -1978,7 +1981,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
     <SettingsSection icon={<Bell />} title="提醒与行动">
       <SettingsToggleRow label="记录开始／结束本次" note="默认关闭；只有主动开始才形成实际执行记录。" checked={preferences.checkInEnabled} modified={changed("checkInEnabled")} onReset={() => onChange({ checkInEnabled: DEFAULT_SETTINGS.checkInEnabled })} onChange={(checked) => onChange({ checkInEnabled: checked })} />
       <SettingsRow label="开始宽限期" note="超过这个时间仍未开始时，记为错过。" htmlFor="settings-grace" dependent muted={!preferences.checkInEnabled} modified={changed("checkInGraceMinutes")} onReset={() => onChange({ checkInGraceMinutes: DEFAULT_SETTINGS.checkInGraceMinutes })}>
-        <SelectField id="settings-grace" disabled={!preferences.checkInEnabled} value={String(preferences.checkInGraceMinutes)} onChange={(value) => onChange({ checkInGraceMinutes: Number(value) as AppSettings["checkInGraceMinutes"] })} options={[3, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} 分钟` }))} />
+        <NumberField id="settings-grace" label="开始宽限期" suffix="分钟" min={CHECK_IN_GRACE_MIN} max={CHECK_IN_GRACE_MAX} step={1} presets={CHECK_IN_GRACE_MINUTES_PRESETS} disabled={!preferences.checkInEnabled} value={preferences.checkInGraceMinutes} onChange={(value) => { if (value !== null) onChange({ checkInGraceMinutes: value }); }} />
       </SettingsRow>
       <SettingsToggleRow label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} dependent muted={!preferences.checkInEnabled} modified={changed("rescuePromptsEnabled")} onReset={() => onChange({ rescuePromptsEnabled: DEFAULT_SETTINGS.rescuePromptsEnabled })} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} />
       <SettingsToggleRow label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} modified={changed("remindersEnabled")} onReset={() => onChange({ remindersEnabled: DEFAULT_SETTINGS.remindersEnabled })} onChange={(checked) => onChange({ remindersEnabled: checked })} />
@@ -1990,8 +1993,8 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
       </SettingsRow>
     </SettingsSection>
     <SettingsSection icon={<Clock3 />} title="时间与排程">
-      <SettingsRow label="日视图默认显示" note="选择「默认时段」时，其他时间会折叠起来。" htmlFor="settings-day-mode" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
-        <SelectField id="settings-day-mode" value={preferences.calendarDayMode} onChange={(value) => onChange({ calendarDayMode: value as AppSettings["calendarDayMode"] })} options={[{ value: "fullDay", label: "全天" }, { value: "defaultSlots", label: "默认时段" }]} />
+      <SettingsRow label="日视图默认显示" note="选择「默认时段」时，其他时间会折叠起来。" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
+        <SettingsChoice label="日视图默认显示" name="calendar-day-mode" value={preferences.calendarDayMode} onChange={(calendarDayMode) => onChange({ calendarDayMode })} options={[{ value: "defaultSlots", label: "默认时段" }, { value: "fullDay", label: "全天" }]} />
       </SettingsRow>
       <SettingsRow label="默认时段" note="自动排程只使用这些窗口，并避开已有安排和时间块。" modified={JSON.stringify(slots) !== JSON.stringify(DEFAULT_SETTINGS.defaultTimeSlots)} onReset={() => onChange({ defaultTimeSlots: structuredClone(DEFAULT_SETTINGS.defaultTimeSlots) })}>
         <Button variant="secondary" onClick={addSlot}><Plus size={16} />添加时段</Button>
@@ -2010,7 +2013,7 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
         <NumberField id="settings-session" label="全局单次投入" suffix="分钟" min={5} max={240} step={5} value={preferences.defaultSessionMinutes} onChange={(value) => { if (value !== null) onChange({ defaultSessionMinutes: value }); }} />
       </SettingsRow>
       <SettingsRow label="最低有效时长" note="短于该阈值的空档不用于自动排程，仍可手动放置。" htmlFor="settings-minimum" modified={changed("minimumSessionMinutes")} onReset={() => onChange({ minimumSessionMinutes: DEFAULT_SETTINGS.minimumSessionMinutes })}>
-        <SelectField id="settings-minimum" value={String(preferences.minimumSessionMinutes)} onChange={(value) => onChange({ minimumSessionMinutes: Number(value) as AppSettings["minimumSessionMinutes"] })} options={[5, 10, 15, 20, 30].map((value) => ({ value: String(value), label: `${value} 分钟` }))} />
+        <NumberField id="settings-minimum" label="最低有效时长" suffix="分钟" min={MINIMUM_SESSION_MIN} max={MINIMUM_SESSION_MAX} step={5} presets={MINIMUM_SESSION_MINUTES_PRESETS} value={preferences.minimumSessionMinutes} onChange={(value) => { if (value !== null) onChange({ minimumSessionMinutes: value }); }} />
       </SettingsRow>
       <SettingsToggleRow label="自动排程辅助" note="只提示可以安排的任务，仍需你预览确认。" checked={preferences.autoScheduleAssist} modified={changed("autoScheduleAssist")} onReset={() => onChange({ autoScheduleAssist: DEFAULT_SETTINGS.autoScheduleAssist })} onChange={(checked) => onChange({ autoScheduleAssist: checked })} />
     </SettingsSection>
