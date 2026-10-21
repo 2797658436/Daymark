@@ -51,6 +51,11 @@
   --shadow-modal: 0 8px 24px rgb(35 31 27 / 16%), 0 24px 56px rgb(35 31 27 / 18%);
   --ring-accent: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   --ring-danger: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+  /* 滚动条：轨道透明，滑块是 6px 药丸（.5rem 槽 − 2 × .0625rem 透明边）。
+     浅色默认 #8e8a82 对 --panel 3.44:1、对 --bg 3.12:1（控件边界 ≥ 3:1）；
+     悬停 #6f6b63 升到 4.33–5.16:1。深色主题在下面成对覆盖。 */
+  --scrollbar-thumb: #8e8a82;
+  --scrollbar-thumb-hover: #6f6b63;
 }
 
 :root[data-theme="dark"] {
@@ -79,6 +84,10 @@
   --shadow-modal: 0 8px 24px rgb(0 0 0 / 46%), 0 28px 60px rgb(0 0 0 / 56%);
   --ring-accent: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
   --ring-danger: 0 0 0 3px color-mix(in srgb, var(--danger) 28%, transparent);
+  /* 深色不是「浅色压暗」：深底上要提亮才看得见。默认 #7d786f 对 --panel 3.50:1、
+     对 --bg 3.89:1；悬停 #a8a298 5.83:1。 */
+  --scrollbar-thumb: #7d786f;
+  --scrollbar-thumb-hover: #a8a298;
 }
 
 * { box-sizing: border-box; }
@@ -93,6 +102,28 @@ h2 { margin-bottom: .55rem; font-size: 1rem; line-height: 1.5rem; font-weight: 6
 strong { font-weight: 600; }
 p { color: var(--muted); line-height: 1.55; }
 input, textarea, select { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: .65rem .75rem; transition: border-color .12s ease, box-shadow .12s ease; }
+/* ---------------------------------------------------------------------------
+   滚动条：全仓只在这里定义一次（Chromium / WebView2）。
+   为什么用 ::-webkit-scrollbar 而不是标准 scrollbar-width / scrollbar-color：
+   标准属性在 Chromium 里一旦写成非 auto 值，就会关掉下面这套伪元素样式，而且只能给
+   整条滚动条染色，做不出透明轨道、圆角药丸和「无箭头」。WebView2 与 Playwright 的
+   Chromium 都走伪元素这条路径（headless 下 Chromium 用 overlay 滚动条，看不到属正常）。
+   尺寸用 rem：界面缩放改的是根字号（root.style.fontSize = 200%），所以 100% 时槽宽
+   8px、滑块 6px，200% 时一起变成 16px / 12px，和控件同步放大，不会在 200% 下显得又细又难点。
+   颜色是成对的主题 token（见 :root 与 [data-theme=dark]）：浅色深字、深色亮字，
+   滑块对 --panel / --bg 都 ≥ 3:1，悬停 ≥ 4.3:1。
+   不要加 ::-webkit-scrollbar-thumb:active —— Chromium 不支持这个伪类状态（实测拖动时
+   颜色不变化，加进去是死规则），悬停加深已经足够表达可拖动。
+   硬约束：不要再给某个容器单独写 scrollbar-width / scrollbar-color —— 那会关掉这套样式、
+   退化成系统滚动条；容器只负责 overflow。唯一例外是 .wheel-column（时间选择器的滚轮列）
+   故意隐藏滚动条，它后面的 display: none 会覆盖这里。
+   --------------------------------------------------------------------------- */
+*::-webkit-scrollbar { width: .5rem; height: .5rem; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { border: .0625rem solid transparent; border-radius: 999px; background-color: var(--scrollbar-thumb); background-clip: padding-box; transition: background-color .1s ease; }
+*::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+*::-webkit-scrollbar-button { display: none; }
+*::-webkit-scrollbar-corner { background: transparent; }
 /* 原生下拉弹层：Chromium 135+ 的 base-select 才允许给弹层本身做圆角、内边距和选中态。
    不支持的浏览器会忽略这条（连同下面几条），退回系统弹层，外观不变。
    `::picker(select)` 自己也要声明 base-select —— 只给 select 加不够（实测弹层仍是系统样式）。 */
@@ -186,7 +217,7 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .brand { display: grid; justify-items: center; gap: 4px; font-size: min(.75rem, 12px); margin-bottom: 1.25rem; }
 .brand-mark { width: 2.25rem; height: 2.25rem; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-strong)); color: white; display: grid; place-items: center; font: 600 1.125rem Georgia, serif; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-strong) 36%, transparent); }
 /* 入口变多（阶段 4 起 7 项）后导航自身可滚动：最小窗口与 200% 缩放下不能隐藏关键入口。 */
-.sidebar nav { width: 100%; display: grid; gap: 4px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sidebar nav { width: 100%; display: grid; gap: 4px; min-height: 0; overflow-y: auto; }
 .nav-item { border: 0; background: transparent; min-height: 3.25rem; border-radius: 10px; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: .75rem; transition: background .12s ease, color .12s ease; }
 /* 图标跟着界面缩放走：lucide 的 size 是 px，不转 rem 就永远 20px。 */
 .nav-item svg { width: 1.25rem; height: 1.25rem; }
@@ -254,10 +285,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .project-group-header span { color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .project-group-header svg { color: var(--muted); flex: 0 0 auto; }
 .project-group-body { display: grid; gap: 6px; padding: 0 8px 8px; }
-.project-group-body.expanded { max-height: 380px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; overscroll-behavior: contain; }
-.project-group-body.expanded::-webkit-scrollbar { width: 8px; }
-.project-group-body.expanded::-webkit-scrollbar-track { background: transparent; }
-.project-group-body.expanded::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+.project-group-body.expanded { max-height: 380px; overflow: auto; overscroll-behavior: contain; }
 .group-collapsed-hint { padding: 2px 4px 4px; }
 /* 任务池紧凑任务行 */
 .task-row-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -492,11 +520,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .progress-track { height: 6px; border-radius: 999px; background: var(--bg); overflow: hidden; box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
 .progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 80%, var(--accent-strong))); border-radius: inherit; transition: width .22s ease; }
 .project-deadline { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; padding: .3rem .62rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; }
-.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-editor small, .milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.milestone-form label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-tasks { margin-top: 8px; max-height: 330px; overflow: auto; padding-right: 6px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; scrollbar-gutter: stable; }
-.project-tasks::-webkit-scrollbar { width: 8px; }
-.project-tasks::-webkit-scrollbar-track { background: transparent; }
-.project-tasks::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
-.project-tasks::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; border: 2px solid transparent; }.project-tasks > div { display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }.project-tasks > div > span { color: var(--muted); font-size: .75rem; }
+.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-editor small, .milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.milestone-form label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-tasks { margin-top: 8px; max-height: 330px; overflow: auto; padding-right: 6px; scrollbar-gutter: stable; }
+.project-tasks > div { display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }.project-tasks > div > span { color: var(--muted); font-size: .75rem; }
 
 /* 设置页（B 方案）：单列分组 + 标准设置行。
    不用 `auto-fit` 列数 —— 那正是旧版「三张卡落单、右侧留洞」的根因。 */
@@ -1125,7 +1150,7 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .review-split-more button:hover { color: var(--accent-strong); }
 /* 比 `.floating-panel` 的默认 23rem 更具体，否则宽度会被它盖掉，右边缘就对不上了。 */
 .floating-panel.review-split-popover { width: 16rem; padding: 10px 12px; }
-.review-split-popover-list { display: grid; gap: 6px; max-height: 13rem; overflow: auto; margin: 0; padding: 0; list-style: none; scrollbar-width: thin; }
+.review-split-popover-list { display: grid; gap: 6px; max-height: 13rem; overflow: auto; margin: 0; padding: 0; list-style: none; }
 .review-split-popover-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted-strong); font-size: .78rem; }
 /* 名单里的项目名可以长到没有空格：让它缩、让它省略，别把 16rem 的气泡顶宽。 */
 .review-split-popover-list .review-split-name { min-width: 0; }
