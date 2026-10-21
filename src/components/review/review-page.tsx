@@ -32,8 +32,17 @@ export type { ReviewSelection } from "./review-detail";
  */
 
 const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
-/** 投入去向最多画几条；再多的合并成一行合计。 */
-const SPLIT_PREVIEW = 6;
+/** 投入去向的图例最多排几行：**行数**固定，超出才折进「另外 N 个去处」。
+ *  单列（周视图那一栏）维持 6 条 —— 它挨着 9.375rem 的圆环，6 行正好和环同高；
+ *  多列时按「列数 × 4 行」算，月视图三列能放 12 条，不必把放得下的项目折起来
+ *  （2026-10-21 用户反馈：三列时明明放得下还在折叠）。 */
+const SPLIT_MIN_ITEMS = 6;
+const SPLIT_MAX_ROWS = 4;
+/** 圆环只有 6 个扇区色（`--chart-1..6`）：第 7 个起统一用中性色，和环里的「其余」同色。 */
+const SPLIT_PALETTE = 6;
+/** 与 CSS `.review-split-list li { flex: 1 1 15rem }`、`gap: 6px 24px` 同源。 */
+const SPLIT_ITEM_BASIS_REM = 15;
+const SPLIT_ITEM_GAP = 24;
 /** 周视图的刻度要带星期：只有 7 列，放得下「周一 10/19」。 */
 const WEEKDAY_LABEL = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -72,6 +81,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   /** 明细气泡的锚点：触发元素本身（找不到就退到页面标题）。
    *  用 layout effect 在**绘制前**算好，气泡才不会先居中再跳到任务名下面。 */
   const [detailAnchorElement, setDetailAnchorElement] = useState<HTMLElement | null>(null);
+  /** 用矩形定位时的锚（触发元素已随气泡卸载的情况）；正常下钻仍用 `detailAnchorElement`。 */
+  const [detailAnchorRect, setDetailAnchorRect] = useState<DOMRect | null>(null);
 
   // 进入页面先恢复上次的滚动位置（同会话跨页返回有效；重启后 ref 归零，自然回到顶部）。
   useLayoutEffect(() => {
@@ -82,12 +93,22 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   }, [scrollRef, scrollTop]);
 
   // 明细是气泡：打开时不滚动、不抢页面位置，只在切页返回时把锚点重新找回来。
+  // `anchorRectRef` 优先：从「详细」气泡里下钻时，触发元素会随气泡一起卸载，
+  // 只能用气泡当时的位置当锚（否则明细会落到视口左上角）。
+  const anchorRectRef = useRef<DOMRect | null>(null);
   useLayoutEffect(() => {
-    if (!selection) { setDetailAnchorElement(null); return; }
+    if (!selection) { setDetailAnchorElement(null); setDetailAnchorRect(null); return; }
+    if (anchorRectRef.current) {
+      setDetailAnchorElement(null);
+      setDetailAnchorRect(anchorRectRef.current);
+      anchorRectRef.current = null;
+      return;
+    }
     const key = `${selection.kind}:${selection.id}`;
     const element = triggerKeyRef.current === key && triggerRef.current?.isConnected
       ? triggerRef.current
       : document.querySelector<HTMLElement>(`[data-review-trigger="${key}"]`) ?? headingRef.current;
+    setDetailAnchorRect(null);
     setDetailAnchorElement(element);
   }, [selection]);
 
@@ -95,6 +116,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   // 打开时先量一次：下方不够就把页面滚出一点空间（能滚多少算多少），再按剩下的空间
   // 给气泡定高 —— 高不过可用空间，正文在气泡里滚，永远不会盖住触发它的那一行。
   const [detailMaxHeight, setDetailMaxHeight] = useState<number | undefined>(undefined);
+  /** 首屏两个浮层共用一套状态：里程碑「其余 N 个」与待回顾「查看」，同一时刻只开一个。 */
+  const [headlinePanel, setHeadlinePanel] = useState<{ kind: "milestones" | "pending"; anchor: DOMRect } | null>(null);
 
   // 滚动位置只在内存里跟手记录：不写 Store，也不触发重渲染。
   useEffect(() => {
@@ -105,16 +128,22 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     return () => container.removeEventListener("scroll", record);
   }, [scrollRef, scrollTop]);
 
-  const openDetail = useCallback((next: ReviewSelection, trigger: HTMLElement | null) => {
+  const openDetail = useCallback((next: ReviewSelection, trigger: HTMLElement | null, anchorRect?: DOMRect) => {
     triggerRef.current = trigger;
     // 触发元素的身份（`kind:id`）：切页返回或继续下钻后原节点已经不在了，
     // 关闭时按它重新找同一个目标（与截止页用 `data-deadline-key` 找回焦点行同理）。
     triggerKeyRef.current = `${next.kind}:${next.id}`;
-    if (trigger) {
+    const rect = anchorRect ?? trigger?.getBoundingClientRect();
+    const target = Math.min(window.innerHeight * 0.86, 620);
+    if (anchorRect) {
+      // 锚是**已经卸载的 fixed 气泡**：滚动页面不会让它上移，所以不能靠「滚出空间」这一招，
+      // 高度直接按上下哪边更宽裕来定（浮层会自己翻到放得下的那一侧）。
+      const below = window.innerHeight - anchorRect.bottom - 20;
+      const above = anchorRect.top - 20;
+      setDetailMaxHeight(Math.max(240, Math.min(Math.max(below, above), target) - 6));
+    } else if (rect) {
       const container = scrollRef.current;
-      const rect = trigger.getBoundingClientRect();
       const room = window.innerHeight - rect.bottom - 20;
-      const target = Math.min(window.innerHeight * 0.86, 620);
       // 只滚「补到 target 为止」的那一点，且不越过页面还能滚的距离。
       const gain = container
         ? Math.min(Math.max(0, container.scrollHeight - container.clientHeight - container.scrollTop), Math.max(0, target - room))
@@ -123,7 +152,10 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       // 再让 6px：浮层的判据是「top + 高度 > 视口 − 12」，正好贴边会因为小数进位翻到上面去。
       setDetailMaxHeight(Math.max(240, Math.min(room + gain, target) - 6));
     }
-    setDetailAnchorElement(trigger);
+    // 位置已经由矩形决定时，不要让 `detailAnchorElement` 抢过去。
+    anchorRectRef.current = anchorRect ?? null;
+    setDetailAnchorElement(anchorRect ? null : trigger);
+    setDetailAnchorRect(anchorRect ?? null);
     onSelection(next);
   }, [onSelection, scrollRef]);
 
@@ -131,6 +163,9 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const closeDetail = useCallback(() => {
     const trigger = triggerRef.current;
     onSelection(null);
+    // 明细可能是从首屏浮层（里程碑「其余 N 个」／待回顾「查看」）里点开的，那层浮层还开着：
+    // 一并收起。否则点空白只关掉上面那层，名单留在原地，看起来像「没关掉」。
+    setHeadlinePanel(null);
     // 原触发元素还在就直接用它；否则按身份找同一个目标；再不行退到页面标题 ——
     // 不调用已断开的节点，键盘用户也不会掉到 body。
     const target = trigger?.isConnected
@@ -164,7 +199,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const milestoneRow = (milestone: ReviewResult["milestones"][number]) => (
     <article key={milestone.milestoneId} className="review-milestone">
       <div className="review-milestone-head">
-        <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
+        <button type="button" className="review-inline-link" data-review-trigger={`project:${milestone.projectId}`} aria-label={`查看项目「${projectTitleOf(milestone.projectId)}」的明细`} title={milestone.title} onClick={(event) => openDetail({ kind: "project", id: milestone.projectId }, event.currentTarget)}>{milestone.title}</button>
         <time>{formatDayLabel(milestone.targetLocalDate)}</time>
         {/* 达成态不只靠色差：图标 + 文字两重编码，也不用失败红。 */}
         <span className={milestone.reached ? "review-tag" : "review-tag is-unmet"}>
@@ -173,14 +208,14 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         </span>
       </div>
       {/* 结果文字单独一行：和名称、日期挤在同一行时，「未达成」会被读两遍。 */}
-      <p className="review-milestone-note">{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
+      <p className="review-milestone-note" title={`${milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · ${milestone.resultText}`}>{milestone.frozen ? "到期冻结，后续推进不改写" : "当前达成情况"} · {milestone.resultText}</p>
     </article>
   );
 
   /** 待回顾的名单：首屏只留一行提示，名单在「查看」浮层里。 */
   const pendingList = <ul className="review-detail-list">
     {review.pendingReview.map((session) => <li key={session.id}>
-      <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
+      <button type="button" className="review-inline-link" data-review-trigger={`task:${session.taskId}`} aria-label={`查看任务「${titleOf(session.taskId)}」的明细`} title={titleOf(session.taskId)} onClick={(event) => openDetail({ kind: "task", id: session.taskId }, event.currentTarget)}>{titleOf(session.taskId)}</button>
       <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
       {/* 时长由引擎算好：这一行要直接回答「现在要不要处理」。 */}
       <span className="review-tag">{session.durationMinutes} 分钟</span>
@@ -188,7 +223,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     {/* 进行中的执行不是「待回顾」，但同样没有结束时间、同样不计入投入：并进这份名单，用标签区分。 */}
     {review.actual.runningRecords.map((record) => <li key={record.id}>
       <span className="review-tag">进行中</span>
-      <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
+      <button type="button" className="review-inline-link" data-review-trigger={`task:${record.taskId}`} aria-label={`查看任务「${titleOf(record.taskId)}」的明细`} title={titleOf(record.taskId)} onClick={(event) => openDetail({ kind: "task", id: record.taskId }, event.currentTarget)}>{titleOf(record.taskId)}</button>
       <time>开始于 {formatClock(record.actualStartUtc)}</time>
     </li>)}
   </ul>;
@@ -201,6 +236,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   };
   /** 200% 缩放下列宽只剩一半：「周一 10/19」会叠在一起，退成「周一」。 */
   const shortTickOf = (date: string) => period === "week" ? WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()] : undefined;
+  // 今天与未来要分开着色：未来还没到，画成和「做过但没记录」一样的灰会误读成漏记。
+  const columnState = (date: string) => ({ isToday: date === today, isFuture: date > today });
   const minuteRows: ReviewChartRow[] = review.days.map((day) => ({
     date: day.date,
     value: day.recordedMinutes,
@@ -209,6 +246,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     tick: tickOf(day.date),
     tickShort: shortTickOf(day.date),
     fullLabel: formatDayLabel(day.date),
+    ...columnState(day.date),
   }));
   const deltaRows: ReviewChartRow[] = review.days.map((day) => ({
     date: day.date,
@@ -217,6 +255,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     tick: tickOf(day.date),
     tickShort: shortTickOf(day.date),
     fullLabel: formatDayLabel(day.date),
+    ...columnState(day.date),
   }));
 
   // 投入与净进度共用一张图：同一批日期、同一个时间轴，切成两个数值看。
@@ -224,16 +263,36 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const [metric, setMetric] = useState<"minutes" | "delta">("minutes");
   const [expanded, setExpanded] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  /** 首屏两个浮层共用一套状态：里程碑「详细」与待回顾「查看」，同一时刻只开一个。 */
-  const [headlinePanel, setHeadlinePanel] = useState<{ kind: "milestones" | "pending"; anchor: DOMRect } | null>(null);
   const toggleHeadlinePanel = (kind: "milestones" | "pending", trigger: HTMLElement) => {
-    setHeadlinePanel((current) => current?.kind === kind ? null : { kind, anchor: trigger.getBoundingClientRect() });
+    // 里程碑浮层是「这一格展开」而不是「挂在按钮下面」：锚到整格、宽度也取整格，
+    // 左右边缘与卡片对齐（用户 2026-10-20 要求），看起来才像同一张卡展开。
+    const rect = kind === "milestones"
+      ? (trigger.closest<HTMLElement>(".review-milestone-cell") ?? trigger).getBoundingClientRect()
+      : trigger.getBoundingClientRect();
+    setHeadlinePanel((current) => current?.kind === kind ? null : { kind, anchor: rect });
   };
   const detailAnchor = useRef<HTMLButtonElement | null>(null);
   const isMinutes = metric === "minutes";
   const chartRows = isMinutes ? minuteRows : deltaRows;
   const chartTitle = isMinutes ? "实际投入" : "净进度变化";
   const chartUnit = isMinutes ? "分钟" : "百分点";
+
+  /** 月视图的「详细」是一张月历：1 号前面按周几空格，每格是日号 + 当天的值。
+   *  **周一起头**：主月历与周期选择器都是周一开头，回顾里的月历不能单独改成周日开头
+   *  （同一页两套周起始，读日期时会差一天）。 */
+  const monthGrid = period === "month" ? {
+    leading: (new Date(`${review.startDate}T12:00:00`).getDay() + 6) % 7,
+    cells: review.days.map((day) => ({
+      date: day.date,
+      dayOfMonth: Number(day.date.slice(8, 10)),
+      fullLabel: formatDayLabel(day.date),
+      // 没有记录就留一个「-」：月历格子窄，「未记录」三个字会把整行撑满，也不该写成 0。
+      minutes: day.recordedMinutes > 0 ? `${day.recordedMinutes}` : "-",
+      hasRecord: day.recordedMinutes > 0,
+      delta: formatPercentPoints(day.progressDelta).replace(" 百分点", ""),
+      ...columnState(day.date),
+    })),
+  } : undefined;
 
   const weekDetail = period === "week" ? review.days.map((day) => ({
     date: day.date,
@@ -255,7 +314,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <span className="review-charts-unit">单位：{chartUnit}</span>
       </div>
       <div className="review-charts-group">
-        {period === "week" && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
+        {/* 周是四列数值表、月是月历，都由这一个按钮打开（2026-10-20 起月视图不再有折叠表）。 */}
+        {period !== "day" && <button ref={detailAnchor} type="button" className="review-chart-expand" aria-expanded={detailOpen}
           onClick={() => setDetailOpen(true)}><List size={14} />详细</button>}
         {chartRows.some((row) => row.value !== 0) && <button type="button" className="review-chart-expand" aria-label={`放大${chartTitle}图表`}
           onClick={() => setExpanded(true)}><Maximize2 size={14} />放大</button>}
@@ -271,7 +331,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     emptyText={isMinutes ? "本周期没有记录实际投入，因此不绘制全零图表。" : "本周期没有进度变化。"}
     baselineNote={isMinutes ? undefined : "零基线以上是上调，以下是下调；下调如实显示，不代表失败。"}
     splitDetail={weekDetail}
-    onOpenDate={(date, trigger) => openDetail({ kind: "date", id: date }, trigger)}
+    monthGrid={monthGrid}
+    onOpenDate={(date, trigger, anchor) => openDetail({ kind: "date", id: date }, trigger, anchor)}
     expanded={expanded} onExpand={setExpanded}
     detailOpen={detailOpen} onDetailOpen={setDetailOpen} detailAnchor={detailAnchor} />;
 
@@ -279,17 +340,20 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   /** 圆环与项目卡头同源取色：按「投入去向」的顺序取 `--chart-N`，前 6 个才有独立色，
    *  其余（含被折进「另外 N 个去处」的）用中性色 —— 与圆环里那一段的颜色一致。 */
   const projectColorOf = (id: string | null) => {
-    const position = review.actual.byProject.slice(0, SPLIT_PREVIEW).findIndex((entry) => entry.projectId === id);
+    const position = review.actual.byProject.slice(0, SPLIT_PALETTE).findIndex((entry) => entry.projectId === id);
     return position === -1 ? "var(--line-strong)" : `var(--chart-${(position % 6) + 1})`;
   };
 
   /** 项目名用的**同色深版**：和色点同色相，但压到正文对比度达标（扇区色直接当字只有 2.4–3.9:1）。 */
   const projectInkOf = (id: string | null) => {
-    const position = review.actual.byProject.slice(0, SPLIT_PREVIEW).findIndex((entry) => entry.projectId === id);
+    const position = review.actual.byProject.slice(0, SPLIT_PALETTE).findIndex((entry) => entry.projectId === id);
     return position === -1 ? "var(--muted-strong)" : `var(--chart-${(position % 6) + 1}-ink)`;
   };
 
   const splitChart = <SplitChart entries={review.actual.byProject} titleOf={(id) => id === null ? "独立任务" : projectTitleOf(id)} colorOf={projectColorOf}
+    /* 没有记录时只说一次：周／月视图左半边已经写了「不绘制全零图表」，右边空环就够，
+       再补一句「本期还没有记录投入」等于同一件事说两遍（2026-10-20 实测）。 */
+    showEmptyNote={period === "day"}
     onOpen={(id, trigger) => id !== null && openDetail({ kind: "project", id }, trigger)} />;
 
   /** 一行任务：任务名 + 一行副标题（进度区间 · 投入 · 待续）。
@@ -305,7 +369,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <strong className="review-detail-title">
           {detail.carryover && <span className="review-detail-flag">待续</span>}
           {task
-            ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
+            ? <button type="button" className="review-inline-link" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${task.title}」的明细`} title={task.title} onClick={(event) => openDetail({ kind: "task", id: detail.taskId }, event.currentTarget)}>{task.title}</button>
             : <span>来源不可用</span>}
         </strong>
         <p className="review-detail-meta">
@@ -337,9 +401,13 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         <span className="review-task-group-dot" style={{ background: projectColorOf(group.projectId) }} aria-hidden="true" />
         {/* 卡头就是项目的下钻入口：项目名从行里移到卡头，入口不能跟着消失。 */}
         <h3 id={`review-group-${groupIndex}`} style={{ color: projectInkOf(group.projectId) }}>{group.projectId
-          ? <button type="button" className="review-inline-link" data-review-trigger={`project:${group.projectId}`} aria-label={`查看项目「${group.title}」的明细`} onClick={(event) => openDetail({ kind: "project", id: group.projectId! }, event.currentTarget)}>{group.title}</button>
+          ? <button type="button" className="review-inline-link" data-review-trigger={`project:${group.projectId}`} aria-label={`查看项目「${group.title}」的明细`} title={group.title} onClick={(event) => openDetail({ kind: "project", id: group.projectId! }, event.currentTarget)}>{group.title}</button>
           : group.title}</h3>
-        <span className="review-task-group-count">{group.items.length} 项 · {formatRecordedMs(group.items.reduce((sum, item) => sum + item.recordedMs, 0))}</span>
+        {/* 「N 项 · 合计」：合计为 0 时只留项数 —— 「1 项 · 未记录」会被读成「1 项没记录」。 */}
+        <span className="review-task-group-count">{group.items.length} 项{(() => {
+          const recorded = group.items.reduce((sum, item) => sum + item.recordedMs, 0);
+          return recorded > 0 ? ` · ${formatRecordedMs(recorded)}` : "";
+        })()}</span>
       </div>
       <div className="review-detail-rows">{group.items.map(taskRow)}</div>
     </section>)}</div>
@@ -349,10 +417,13 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const notAdvanced = review.notAdvanced.count > 0 && <div className="review-not-advanced">
     <h3>明确未推进与跳过</h3>
     <ul className="review-detail-list">
-      {review.notAdvanced.missedSessions.map((session) => <li key={session.id}><span className="review-tag">明确未推进</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-      {review.notAdvanced.skippedSessions.map((session) => <li key={session.id}><span className="review-tag">跳过</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-      {review.notAdvanced.cancelledSessions.map((session) => <li key={session.id}><span className="review-tag">取消安排</span>{titleOf(session.taskId)}<time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
-      {review.notAdvanced.skippedOccurrences.map((occurrence) => <li key={occurrence.id}><span className="review-tag">跳过</span>{index.workspace.recurringHabits.find((habit) => habit.id === occurrence.habitId)?.title ?? "来源不可用"}<time>{formatDayLabel(occurrence.localDate)}</time></li>)}
+      {review.notAdvanced.missedSessions.map((session) => <li key={session.id}><span className="review-tag">明确未推进</span><span title={titleOf(session.taskId)}>{titleOf(session.taskId)}</span><time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.skippedSessions.map((session) => <li key={session.id}><span className="review-tag">跳过</span><span title={titleOf(session.taskId)}>{titleOf(session.taskId)}</span><time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.cancelledSessions.map((session) => <li key={session.id}><span className="review-tag">取消安排</span><span title={titleOf(session.taskId)}>{titleOf(session.taskId)}</span><time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time></li>)}
+      {review.notAdvanced.skippedOccurrences.map((occurrence) => {
+        const title = index.workspace.recurringHabits.find((habit) => habit.id === occurrence.habitId)?.title ?? "来源不可用";
+        return <li key={occurrence.id}><span className="review-tag">跳过</span><span title={title}>{title}</span><time>{formatDayLabel(occurrence.localDate)}</time></li>;
+      })}
     </ul>
   </div>;
 
@@ -380,16 +451,20 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
         统计仍是 div + role=group：它是摘要，不是规格里的「一段」。 */}
     {hasFacts && <div className="review-headline-wrap">
     <div className="review-headline">
-      <div className="review-stats" role="group" aria-label="本周期总览">
-        <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} caption="实际投入" />
-        <Stat kind="progress" value={netDeltaValue} caption={`${review.progress.changedTaskIds.length} 项有进度变化`} />
-        <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项完成`} caption={`${review.carryoverTaskIds.length} 项仍可继续`} />
+      <div className="review-stats-wrap">
+        <div className="review-stats" role="group" aria-label="本周期总览">
+          <Stat kind="actual" value={formatRecordedMs(review.actual.recordedMs)} caption="实际投入" />
+          <Stat kind="progress" value={netDeltaValue} caption={`${review.progress.changedTaskIds.length} 项有进度变化`} />
+          <Stat kind="completed" value={`${review.progress.completedTaskIds.length} 项完成`} caption={`${review.carryoverTaskIds.length} 项仍可继续`} />
+        </div>
       </div>
       {review.milestones.length > 0 && <section className="review-milestone-cell" aria-labelledby="review-milestone-title">
         <div className="review-cell-head">
           <h2 id="review-milestone-title">里程碑<span className="review-block-count">{review.milestones.length}</span></h2>
-          <button type="button" className="review-cell-more" aria-expanded={headlinePanel?.kind === "milestones"}
-            onClick={(event) => toggleHeadlinePanel("milestones", event.currentTarget)}>查看全部</button>
+          {/* 这一格已经写着第一条：浮层只补**其余的**，不把同一条再说一遍。
+              只有一条时没有「其余」，按钮整个不出现。 */}
+          {review.milestones.length > 1 && <button type="button" className="review-cell-more" aria-expanded={headlinePanel?.kind === "milestones"}
+            onClick={(event) => toggleHeadlinePanel("milestones", event.currentTarget)}>其余 {review.milestones.length - 1} 个</button>}
         </div>
         {milestoneRow(review.milestones[0])}
       </section>}
@@ -443,9 +518,10 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
 
     {/* 首屏两个浮层：里程碑的完整列表、待回顾的完整名单。用浮层而不是展开，
         是为了让首屏高度只由「有没有」决定，不由「有几条」决定。 */}
-    {headlinePanel?.kind === "milestones" && <FloatingPanel kind="action" label="本周期到期的里程碑" anchor={headlinePanel.anchor}
-      closeOnOutsideClick className="review-headline-popover" onClose={() => setHeadlinePanel(null)}>
-      <div className="review-popover-list">{review.milestones.map(milestoneRow)}</div>
+    {headlinePanel?.kind === "milestones" && <FloatingPanel kind="action" label={`其余 ${review.milestones.length - 1} 个里程碑`} anchor={headlinePanel.anchor}
+      closeOnOutsideClick className="review-headline-popover" style={{ width: headlinePanel.anchor.width }} onClose={() => setHeadlinePanel(null)}>
+      {/* 首屏那条不再重复：名单里只有第 2 条起。 */}
+      <div className="review-popover-list">{review.milestones.slice(1).map(milestoneRow)}</div>
     </FloatingPanel>}
     {headlinePanel?.kind === "pending" && <FloatingPanel kind="action" label="还没有记录的时段" anchor={headlinePanel.anchor}
       closeOnOutsideClick className="review-headline-popover" onClose={() => setHeadlinePanel(null)}>
@@ -455,7 +531,7 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     {/* 明细是气泡而不是页内区域：锚在触发元素（任务名／项目名／那一天的柱子）下面，
         点空白、点别的板块、Esc 都关掉它 —— 页面本身不滚动、不位移，看完就消失。 */}
     {selection && <FloatingPanel kind="action" className="review-detail-panel" titleId="review-detail-title"
-      label={reviewDetailLabel(selection, index)} anchorElement={detailAnchorElement} closeOnOutsideClick
+      label={reviewDetailLabel(selection, index)} anchor={detailAnchorRect} anchorElement={detailAnchorElement} closeOnOutsideClick
       style={detailMaxHeight ? { maxHeight: detailMaxHeight } : undefined} onClose={closeDetail}>
       <ReviewDetail index={index} review={review} selection={selection} projectId={projectId}
         onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
@@ -482,6 +558,34 @@ function Stat({ kind, value, caption, detail }: { kind: "actual" | "progress" | 
   </div>;
 }
 
+/** 图例现在排几列：`.review-split-list` 是 `flex-wrap`，每行能放几条只由宽度和
+ *  `flex-basis` 决定（`floor((宽 + 间距) / (基准 + 间距))`）。列数变了要重算能放几条，
+ *  所以除了 ResizeObserver，还要盯根字号（界面缩放改的是根字号，元素的 px 宽度不变）。
+ *  jsdom 没有布局：`clientWidth` 恒为 0 时保留 1 列，测试才有确定性。 */
+function useLegendColumns(itemCount: number) {
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const [columns, setColumns] = useState(1);
+
+  useLayoutEffect(() => {
+    const node = listRef.current;
+    if (!node) return;
+    const measure = () => {
+      if (node.clientWidth === 0) return;
+      const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const basis = SPLIT_ITEM_BASIS_REM * rootRem;
+      setColumns(Math.max(1, Math.floor((node.clientWidth + SPLIT_ITEM_GAP) / (basis + SPLIT_ITEM_GAP))));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(node);
+    const mutation = new MutationObserver(measure);
+    mutation.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "data-scale"] });
+    return () => { observer?.disconnect(); mutation.disconnect(); };
+  }, [itemCount]);
+
+  return { listRef, columns };
+}
+
 /**
  * 投入去向：圆环 + 图例。
  *
@@ -490,11 +594,13 @@ function Stat({ kind, value, caption, detail }: { kind: "actual" | "progress" | 
  * 可读的等价物是左边那列图例；悬停某一段或某一行时，环心换成那一段的百分比。
  * 项目名可点，进入该项目在本周期的明细。
  */
-function SplitChart({ entries, titleOf, colorOf, onOpen }: {
+function SplitChart({ entries, titleOf, colorOf, showEmptyNote, onOpen }: {
   entries: { projectId: string | null; recordedMs: number }[];
   titleOf: (projectId: string | null) => string;
   /** 与项目卡头的色点同源，保证圆环和右边那一组是同一个颜色。 */
   colorOf: (projectId: string | null) => string;
+  /** 空环旁边要不要再写一句「本期还没有记录投入」（日视图独占一块卡时才需要）。 */
+  showEmptyNote: boolean;
   onOpen: (projectId: string | null, trigger: HTMLElement) => void;
 }) {
   const [hot, setHot] = useState<string | null>(null);
@@ -503,8 +609,14 @@ function SplitChart({ entries, titleOf, colorOf, onOpen }: {
   // 气泡宽度固定 16rem，打开时按「锚点右边缘 − 面板宽」算左上角，
   // 让气泡右边缘和「另外 N 个去处」这一行对齐；交给默认的左侧锚定会往右探出去。
   const [extraAnchorRect, setExtraAnchorRect] = useState<DOMRect | null>(null);
-  const visible = entries.slice(0, SPLIT_PREVIEW);
-  const rest = entries.slice(SPLIT_PREVIEW);
+  // 图例按可用宽度自动分列（CSS `flex: 1 1 15rem`），**列数决定不折叠能放几条**：
+  // 固定「行数」而不是「条数」，三列时才不会把放得下的项目折起来。
+  const { listRef, columns } = useLegendColumns(entries.length);
+  const capacity = Math.max(SPLIT_MIN_ITEMS, columns * SPLIT_MAX_ROWS);
+  const folded = entries.length > capacity;
+  // 折叠时最后一条的位置留给「另外 N 个去处」，整块仍然正好是 N 行。
+  const visible = entries.slice(0, folded ? capacity - 1 : entries.length);
+  const rest = entries.slice(visible.length);
   const total = entries.reduce((sum, entry) => sum + entry.recordedMs, 0);
   const restMs = rest.reduce((sum, entry) => sum + entry.recordedMs, 0);
 
@@ -532,15 +644,16 @@ function SplitChart({ entries, titleOf, colorOf, onOpen }: {
     <div className="review-split-body">
       {total === 0
         // 没有记录时给一个空环：整块消失会让人以为这里本来就没有这个板块。
-        ? <p className="review-split-empty">本期还没有记录投入</p>
+        ? (showEmptyNote ? <p className="review-split-empty">本期还没有记录投入</p> : null)
         : <div className="review-split-main">
-          <ul className="review-split-list">
+          <ul className="review-split-list" ref={listRef}>
             {visible.map((entry, index) => {
               const arc = arcs[index];
-              const name = <span className="review-split-name">{arc.label}</span>;
+              // 图例只放得下一行：超长的项目名用省略号收住，完整名称挂在 title 上（悬停可见）。
+              const name = <span className="review-split-name" title={arc.label}>{arc.label}</span>;
               return row(arc, entry.projectId
-                ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
-                : <span className="review-split-label">{name}</span>);
+                ? <button type="button" className="review-inline-link review-split-label" data-review-trigger={`project:${entry.projectId}`} aria-label={`查看项目「${arc.label}」的明细`} title={arc.label} onClick={(event) => onOpen(entry.projectId, event.currentTarget)}>{name}</button>
+                : <span className="review-split-label" title={arc.label}>{name}</span>);
             })}
             {/* 去处太多时折进气泡：点开才列全，不占版面、也不把卡片撑长。 */}
             {rest.length > 0 && <li className="review-split-more">
@@ -553,7 +666,9 @@ function SplitChart({ entries, titleOf, colorOf, onOpen }: {
                 const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
                 const blockLeft = block ? block.getBoundingClientRect().left : row.right - 16 * rootRem;
                 // 太窄时保住最小宽度，但右边缘仍然钉在同一处 —— 否则右边会探出去。
-                const width = Math.max(12 * rootRem, row.right - blockLeft);
+                // 也要有上限：月／日视图的图例是整行宽，跟着整行算会得到 800 多像素的
+                // 大气泡、四行内容摊在两端（2026-10-20 实测 833px）。16rem 与 CSS 默认一致。
+                const width = Math.min(16 * rootRem, Math.max(12 * rootRem, row.right - blockLeft));
                 setExtraAnchorRect(new DOMRect(row.right - width, row.top, width, row.height));
                 setExtraOpen(true);
               }}>
@@ -586,7 +701,7 @@ function SplitChart({ entries, titleOf, colorOf, onOpen }: {
       className="review-split-popover" onClose={() => setExtraOpen(false)}>
       <ul className="review-split-popover-list">
         {rest.map((entry) => <li key={entry.projectId ?? "independent"}>
-          <span className="review-split-name">{titleOf(entry.projectId)}</span>
+          <span className="review-split-name" title={titleOf(entry.projectId)}>{titleOf(entry.projectId)}</span>
           <span className="review-split-value">{formatRecordedMs(entry.recordedMs)}</span>
         </li>)}
       </ul>

@@ -1046,7 +1046,12 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   // 月视图：自然月，日期概览覆盖整月。
   await page.getByRole("button", { name: "月", exact: true }).click();
   await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
-  await expect(page.locator(".review-chart-figure").first().locator("[data-chart-row]")).toHaveCount(31);
+  // 月视图的等价数值物是「详细」气泡里的月历：31 天一个不少，点开才出现。
+  await expect(page.locator(".review-chart-figure").first().locator("[data-chart-row]")).toHaveCount(0);
+  await page.getByRole("button", { name: "详细" }).first().click();
+  await expect(page.locator(".review-calendar-grid [data-chart-row]")).toHaveCount(31);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".review-calendar-grid")).toHaveCount(0);
 
   // 在日历里跳到上个月：写锚点，重启后仍然是同一个月。
   await page.getByRole("button", { name: "选择日期" }).click();
@@ -1069,8 +1074,10 @@ test("phase 4 M11 opens the detail as a bubble under the trigger and closes it o
   // 月视图的数值表足够长，滚动位置才有意义。
   await page.getByRole("button", { name: "月", exact: true }).click();
   await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
-  // 月视图的等价数值表默认收起，先展开才能从日期下钻。
-  await page.locator(".review-chart-details summary").first().click();
+  // 月视图的等价数值表在「详细」气泡的月历里，先点开才能从日期下钻。
+  const detailButton = page.getByRole("button", { name: "详细" }).first();
+  await detailButton.click();
+  await expect(page.locator(".review-calendar-grid")).toBeVisible();
 
   await main.evaluate((element) => { element.scrollTop = 420; });
   const trigger = page.getByRole("button", { name: "查看 8月4日 的明细" }).first();
@@ -1081,22 +1088,25 @@ test("phase 4 M11 opens the detail as a bubble under the trigger and closes it o
   await expect(detail).toContainText("第一段");
   await expect(detail).toContainText("40% → 60%");
 
-  // 气泡是浮层：落在触发元素下面（不盖住它），页面停在原处。
-  await expect(trigger).toBeInViewport();
-  const bubble = await detail.boundingBox();
-  const anchor = await trigger.boundingBox();
-  expect(bubble!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height);
+  // 气泡是浮层：整个落在视口里（日历格会随气泡卸载，拿它当锚会得到全 0 的 rect，
+  // 明细就掉到视口左上角盖住整页）；「详细」气泡同时收起。
+  await expect(page.locator(".review-chart-popover")).toHaveCount(0);
+  const bubble = (await detail.boundingBox())!;
+  expect(bubble.x).toBeGreaterThanOrEqual(0);
+  expect(bubble.y).toBeGreaterThanOrEqual(0);
+  expect(bubble.x + bubble.width).toBeLessThanOrEqual(1201);
+  expect(bubble.y + bubble.height).toBeLessThanOrEqual(901);
 
-  // Esc 关掉：页面停在原处，焦点回到触发元素（点空白处关闭由组件用例覆盖，
-  // 这里不点标题 —— Playwright 会为了点击把页面滚回顶部，测不出「不动」）。
+  // Esc 关掉：页面停在原处，焦点回到「详细」按钮（它可能已经滚出视口，但焦点不该丢）。
   const parked = await main.evaluate((element) => element.scrollTop);
   await page.keyboard.press("Escape");
   await expect(page.locator(".review-detail")).toHaveCount(0);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(parked);
-  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label") ?? null)).toBe("查看 8月4日 的明细");
+  await expect(detailButton).toBeFocused();
 
   // 再开一次，确认关掉之后还能重新打开。
-  await trigger.click();
+  await detailButton.click();
+  await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
   await expect(page.locator(".review-detail")).toBeVisible();
 });
 
@@ -1181,9 +1191,9 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
       expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth), cell).toBeLessThanOrEqual(2);
       await page.getByRole("button", { name: "月", exact: true }).click();
       await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
-      // 月视图的数值表默认收起（31 天），展开后才可下钻 —— 收的是排版，不是内容。
-      await page.locator(".review-chart-details summary").first().click();
-      await expect(page.locator(".review-chart-table").first()).toBeVisible();
+      // 月视图的等价数值物是「详细」气泡里的月历，点开后才可下钻。
+      await page.getByRole("button", { name: "详细" }).first().click();
+      await expect(page.locator(".review-calendar-grid")).toBeVisible();
       await page.getByRole("button", { name: "查看 8月4日 的明细" }).first().click();
       await expect(page.locator(".review-detail")).toBeVisible();
       await page.keyboard.press("Escape");

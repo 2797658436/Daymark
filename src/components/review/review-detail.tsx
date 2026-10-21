@@ -95,8 +95,9 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
   return <div className="review-detail" data-review-detail={selection.kind}>
     <header className="review-detail-head">
       <div className="review-detail-heading">
-        <h2 id="review-detail-title">{heading}</h2>
-        {subtitle && <p className="review-detail-sub">{subtitle}</p>}
+        {/* 标题与副标题都只占有限行数：完整文本在 title 上，长任务名不会把气泡头撑成半屏。 */}
+        <h2 id="review-detail-title" title={heading}>{heading}</h2>
+        {subtitle && <p className="review-detail-sub" title={subtitle}>{subtitle}</p>}
       </div>
       <button type="button" className="icon-action review-detail-close" aria-label="关闭明细" onClick={onClose}><X size={16} /></button>
     </header>
@@ -122,7 +123,7 @@ function DateDetail({ review, index, date, onOpenTask }: { review: ReviewResult;
   const TaskName = ({ taskId }: { taskId: string }) => {
     const title = index.tasksById.get(taskId)?.title ?? null;
     return title
-      ? <button type="button" className="review-inline-link" data-review-trigger={`task:${taskId}`} aria-label={`查看任务「${title}」的明细`} onClick={(event) => onOpenTask(taskId, event.currentTarget)}>{title}</button>
+      ? <button type="button" className="review-inline-link" data-review-trigger={`task:${taskId}`} aria-label={`查看任务「${title}」的明细`} title={title} onClick={(event) => onOpenTask(taskId, event.currentTarget)}>{title}</button>
       : <span className="review-muted">来源不可用</span>;
   };
 
@@ -166,6 +167,10 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
 }) {
   /** 只留非零的计数：三个 0 说的是同一件事，不值得各占一个胶囊。 */
   const executionCounts = detail ? [detail.pendingReviewCount, detail.missedCount, detail.skippedCount].filter((value) => value > 0) : [];
+  /** 记录卡整张是否还有话说：四节全空就连卡片带标题一起不渲染（2026-10-20 用户要求）。 */
+  const hasRecordFacts = detail
+    ? detail.events.length + detail.sessions.length + detail.records.length + detail.runningRecords.length > 0
+    : false;
   return <>
     <section className="review-detail-card" aria-label="本周期">
       {detail
@@ -191,27 +196,27 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
       {detail.carryover && <p className="review-detail-flag-line"><span className="review-detail-flag">待续</span><span>{detail.carryoverReasons.map((reason) => CARRYOVER_REASON_LABEL[reason]).join("；")}</span></p>}
     </section>}
 
-    {detail && <section className="review-detail-card" aria-label="记录">
-      <Block title="进度事件" empty="本周期没有进度事件，因此不显示历史起止；不从当前完成度反推。">
+    {detail && hasRecordFacts && <section className="review-detail-card" aria-label="记录">
+      <Block title="进度事件" hideWhenEmpty empty="本周期没有进度事件，因此不显示历史起止；不从当前完成度反推。">
         {detail.events.map((event) => <li key={event.id}>
           <time>{formatDateTime(event.occurredAtUtc)}</time>
           <span className="review-detail-value">{event.fromProgress}% → {event.toProgress}%</span>
         </li>)}
       </Block>
-      <Block title="计划时段" empty="本周期没有计划时段。">
+      <Block title="计划时段" hideWhenEmpty empty="本周期没有计划时段。">
         {detail.sessions.map((session) => <li key={session.id}>
           <time>{formatDayLabel(session.localDate)} {session.startLocal}–{session.endLocal}</time>
           <span className="review-detail-row-note">{SESSION_STATUS_LABEL[session.status]}{session.status === "missed" && (index.recordsBySessionId.get(session.id)?.length ?? 0) > 0
             ? " · 已补录执行记录（按实际投入计入，不重复记为未推进）" : ""}</span>
         </li>)}
       </Block>
-      <Block title="已记录实际" empty="本周期没有已结束的实际记录：显示「未记录」，不写成 0% 执行率。">
+      <Block title="已记录实际" hideWhenEmpty empty="本周期没有已结束的实际记录：显示「未记录」，不写成 0% 执行率。">
         {detail.records.map((record) => <li key={record.id}>
           <time>{formatRecordRange(record)}</time>
           <span className="review-detail-row-note">{record.note ? record.note : "没有留下备注"}</span>
         </li>)}
       </Block>
-      {detail.runningRecords.length > 0 && <Block title="进行中" empty="">
+      {detail.runningRecords.length > 0 && <Block title="进行中" hideWhenEmpty empty="">
         {detail.runningRecords.map((record) => <li key={record.id}>
           <time>开始于 {formatDateTime(record.actualStartUtc)}</time>
           <span className="review-detail-row-note">没有结束时间，不计入已记录投入</span>
@@ -244,8 +249,8 @@ function ProjectDetail({ review, index, projectId, onOpenTask }: {
       <Block title="任务" empty="这个项目在本周期内没有任务事实。">
         {tasks.map((detail) => <li key={detail.taskId} className="review-detail-stack" data-review-detail-task={detail.taskId}>
           {index.tasksById.get(detail.taskId)
-            ? <button type="button" className="review-inline-link review-detail-stack-title" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${detail.title}」的明细`} onClick={(event) => onOpenTask(detail.taskId, event.currentTarget)}>{detail.title}</button>
-            : <strong className="review-detail-stack-title">{detail.title}</strong>}
+            ? <button type="button" className="review-inline-link review-detail-stack-title" data-review-trigger={`task:${detail.taskId}`} aria-label={`查看任务「${detail.title}」的明细`} title={detail.title} onClick={(event) => onOpenTask(detail.taskId, event.currentTarget)}>{detail.title}</button>
+            : <strong className="review-detail-stack-title" title={detail.title}>{detail.title}</strong>}
           <span className="review-detail-row-note">{formatTaskProgressRange(detail)} · 投入 {formatRecordedMs(detail.recordedMs)}{detail.carryover ? " · 待续" : ""}</span>
         </li>)}
       </Block>
@@ -254,7 +259,7 @@ function ProjectDetail({ review, index, projectId, onOpenTask }: {
     <section className="review-detail-card" aria-label="里程碑">
       <Block title="里程碑" empty="这个项目在本周期内没有到期里程碑。">
         {milestones.map((milestone) => <li key={milestone.milestoneId} className="review-detail-stack">
-          <strong className="review-detail-stack-title">{milestone.title}</strong>
+          <strong className="review-detail-stack-title" title={milestone.title}>{milestone.title}</strong>
           <span className="review-detail-row-note">{milestone.frozen ? `${formatDayLabel(milestone.targetLocalDate)} · ` : ""}{milestone.reached ? "达成" : "未达成"}{milestone.frozen ? "（到期冻结，后续推进不改写这个结果）" : ""} · {milestone.resultText}</span>
         </li>)}
       </Block>
@@ -293,9 +298,12 @@ function ProjectActions({ projectId, projectTitle, scoped, onProjectId, onOpenPr
   </>;
 }
 
-/** 一块带小标题的记录区：有内容就排成列表，没有就留一句说明（不留空块）。 */
-function Block({ title, empty, children }: { title: string; empty: string; children?: ReactNode }) {
+/** 一块带小标题的记录区：有内容就排成列表，没有就留一句说明（不留空块）。
+ *  `hideWhenEmpty` 给任务气泡用：那里本来就挤，空着的一节连标题都不留
+ *  （项目气泡保留说明 —— 它要回答「这个项目有没有里程碑」）。 */
+function Block({ title, empty, children, hideWhenEmpty = false }: { title: string; empty: string; children?: ReactNode; hideWhenEmpty?: boolean }) {
   const items = Children.toArray(children);
+  if (hideWhenEmpty && items.length === 0) return null;
   return <div className="review-detail-block">
     <h3 className="review-detail-block-title">{title}</h3>
     {items.length > 0 ? <ul className="review-detail-list">{children}</ul> : <p className="review-detail-empty">{empty}</p>}

@@ -46,6 +46,31 @@ export interface ReviewChartRow {
   tickShort?: string;
   /** 数值表里的完整日期。 */
   fullLabel: string;
+  /** 这一列是今天：柱子与柱顶数值用强调色，并在柱后垫一条极淡的竖带。 */
+  isToday?: boolean;
+  /** 这一列还没到（今天之后）：柱与数值都用浅色，避免把「未来」读成「没做」。 */
+  isFuture?: boolean;
+}
+
+/** 月历「详细」的一格：日期 + 当天的两个量（分钟／百分点）。 */
+export interface ReviewMonthCell {
+  date: string;
+  dayOfMonth: number;
+  fullLabel: string;
+  /** 当天的分钟数；没有记录时是「-」。 */
+  minutes: string;
+  /** 当天有没有已记录的投入：无障碍名与「-」的语义都靠它，不拿显示串比较。 */
+  hasRecord: boolean;
+  /** 带符号的百分点，单位已由气泡头部说明。 */
+  delta: string;
+  isToday?: boolean;
+  isFuture?: boolean;
+}
+
+export interface ReviewMonthGrid {
+  /** 1 号是周几（0 = 周日）：第一行前面要空几格。 */
+  leading: number;
+  cells: ReviewMonthCell[];
 }
 
 export interface ReviewChartProps {
@@ -61,8 +86,11 @@ export interface ReviewChartProps {
   emptyText: string;
   /** 提供时，「详细」气泡改用它：周视图要同时看日期、星期、投入与百分点。 */
   splitDetail?: { date: string; fullLabel: string; weekday: string; minutes: string; delta: string }[];
-  /** 提供时，数值表的日期成为可下钻的按钮（日期明细）。 */
-  onOpenDate?: (date: string, trigger: HTMLElement) => void;
+  /** 提供时，「详细」气泡改成**月历**：每格是日期 + 当天的值，气泡内可切换分钟／百分点。 */
+  monthGrid?: ReviewMonthGrid;
+  /** 提供时，数值表的日期成为可下钻的按钮（日期明细）。第三个参数是**气泡当时的位置**：
+   *  气泡会在这次点击后卸载，锚在它的格子上会得到全 0 的 rect，明细就掉到视口左上角。 */
+  onOpenDate?: (date: string, trigger: HTMLElement, anchor?: DOMRect) => void;
   /** 放大浮层是否打开（按钮已移到卡片标题行，状态由页面持有）。 */
   expanded: boolean;
   onExpand: (open: boolean) => void;
@@ -115,7 +143,7 @@ function usePairCount(rowCount: number) {
   return { ref, pairs };
 }
 
-export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText, splitDetail, onOpenDate, expanded, onExpand, detailOpen, onDetailOpen, detailAnchor }: ReviewChartProps) {
+export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText, splitDetail, monthGrid, onOpenDate, expanded, onExpand, detailOpen, onDetailOpen, detailAnchor }: ReviewChartProps) {
   // 全零不画图：没有事实时画一排零柱会把「未记录」误读成「做了但没推进」。
   const hasValues = rows.some((row) => row.value !== 0);
   const maxUp = Math.max(0, ...rows.map((row) => row.value));
@@ -125,10 +153,8 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   const zeroPercent = span === 0 ? 100 : (maxUp / span) * 100;
   const { ref, pairs } = usePairCount(rows.length);
   const single = rows.length === 1;
-  // 长周期默认收起数值表：月视图 8 行表格会把图表挤到看不见。短周期只有一两行，展开更省事。
-  const collapsible = rows.length > 7;
-  // 一周只有 7 天：数值表折进「详细」气泡，图独占整列；月视图仍然是常驻的折叠表。
-  const popoverTable = !single && rows.length <= 7;
+  // 周／月的数值表都折进「详细」气泡：周是四列表、月是月历（2026-10-20 去掉月视图的折叠表）。
+  const popoverTable = !single;
 
   const barStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
@@ -136,6 +162,19 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     return { bottom: `${100 - zeroPercent}%`, height: "2px" };
   };
   const barClass = (value: number) => `review-chart-bar ${value > 0 ? "up" : value < 0 ? "down" : "flat"}`;
+  /** 柱顶常驻数值：正数贴在柱顶上方，零值贴零基线，负数贴零基线下方（柱子的起点）。
+   *  未记录与未来都显示 0 —— 图上的高度本来就是 0，写 0 比留白更好核对；「未记录」这层
+   *  语义仍由悬停气泡与等价数值表承担，不在图上改写事实。 */
+  const valueLabel = (value: number) => {
+    if (value === 0) return null; // 没记录／没变化不写字：一排 0 会把图变成数字墙。
+    const rounded = Math.round(value);
+    return signed && rounded > 0 ? `+${rounded}` : `${rounded}`;
+  };
+  const valueLabelStyle = (value: number): CSSProperties => {
+    if (value > 0) return { bottom: `calc(${100 - zeroPercent + (value / maxUp) * zeroPercent}% + 3px)` };
+    if (value < 0) return { top: `calc(${zeroPercent}% + 3px)` };
+    return { bottom: `calc(${100 - zeroPercent}% + 3px)` };
+  };
   /** 气泡挂在柱顶：底部位置 = 柱底 + 柱高。0 值挂在零基线上。 */
   const tipStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent + (value / maxUp) * zeroPercent}%` };
@@ -146,9 +185,19 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
   // 从「详细」气泡里点日期时先收起气泡，并把下钻推到下一个任务里执行：
   // 气泡关闭时宿主会在下一帧把焦点还给「详细」按钮，同一帧打开的明细会被抢走焦点，
   // Esc 就落不到明细自己身上了。等归还做完再开，明细的聚焦才是最后一次。
-  const openFromPopover = (date: string, trigger: HTMLElement) => {
+  //
+  // 位置优先用「详细」按钮：它就在气泡正上方，明细落在气泡原来的位置，下方空间也更多。
+  // 按钮已经滚出视口时才退回**气泡当时的 rect**（气泡里的格子会随气泡卸载，
+  // 已断开节点的 rect 全是 0，明细会掉到视口左上角盖住整页 —— 2026-10-20 实测 x=100/y=90）。
+  const popoverBody = useRef<HTMLDivElement | null>(null);
+  const openFromPopover = (date: string) => {
+    const anchor = detailAnchor.current;
+    const buttonRect = anchor?.getBoundingClientRect();
+    const onScreen = Boolean(buttonRect && buttonRect.bottom > 8 && buttonRect.top < window.innerHeight - 8);
+    const rect = onScreen ? undefined : popoverBody.current?.getBoundingClientRect() ?? undefined;
     onDetailOpen(false);
-    window.setTimeout(() => onOpenDate?.(date, trigger), 0);
+    if (!anchor) return;
+    window.setTimeout(() => onOpenDate?.(date, anchor, rect), 0);
   };
 
   const dateCell = (row: ReviewChartRow) => onOpenDate
@@ -178,16 +227,22 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     </table>;
   };
 
+  /** 贴边列数：气泡比列宽得多时（31 列 × 200% 缩放，列宽 30px、气泡 190px），
+   *  只把最后两列右对齐仍会裁掉几十像素（2026-10-20 实测 dx=39）。按列数比例取：
+   *  31 列 → 4 列，7 列 → 2 列，单日不受影响。 */
+  const tipEdge = Math.max(2, Math.ceil(rows.length / 8));
+
   const plot = !single && <div className="review-chart" aria-hidden="true">
     <div className="review-chart-plot">
       <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
-      {rows.map((row, index) => <div className="review-chart-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+      {rows.map((row, index) => <div className={`review-chart-column${row.isToday ? " is-today" : ""}${row.isFuture ? " is-future" : ""}`} key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
         <span className={barClass(row.value)} style={barStyle(row.value)} />
+        {row.value !== 0 && <span className="review-chart-value" style={valueLabelStyle(row.value)}>{valueLabel(row.value)}</span>}
         {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
-        <span className={`review-chart-tip${index < 2 ? " is-start" : index > rows.length - 3 ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
+        <span className={`review-chart-tip${index < tipEdge ? " is-start" : index >= rows.length - tipEdge ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
       </div>)}
     </div>
-    <div className="review-chart-ticks">{rows.map((row) => <span key={row.date}>
+    <div className="review-chart-ticks">{rows.map((row) => <span key={row.date} className={row.isToday ? "is-today" : undefined}>
       <span className="is-long">{row.tick}</span>
       {row.tickShort && <span className="is-short">{row.tickShort}</span>}
     </span>)}</div>
@@ -195,29 +250,29 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
 
   // 等价数值表：与图上的柱一一对应，不依赖悬停，也不依赖颜色。
   // 月视图默认收起成一行摘要（表格仍在 DOM 里，键盘能展开）；周视图折进「详细」气泡。
-  const slot = popoverTable ? null : <div className="review-chart-slot" ref={ref}>
-    {collapsible
-      ? <details className="review-chart-details"><summary>每日数值（{rows.length} 天）</summary>{renderTable(pairs)}</details>
-      : renderTable(pairs)}
-  </div>;
+  const slot = popoverTable ? null : <div className="review-chart-slot" ref={ref}>{renderTable(pairs)}</div>;
 
-  return <figure className={`review-chart-figure${single ? " is-single" : ""}${popoverTable ? " is-week" : ""}`} aria-label={`${title}（${unit}）`}>
+  return <figure className={`review-chart-figure${single ? " is-single" : ""}${popoverTable ? " is-week" : ""}`} aria-label={`${title}（${unit}）`}
+    style={{ "--chart-columns": rows.length } as CSSProperties}>
     {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
 
     {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
     {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}
 
     {/* 周视图的数值表：「详细」按钮打开气泡，表格仍然是可键盘到达的等价物。 */}
-    {detailOpen && <FloatingPanel kind="action" label={`${title}每日数值`} anchorElement={detailAnchor.current} closeOnOutsideClick
-      className="review-chart-popover" onClose={() => onDetailOpen(false)}>
-      {/* 宿主在时会统一处理 Esc；这里再兜一层，让页面单独渲染（测试、嵌入）时也能关。 */}
-      <div onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDetailOpen(false); } }}>
-        {splitDetail
+    {detailOpen && <FloatingPanel kind="action" label={monthGrid ? "按日期查看数值" : `${title}每日数值`} anchorElement={detailAnchor.current} closeOnOutsideClick
+      className={monthGrid ? "review-chart-popover is-calendar" : "review-chart-popover"} onClose={() => onDetailOpen(false)}>
+      {/* 宿主在时会统一处理 Esc；这里再兜一层，让页面单独渲染（测试、嵌入）时也能关。
+          `popoverBody` 是量「气泡在哪」的锚：点日期后气泡会卸载，位置得先量下来。 */}
+      <div ref={popoverBody} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onDetailOpen(false); } }}>
+        {monthGrid
+          ? <MonthCalendar grid={monthGrid} defaultMetric={signed ? "delta" : "minutes"} onOpenDate={onOpenDate ? openFromPopover : undefined} />
+          : splitDetail
           ? <table className="review-chart-table is-split" aria-label={`${title}逐日数值`}>
             <thead><tr><th scope="col">日期</th><th scope="col">星期</th><th scope="col">投入时间</th><th scope="col">百分点</th></tr></thead>
             <tbody>{splitDetail.map((row) => <tr key={row.date}>
               <th scope="row" data-chart-row={row.date}>{onOpenDate
-                ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={(event) => openFromPopover(row.date, event.currentTarget)}>{row.fullLabel}</button>
+                ? <button type="button" className="review-chart-date" data-review-trigger={`date:${row.date}`} aria-label={`查看 ${row.fullLabel} 的明细`} onClick={() => openFromPopover(row.date)}>{row.fullLabel}</button>
                 : row.fullLabel}</th>
               <td>{row.weekday}</td>
               <td>{row.minutes}</td>
@@ -230,6 +285,56 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
 
     {expanded && <ExpandedChart title={title} unit={unit} rows={rows} signed={signed} zeroPercent={zeroPercent} maxUp={maxUp} maxDown={maxDown} onClose={() => onExpand(false)} />}
   </figure>;
+}
+
+/**
+ * 月历「详细」：7 列 × 5–6 行，每格是「日号 + 当天的值」。
+ *
+ * 用真正的 `<table>` 而不是 div 拼网格：它同时是这张图的**等价数值表**（规格 §7.4），
+ * 星期是列标题、每个日期是一个可下钻的按钮，读屏能按行列读到。格子里切换分钟／百分点
+ * 只换数值那一行，不改日期与下钻入口。
+ */
+function MonthCalendar({ grid, defaultMetric, onOpenDate }: {
+  grid: ReviewMonthGrid;
+  defaultMetric: "minutes" | "delta";
+  onOpenDate?: (date: string) => void;
+}) {
+  const [metric, setMetric] = useState<"minutes" | "delta">(defaultMetric);
+  const cells: (ReviewMonthCell | null)[] = [...Array.from({ length: grid.leading }, () => null), ...grid.cells];
+  while (cells.length % 7 !== 0) cells.push(null);
+  const weeks: (ReviewMonthCell | null)[][] = [];
+  for (let index = 0; index < cells.length; index += 7) weeks.push(cells.slice(index, index + 7));
+
+  return <div className="review-calendar">
+    <div className="review-calendar-head">
+      <div className="segmented review-calendar-switch" role="group" aria-label="日历数值">
+        <button type="button" aria-pressed={metric === "minutes"} className={metric === "minutes" ? "active" : ""} onClick={() => setMetric("minutes")}>分钟</button>
+        <button type="button" aria-pressed={metric === "delta"} className={metric === "delta" ? "active" : ""} onClick={() => setMetric("delta")}>百分点</button>
+      </div>
+      <span className="review-calendar-unit">单位：{metric === "minutes" ? "分钟" : "百分点"}</span>
+    </div>
+    <table className="review-calendar-grid" aria-label="按日期查看数值">
+      <thead><tr>{["一", "二", "三", "四", "五", "六", "日"].map((weekday) => <th scope="col" key={weekday}>{weekday}</th>)}</tr></thead>
+      <tbody>{weeks.map((week, weekIndex) => <tr key={weekIndex}>
+        {week.map((cell, cellIndex) => cell
+          ? <td key={cell.date} data-chart-row={cell.date}
+            className={`review-calendar-cell${cell.isToday ? " is-today" : ""}${cell.isFuture ? " is-future" : ""}`}>
+            {onOpenDate
+              ? <button type="button" className="review-calendar-day" data-review-trigger={`date:${cell.date}`}
+                aria-label={`查看 ${cell.fullLabel} 的明细：${metric === "minutes" ? (cell.hasRecord ? `${cell.minutes} 分钟` : "未记录投入") : `${cell.delta} 百分点`}`}
+                onClick={() => onOpenDate(cell.date)}>
+                <span className="review-calendar-date">{cell.dayOfMonth}</span>
+                <span className="review-calendar-value">{metric === "minutes" ? cell.minutes : cell.delta}</span>
+              </button>
+              : <span className="review-calendar-day">
+                <span className="review-calendar-date">{cell.dayOfMonth}</span>
+                <span className="review-calendar-value">{metric === "minutes" ? cell.minutes : cell.delta}</span>
+              </span>}
+          </td>
+          : <td key={`blank-${weekIndex}-${cellIndex}`} className="review-calendar-cell is-blank" />)}
+      </tr>)}</tbody>
+    </table>
+  </div>;
 }
 
 function PairHeader({ unit }: { unit: string }) {

@@ -128,6 +128,9 @@ describe("review page", () => {
     // 投入与净进度合并成一张图；周视图的等价数值表折进「详细」气泡，点开才在 DOM 里出现。
     expect(figures()).toHaveLength(1);
     expect(document.querySelectorAll(".review-chart-table")).toHaveLength(0);
+    // 柱顶只给有数值的柱子标字：没记录的日子留空，不写 0。
+    expect(minutesFigure().querySelectorAll(".review-chart-value")).toHaveLength(1);
+    expect(minutesFigure().querySelector(".review-chart-value")!.textContent).toBe("60");
     expect(screen.getByRole("button", { name: "详细" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
   });
@@ -172,20 +175,26 @@ describe("review page", () => {
     expect(minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!.style.top).toBe("100%");
   });
 
-  it("packs the month table into column pairs instead of one full-width row per day", async () => {
+  it("opens the month detail as a calendar of days with a minutes/percent switch", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage({ preferences: { reviewPeriod: "month" } });
-    const table = minutesFigure().querySelector<HTMLElement>(".review-chart-table")!;
-    expect(table.classList.contains("is-multi")).toBe(true);
-    // 3 月 31 天 → 4 对 → 8 行；日期一个不少，仍然逐个可读、可下钻。
-    expect(table.querySelectorAll("tbody tr")).toHaveLength(8);
-    expect(table.querySelectorAll("[data-chart-row]")).toHaveLength(31);
-    // 月视图的表格默认收起，展开后日期按钮才可见 —— 收的是排版，不是内容。
-    const details = minutesFigure().querySelector<HTMLDetailsElement>(".review-chart-details")!;
-    expect(details.open).toBe(false);
-    await user.click(within(details).getByText(/每日数值（31 天）/));
-    expect(details.open).toBe(true);
-    expect(within(minutesFigure()).getByRole("button", { name: "查看 3月5日 的明细" })).toBeVisible();
+    // 月视图不再常驻折叠表：等价数值物是「详细」气泡里的月历。
+    expect(minutesFigure().querySelector(".review-chart-table")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "详细" }));
+    const popover = document.querySelector<HTMLElement>(".review-chart-popover")!;
+    const calendar = within(popover).getByRole("table", { name: "按日期查看数值" });
+    // 3 月 1 日是周日 → 周一起头时空 6 格；31 天一个不少，排 6 行
+    //（主月历与周期选择器都是周一起头，回顾里的月历不单独改成周日开头）。
+    expect(calendar.querySelectorAll("[data-chart-row]")).toHaveLength(31);
+    expect(calendar.querySelectorAll("tbody tr")).toHaveLength(6);
+    expect(calendar.querySelector("thead tr")!.textContent).toBe("一二三四五六日");
+    // 默认跟图一致看分钟：5 日 60 分钟，7 日没有记录（写「未记录」，不写 0）。
+    expect(calendar.querySelector('[data-chart-row="2026-03-05"]')!.textContent).toContain("60");
+    expect(calendar.querySelector('[data-chart-row="2026-03-07"]')!.textContent).toBe("7-");
+    // 切到百分点：同一格换成带符号的数值，日期与下钻入口不变。
+    await user.click(within(popover).getByRole("button", { name: "百分点" }));
+    expect(calendar.querySelector('[data-chart-row="2026-03-05"]')!.textContent).toContain("+20");
+    expect(within(popover).getByRole("button", { name: "查看 3月5日 的明细：+20 百分点" })).toBeVisible();
   });
 
   it("puts the three headline numbers in the first row as large figures", () => {
@@ -401,6 +410,23 @@ describe("review page", () => {
     await waitFor(() => expect(document.querySelector(".review-detail")?.textContent).toContain("50% → 20%"));
   });
 
+  it("closes the list popover together with the detail opened from it", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    // 首屏「查看」开待回顾名单，名单里点任务名 → 明细叠在名单上面。
+    await user.click(within(document.querySelector<HTMLElement>(".review-pending-line")!).getByRole("button", { name: "查看" }));
+    const popover = document.querySelector<HTMLElement>(".review-headline-popover")!;
+    expect(popover).not.toBeNull();
+    await user.click(within(popover).getByRole("button", { name: "查看任务「独立任务」的明细" }));
+    expect(document.querySelector(".review-detail")).not.toBeNull();
+    expect(document.querySelectorAll(".floating-panel")).toHaveLength(2);
+
+    // Esc 关明细时名单一起收起：只关掉上面那层会看起来像「点了没反应」。
+    await user.keyboard("{Escape}");
+    expect(document.querySelector(".review-detail")).toBeNull();
+    expect(document.querySelector(".review-headline-popover")).toBeNull();
+  });
+
   it("keeps the query and the page position when the detail closes", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const harness = renderPage();
@@ -492,6 +518,25 @@ describe("review page", () => {
     for (const phrase of ["项有进度变化", "项仍可继续", "项完成"]) {
       expect(text.split(phrase).length - 1).toBe(1);
     }
+  });
+
+  it("lists only the remaining milestones in the popover instead of repeating the first", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const workspace = fixture();
+    // 第一条已经写在首屏那一格里：浮层只补其余的，不把同一条再说一遍。
+    workspace.projectMilestones = [...workspace.projectMilestones, { ...workspace.projectMilestones[0], id: "m-2", title: "第二阶段", targetLocalDate: "2026-03-04" }];
+    renderPage({ workspace });
+    await user.click(screen.getByRole("button", { name: "其余 1 个" }));
+    const popover = document.querySelector<HTMLElement>(".review-headline-popover")!;
+    expect(within(popover).getByText("第二阶段")).toBeVisible();
+    expect(within(popover).queryByText("第一阶段")).toBeNull();
+  });
+
+  it("hides the milestone popover trigger when there is nothing left to list", () => {
+    renderPage();
+    // 夹具只有一条里程碑：全部内容都在首屏那一格里，按钮没有存在的理由。
+    expect(screen.queryByRole("button", { name: /其余 \d+ 个/ })).toBeNull();
+    expect(document.querySelector(".review-milestone-cell")!.textContent).toContain("第一阶段");
   });
 
   it("drops the pending line when every ended session already has a record", () => {
