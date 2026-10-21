@@ -1,6 +1,6 @@
 [package]
 name = "daymark"
-version = "0.1.6"
+version = "0.1.7"
 description = "Daymark local-first planning desktop app"
 authors = ["Daymark contributors"]
 edition = "2024"
