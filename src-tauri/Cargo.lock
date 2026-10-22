@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "daymark"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "chrono",
  "indexmap 1.9.3",
