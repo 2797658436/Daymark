@@ -39,4 +39,5 @@ Agents cannot see the screen, so every headed browser window is visible noise to
 - **Announce a headed session before opening it**, and state in the final report why headless was insufficient.
 - **Always clean up in `finally`**: close the browser, stop any dev/preview server you started, and do not leave windows for the user to close. If a probe crashes, fix its cleanup before rerunning instead of relaunching blindly.
 - **Reuse the repository scripts first**: `scripts/visual-evidence.mjs` (headless by default; `--headed` only for the exception above), `scripts/run-e2e.mjs` and `scripts/measure-perf.mjs`. One-off probes belong in `output/` (gitignored) and must follow the same rules.
+- **After a GUI change, send screenshots.** Capture the affected screen(s) headlessly, save them under `output/<YYYY-MM-DD>_<topic>/`, and embed them in the final reply with viewport width and zoom noted; include a before/after pair when the change is visual.
 - **Before finishing, verify nothing is left running**: `Get-Process chrome,msedge,node -ErrorAction SilentlyContinue` and `Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 1420,4174,4175,4176,4177`.
