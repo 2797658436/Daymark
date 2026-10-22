@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 export interface Project { id: string; title: string; deadlineLocal: string | null }
@@ -155,6 +156,9 @@ export interface NativeApi {
   finishExecution(recordId: string, actualEndUtc: string, note: string, progressEvent: ProgressEvent): Promise<WorkspaceSnapshot>;
   applyProgress(event: ProgressEvent): Promise<WorkspaceSnapshot>;
   showReminder(title: string, body: string, sessionId?: string): Promise<void>;
+  /** 开机自启动是系统级状态（Windows 注册表），不是偏好；浏览器预览用 localStorage 模拟。 */
+  isAutostartEnabled(): Promise<boolean>;
+  setAutostartEnabled(enabled: boolean): Promise<void>;
   getDataOverview(): Promise<DataOverview>;
   createDailyBackup(): Promise<BackupInfo>;
   createManualBackup(): Promise<BackupInfo | null>;
@@ -198,6 +202,8 @@ class TauriNativeApi implements NativeApi {
   }
   applyProgress(event: ProgressEvent) { return invoke<WorkspaceSnapshot>("apply_progress", { event }); }
   showReminder(title: string, body: string, sessionId?: string) { return invoke<void>("show_reminder", { title, body, sessionId }); }
+  isAutostartEnabled() { return isAutostartEnabled(); }
+  async setAutostartEnabled(enabled: boolean) { if (enabled) await enableAutostart(); else await disableAutostart(); }
   getDataOverview() { return invoke<DataOverview>("get_data_overview"); }
   createDailyBackup() { return invoke<BackupInfo>("create_daily_backup"); }
   async createManualBackup() {
@@ -215,6 +221,8 @@ class TauriNativeApi implements NativeApi {
 }
 
 const PREVIEW_WORKSPACE_KEY = "daymark.phase1.workspace";
+/** 浏览器预览没有系统注册表：用 localStorage 模拟「开机自启动」开关，E2E 才能走完整路径。 */
+const PREVIEW_AUTOSTART_KEY = "daymark.preview.autostart";
 
 class BrowserPreviewApi implements NativeApi {
   private backups: BackupInfo[] = [];
@@ -399,6 +407,11 @@ class BrowserPreviewApi implements NativeApi {
     if (!("Notification" in window)) return;
     if (Notification.permission === "default") await Notification.requestPermission();
     if (Notification.permission === "granted") new Notification(title, { body });
+  }
+  async isAutostartEnabled() { return localStorage.getItem(PREVIEW_AUTOSTART_KEY) === "true"; }
+  async setAutostartEnabled(enabled: boolean) {
+    if (enabled) localStorage.setItem(PREVIEW_AUTOSTART_KEY, "true");
+    else localStorage.removeItem(PREVIEW_AUTOSTART_KEY);
   }
   async getDataOverview(): Promise<DataOverview> {
     const state = this.read();

@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIncreasing, Check, ChevronDown, CircleAlert, Eraser, List, Maximize2 } from "lucide-react";
+import { ChartNoAxesColumnIncreasing, Check, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Eraser, List, Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { Button } from "../ui/button";
@@ -6,10 +6,10 @@ import { FloatingPanel } from "../ui/floating-panel";
 import { ReviewChart, type ReviewChartRow } from "./review-chart";
 import { ReviewDetail, formatDayLabel, reviewDetailLabel, type ReviewSelection } from "./review-detail";
 import { ReviewPeriodPicker } from "./review-period-picker";
-import { localDateOf } from "../../lib/deadlines";
+import { addLocalDays, addLocalMonths, localDateOf } from "../../lib/deadlines";
 import {
-  REVIEW_PERIOD_LABEL, buildReviewFromIndex, formatPercentPoints, formatRecordedMs, formatTaskProgressRange,
-  type ReviewPeriod, type ReviewResult,
+  REVIEW_BACK_LABEL, REVIEW_CURRENT_LABEL, REVIEW_PERIOD_LABEL, buildReviewFromIndex, formatPercentPoints, formatRecordedMs,
+  formatTaskProgressRange, type ReviewPeriod, type ReviewResult,
 } from "../../lib/review";
 import type { Task } from "../../lib/native";
 import type { AppSettings } from "../../lib/settings";
@@ -32,6 +32,14 @@ export type { ReviewSelection } from "./review-detail";
  */
 
 const PERIODS: ReviewPeriod[] = ["day", "week", "month"];
+/** 页头步进器的读屏名：周期不同，单位不同（「前一天」不说成「上一周期」）。 */
+const PERIOD_STEP_LABEL: Record<ReviewPeriod, { previous: string; next: string }> = {
+  day: { previous: "前一天", next: "后一天" },
+  week: { previous: "上一周", next: "下一周" },
+  month: { previous: "上个月", next: "下个月" },
+};
+/** 月标题的格式化器：Intl.DateTimeFormat 构造很贵，模块级只建一次（P4-09 的同类修复）。 */
+const MONTH_TITLE_FORMAT = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" });
 /** 投入去向的图例最多排几行：**行数**固定，超出才折进「另外 N 个去处」。
  *  单列（周视图那一栏）维持 6 条 —— 它挨着 9.375rem 的圆环，6 行正好和环同高；
  *  多列时按「列数 × 4 行」算，月视图三列能放 12 条，不必把放得下的项目折起来
@@ -74,9 +82,37 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   const anchorDate = preferences.reviewAnchorDate ?? today;
   const review = useMemo(() => buildReviewFromIndex(index, { period, anchorDate, projectId }, now), [index, period, anchorDate, projectId, now]);
 
+  const isCurrentPeriod = review.days.some((day) => day.date === today);
+  /** 页头标题只写周期本身：当前周期不再靠「本周」这类相对词区分，而由标题右侧的徽标说明；
+   *  日期因此只出现一次（旧版 eyebrow 与 h1 各写一遍，切到别的日／周时左上角重复）。 */
+  const periodHeading = period === "day"
+    ? formatDayLabel(review.startDate)
+    : period === "week"
+      ? `${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}`
+      : MONTH_TITLE_FORMAT.format(new Date(`${review.startDate}T12:00:00`));
+  /** 日视图在日期旁补一个星期：光有「8月4日」时，快速扫页头分不清周几。 */
+  const periodWeekday = period === "day" ? WEEKDAY_LABEL[new Date(`${review.startDate}T12:00:00`).getDay()] : null;
+  /** 上一／下一周期：日 ±1 天、周 ±7 天、月 ±1 个自然月；写显式锚点，与周期选择器同一通道。 */
+  const shiftPeriod = (direction: -1 | 1) => {
+    const nextAnchor = period === "day"
+      ? addLocalDays(review.startDate, direction)
+      : period === "week"
+        ? addLocalDays(review.startDate, direction * 7)
+        : addLocalMonths(review.startDate, direction);
+    onPreferences({ reviewAnchorDate: nextAnchor });
+  };
+
   const triggerRef = useRef<HTMLElement | null>(null);
   const triggerKeyRef = useRef<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
+  /** 「回到当前周期」按下后它会被徽标替换、从 DOM 里消失：标记一下，等真的回到当前
+   *  周期再把焦点交给页面标题，键盘用户不会掉到 body。 */
+  const returningToCurrent = useRef(false);
+  useEffect(() => {
+    if (!returningToCurrent.current || !isCurrentPeriod) return;
+    returningToCurrent.current = false;
+    headingRef.current?.focus({ preventScroll: true });
+  }, [isCurrentPeriod]);
   const restored = useRef(false);
   /** 明细气泡的锚点：触发元素本身（找不到就退到页面标题）。
    *  用 layout effect 在**绘制前**算好，气泡才不会先居中再跳到任务名下面。 */
@@ -302,7 +338,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     delta: formatPercentPoints(day.progressDelta),
   })) : undefined;
 
-  // 图表的标题行：切换与按钮都在这里，图本身不再带一行标题。
+  // 图表的标题行：只留「切换 + 按钮」。单位挪到图右下角（2026-10-22 用户要求），
+  // 标题行不再被「单位：百分点」挤到换行。
   const chartsHeading = <div className="section-heading review-charts-head">
     <h2 id="review-charts-title">投入和进度</h2>
     <div className="review-charts-tools">
@@ -311,7 +348,6 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
           <button type="button" aria-pressed={isMinutes} className={isMinutes ? "active" : ""} onClick={() => setMetric("minutes")}>实际投入</button>
           <button type="button" aria-pressed={!isMinutes} className={!isMinutes ? "active" : ""} onClick={() => setMetric("delta")}>净进度</button>
         </div>
-        <span className="review-charts-unit">单位：{chartUnit}</span>
       </div>
       <div className="review-charts-group">
         {/* 周是四列数值表、月是月历，都由这一个按钮打开（2026-10-20 起月视图不再有折叠表）。 */}
@@ -329,7 +365,6 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
     rows={chartRows}
     signed={!isMinutes}
     emptyText={isMinutes ? "本周期没有记录实际投入，因此不绘制全零图表。" : "本周期没有进度变化。"}
-    baselineNote={isMinutes ? undefined : "零基线以上是上调，以下是下调；下调如实显示，不代表失败。"}
     splitDetail={weekDetail}
     monthGrid={monthGrid}
     onOpenDate={(date, trigger, anchor) => openDetail({ kind: "date", id: date }, trigger, anchor)}
@@ -428,19 +463,32 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   </div>;
 
   return <section className="page-stack review-page" aria-labelledby="review-title">
-    <header className="page-header">
-      <div>
-        <span className="eyebrow">{period === "day" ? formatDayLabel(review.startDate) : `${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}`}</span>
-        <h1 id="review-title" ref={headingRef} tabIndex={-1}>{periodTitle(period, review, today)}</h1>
+    <header className="page-header review-page-header">
+      {/* 页头不再放 eyebrow：主导航已经高亮「回顾」，标题就是周期本身；
+          多一行小字只会让左上角显得头重（2026-10-22 用户反馈）。
+          周期标题本身就是步进器：< > 紧贴日期，回到当前周期跟在后面；
+          「选择日期」和「日／周／月」仍在页头右侧，位置不变。 */}
+      <div className="review-period-row">
+        <button type="button" className="review-period-step" aria-label={PERIOD_STEP_LABEL[period].previous}
+          onClick={() => shiftPeriod(-1)}><ChevronLeft aria-hidden="true" /></button>
+        {/* aria-live：点箭头换周期时焦点仍在按钮上，读屏用户需要听到新周期。 */}
+        <h1 id="review-title" ref={headingRef} tabIndex={-1} className="review-period-title" aria-live="polite">
+          {periodHeading}
+          {periodWeekday && <span className="review-period-weekday">{periodWeekday}</span>}
+        </h1>
+        <button type="button" className="review-period-step" aria-label={PERIOD_STEP_LABEL[period].next}
+          onClick={() => shiftPeriod(1)}><ChevronRight aria-hidden="true" /></button>
+        {/* 当前周期用安静的状态徽标；离开当前周期时同一个位置换成动作，两者不会同时出现。 */}
+        {isCurrentPeriod
+          ? <span className="review-current-badge">{REVIEW_CURRENT_LABEL[period]}</span>
+          : <button type="button" className="review-back-current" onClick={() => { returningToCurrent.current = true; onPreferences({ reviewAnchorDate: null }); }}>{REVIEW_BACK_LABEL[period]}</button>}
       </div>
       <div className="header-actions">
         <div className="segmented" role="group" aria-label="回顾周期">
           {PERIODS.map((option) => <button key={option} aria-pressed={period === option} className={period === option ? "active" : ""} onClick={() => onPreferences({ reviewPeriod: option })}>{REVIEW_PERIOD_LABEL[option]}</button>)}
         </div>
-        {/* 不再用左右箭头翻页：点日期打开日历，在日历里直接跳到想看的那一天／那一周／那一个月。 */}
         <ReviewPeriodPicker period={period} anchorDate={anchorDate} today={today}
           onSelect={(nextPeriod, nextAnchor) => onPreferences({ reviewPeriod: nextPeriod, reviewAnchorDate: nextAnchor })} />
-        {!review.days.some((day) => day.date === today) && <Button onClick={() => onPreferences({ reviewAnchorDate: null })}>回到当前周期</Button>}
       </div>
     </header>
 
@@ -707,14 +755,6 @@ function SplitChart({ entries, titleOf, colorOf, showEmptyNote, onOpen }: {
       </ul>
     </FloatingPanel>}
   </section>;
-}
-
-/** 周期标题按周期给出：日＝「今日回顾」（看别的日子才写日期），月＝「2026 年 8 月回顾」，
- *  周＝当前周说「本周」。日期本身已经在页头的小字里，标题不再重复一遍。 */
-function periodTitle(period: ReviewPeriod, review: ReviewResult, today: string) {
-  if (period === "day") return review.startDate === today ? "今日回顾" : `${formatDayLabel(review.startDate)}回顾`;
-  if (period === "month") return `${new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(`${review.startDate}T12:00:00`))}回顾`;
-  return review.days.some((day) => day.date === today) ? "本周回顾" : `${formatDayLabel(review.startDate)} — ${formatDayLabel(review.endDate)}回顾`;
 }
 
 function formatClock(iso: string) {

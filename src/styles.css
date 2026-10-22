@@ -616,6 +616,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .switch:checked { background: var(--accent-soft); border-color: var(--accent); }
 .switch:checked::after { left: calc(100% - 1.25rem); background: var(--accent-strong); }
 .switch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* 系统级开关在读取／写入真实状态期间不可点：用专用去强调色（P4-13：不用整体透明度）。 */
+.switch:disabled { border-color: var(--line-strong); cursor: default; }
+.switch:disabled::after { background: var(--line-strong); }
 
 /* 默认时段：行内编辑／删除，删除不再是只有一个 24px 的 ×。 */
 .settings-slot-list { display: grid; gap: .375rem; padding: .25rem 0 .5rem; }
@@ -956,7 +959,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 明细区与「明确未推进」的小标题：与里程碑格标题同一套层级。 */
 .review-not-advanced h3 { margin: 0; font-size: .84rem; font-weight: 600; line-height: 1.25; color: var(--muted-strong); display: flex; align-items: baseline; gap: 6px; }
 
-/* 图表只用 CSS：一张图只有一个单位；零基线按正负比例定位在容器里。 */
+/* 图表只用 CSS：一张图只有一个单位；柱子的 0 值按正负比例定位在容器里，虚线是平均参考线。 */
 .review-chart-figure { display: grid; gap: 8px; margin: 0; container-type: inline-size; }
 .review-chart-caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .review-chart-caption strong { font-size: .88rem; }
@@ -971,8 +974,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 顶部 34px 是给悬停气泡留的高度：气泡挂在柱顶（自身底边对齐柱顶上方 5px），
    最高的柱子也不会把它顶出画布。overflow: hidden 让气泡不会把 #main-content 撑出
    横向滚动（200% 下气泡比列宽得多）。 */
-.review-chart-plot { position: relative; display: flex; align-items: stretch; gap: 3px; height: 134px; padding: 34px 2px 0; overflow: hidden; }
-.review-chart-zero { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
+.review-chart-plot { position: relative; height: 134px; padding: 34px 2px 0; overflow: hidden; }
+/* 柱子的坐标系：高度 = plot 去掉 34px 气泡留白后的内容高度。平均参考线也画在这一层，
+   top 的百分比才和柱子的 bottom 百分比同源。 */
+.review-chart-canvas { position: relative; display: flex; align-items: stretch; gap: 3px; height: 100%; }
+/* 平均参考线（2026-10-22 起取代零基线）：虚线横穿图，数值在右下角的单位行里。 */
+.review-chart-average { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
 .review-chart-column { position: relative; flex: 1 1 0; min-width: 0; }
 /* 柱宽由列宽决定会失控：单日周期画过 889px 宽的方块，周视图 125px。封顶并居中。 */
 .review-chart-bar { position: absolute; left: 50%; width: min(2.75rem, 62%); transform: translateX(-50%); border-radius: 4px 4px 0 0; background: var(--accent); }
@@ -1056,7 +1063,9 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 /* 今天这一格底是 accent-soft：数值再淡一档就掉到 4.5:1 以下（axe 实测），这里回到深一档。 */
 .review-calendar-cell.is-today .review-calendar-value { color: var(--muted-strong); }
 .review-chart-empty { margin: 0; color: var(--muted); font-size: .8rem; }
-.review-chart-note { margin: 0; color: var(--muted); font-size: .74rem; }
+/* 单位放在图的右下角（2026-10-22 用户要求）：标题行因此只剩「切换 + 按钮」，
+   不再被「单位：百分点」挤到换行；图下也不再有一句解释性长文。 */
+.review-chart-unit { margin: 0; color: var(--muted); font-size: .74rem; text-align: right; }
 
 /* 放大视图：每根柱固定 3.5rem，日期刻度逐日可读；滚轮／拖动／方向键横向平移。 */
 .chart-modal-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(22 17 12 / 46%); backdrop-filter: blur(2px); }
@@ -1070,7 +1079,8 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .chart-modal-scroll:active { cursor: grabbing; }
 .chart-modal-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* 顶部留 34px 给数值标签：最高的那根柱的标签会顶到列外面，留少了会被裁掉。 */
-.chart-modal-plot { position: relative; display: flex; align-items: stretch; height: 264px; padding-top: 34px; }
+.chart-modal-plot { position: relative; height: 264px; padding-top: 34px; }
+.chart-modal-canvas { position: relative; display: flex; align-items: stretch; height: 100%; }
 .chart-modal-column { position: relative; flex: 0 0 3.5rem; }
 .chart-modal-value { position: absolute; left: 50%; z-index: 2; color: var(--muted-strong); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translate(-50%, calc(-100% - 5px)); }
 .chart-modal-tick { position: absolute; top: calc(100% + 8px); left: 50%; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; white-space: nowrap; transform: translateX(-50%); }
@@ -1078,6 +1088,24 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .chart-modal-tip { position: absolute; top: calc(100% + 26px); left: 50%; z-index: 3; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); font-size: .7rem; font-weight: 600; white-space: nowrap; opacity: 0; pointer-events: none; transform: translateX(-50%); transition: opacity .12s ease; }
 .chart-modal-column:hover .chart-modal-tip { opacity: 1; }
 .chart-modal-note { margin: 0; color: var(--muted); font-size: .74rem; }
+
+/* 回顾页头：周期标题自己就是「上一周期／下一周期」步进器。
+   左上角不再放 eyebrow（2026-10-22 用户反馈头重）：主导航已经高亮「回顾」，
+   标题就是周期本身，日期只出现一次；页头因此是一行，标题垂直居中。
+   当前周期在标题右侧给一个安静的徽标，离开当前周期时同一个位置换成动作 —— 两者
+   不会同时出现，标题与箭头也不会因为动作出现／消失而左右跳。 */
+.review-period-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
+.review-period-step { flex: none; display: grid; place-items: center; width: 2rem; height: 2rem; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--muted-strong); transition: background .12s ease, color .12s ease; }
+.review-period-step:hover { background: var(--accent-softer); color: var(--accent-strong); }
+/* 图标跟着界面缩放走：按钮是 rem，图标若留 18px 会在 200% 下缩成一个小点。 */
+.review-period-step svg { width: 1.25rem; height: 1.25rem; }
+.review-period-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; margin: 0 6px; font-size: 1.375rem; line-height: 1.75rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.review-period-weekday { color: var(--muted); font-size: .92rem; font-weight: 500; }
+/* 当前周期徽标：安静的状态色（与「回到当前周期」的强调动作区分开）。 */
+.review-current-badge { align-self: center; flex: none; margin-left: 6px; padding: .12rem .55rem; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); font-size: .72rem; font-weight: 600; line-height: 1.35; white-space: nowrap; }
+/* 「回到今日／本周／本月」：软橙药丸，与页头的暖杏色系一致；只在离开当前周期时出现。 */
+.review-back-current { align-self: center; flex: none; min-height: 1.875rem; margin-left: 6px; padding: 0 .7rem; border: 1px solid transparent; border-radius: 999px; background: var(--accent-softer); color: var(--accent-strong); font-size: .8rem; font-weight: 600; white-space: nowrap; transition: background .12s ease, border-color .12s ease; }
+.review-back-current:hover { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
 
 /* 周期选择器：一个按钮打开日历，圆角与其它浮层一致。 */
 .review-picker-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel-strong); color: var(--text); font-size: .82rem; font-variant-numeric: tabular-nums; }
@@ -1110,12 +1138,17 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .review-picker-months button { min-height: 40px; border: 1px solid transparent; border-radius: 9px; background: var(--panel-strong); color: var(--text); font-size: .78rem; }
 .review-picker-months button:hover { background: var(--accent-soft); color: var(--accent-strong); }
 .review-picker-months button.is-active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-strong); font-weight: 650; }
+/* 选择日期里的「回到今日／本周／本月」：与页头那颗药丸同款，隔一条细线放在日历底部，
+   离开当前周期时才出现。用户不用把鼠标移回页头左侧。 */
+.review-picker-foot { display: flex; justify-content: flex-end; margin-top: 2px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.review-picker-foot .review-back-current { margin-left: 0; }
 /* 图表标题行里的「实际投入／净进度」切换。 */
 .review-metric-switch button { min-height: 26px; padding: 0 10px; font-size: .76rem; }
 /* 图表标题行：切换与按钮并到右侧，两组之间拉开、组内靠紧。 */
 .review-charts-tools { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: flex-end; }
 .review-charts-group { display: flex; align-items: center; gap: 8px; }
-.review-charts-unit { color: var(--muted); font-size: .74rem; }
+/* 标题不参与收缩：标题行拥挤时让右侧工具换行，而不是把「投入和进度」拆成两行。 */
+.review-charts-head > h2 { flex: none; white-space: nowrap; }
 .review-split-empty { margin: 0; color: var(--muted); font-size: .78rem; }
 /* 投入去向：圆环 + 图例。圆环本身 aria-hidden，可读的是左边那列图例。 */
 /* 内容靠上、格子撑满整行：这样竖分隔线才会和左栏一样长。 */

@@ -93,7 +93,7 @@ async function expectNoHorizontalScroll(page: import("@playwright/test").Page) {
 test("review page survives extreme titles at 200% scale without horizontal scrolling", async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 760 });
   await seed(page, { scale: 200 });
-  await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "10月19日 — 10月25日", level: 1 })).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   // 任务区的每一处截断都要能悬停看全文：项目卡头、任务行、投入去向图例。

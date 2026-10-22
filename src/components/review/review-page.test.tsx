@@ -132,20 +132,21 @@ describe("review page", () => {
     expect(minutesFigure().querySelectorAll(".review-chart-value")).toHaveLength(1);
     expect(minutesFigure().querySelector(".review-chart-value")!.textContent).toBe("60");
     expect(screen.getByRole("button", { name: "详细" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 })).toBeVisible();
   });
 
   it("switches one chart between minutes and percentage points and lists both in the 详细 table", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     const switcher = screen.getByRole("group", { name: "图表数值" });
-    // 默认看投入，只有分钟。
-    expect(screen.getByText("单位：分钟")).toBeVisible();
+    // 默认看投入，只有分钟；单位放在图的右下角，不再占标题行。
+    expect(minutesFigure().querySelector(".review-chart-unit")).toHaveTextContent("单位：分钟");
+    expect(document.querySelector(".review-charts-tools")!.textContent).not.toContain("单位");
     expect(minutesFigure().textContent).not.toContain("百分点");
 
     await user.click(within(switcher).getByRole("button", { name: "净进度" }));
     // 切成百分点后，同一张图只讲百分点。
-    expect(screen.getByText("单位：百分点")).toBeVisible();
+    expect(minutesFigure().querySelector(".review-chart-unit")).toHaveTextContent("单位：百分点");
     expect(minutesFigure().textContent).not.toContain("分钟");
 
     // 「详细」打开气泡：周视图的表格是四列，投入与百分点并排。
@@ -156,23 +157,26 @@ describe("review page", () => {
     expect(row.textContent).toBe("3月5日");
     expect(row.parentElement!.textContent).toBe("3月5日周四60 分钟+20 百分点");
     // 点页面别处收起。
-    await user.click(screen.getByRole("heading", { name: "本周回顾", level: 1 }));
+    await user.click(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 }));
     expect(document.querySelector(".review-chart-popover")).toBeNull();
   });
 
-  it("puts the zero baseline above the bottom when progress went down and explains it in words", async () => {
+  it("draws the dashed reference line at the average of days that have values", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderPage();
     await user.click(within(screen.getByRole("group", { name: "图表数值" })).getByRole("button", { name: "净进度" }));
-    // 上调 20、下调 30 → 零基线在容器 40% 处，而不是底部。
-    const zero = minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!;
-    expect(zero.style.top).toBe("40%");
+    // 上调 20、下调 30 → 有数值日均 -5。零值在 40% 处，平均值线在 50% 处（不再画零基线）。
+    expect(minutesFigure().querySelector<HTMLElement>(".review-chart-average")!.style.top).toBe("50%");
+    expect(minutesFigure().querySelector(".review-chart-zero")).toBeNull();
     expect(minutesFigure().querySelectorAll(".review-chart-bar.up")).toHaveLength(1);
     expect(minutesFigure().querySelectorAll(".review-chart-bar.down")).toHaveLength(1);
-    expect(within(minutesFigure()).getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
-    // 投入没有负值，零基线就在底部。
+    // 解释性长句已按用户 2026-10-22 的要求移除；方向由柱的正负、颜色与数值表表达。
+    expect(minutesFigure().querySelector(".review-chart-note")).toBeNull();
+    expect(minutesFigure().querySelector(".review-chart-unit")).toHaveTextContent("平均 -5");
+    // 投入只有一天有记录：平均就是那天的 60 分钟，线落在柱顶（0%）。
     await user.click(within(screen.getByRole("group", { name: "图表数值" })).getByRole("button", { name: "实际投入" }));
-    expect(minutesFigure().querySelector<HTMLElement>(".review-chart-zero")!.style.top).toBe("100%");
+    expect(minutesFigure().querySelector<HTMLElement>(".review-chart-average")!.style.top).toBe("0%");
+    expect(minutesFigure().querySelector(".review-chart-unit")).toHaveTextContent("平均 60");
   });
 
   it("opens the month detail as a calendar of days with a minutes/percent switch", async () => {
@@ -294,28 +298,80 @@ describe("review page", () => {
 
     await user.click(header().getByRole("button", { name: "月" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "month" });
-    expect(screen.getByRole("heading", { name: "2026年3月回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "2026年3月", level: 1 })).toBeVisible();
 
     // 日历跳到 2 月：月模式给的是年视图，点「2 月」直接换月。
     await openPicker();
     await user.click(picker().getByRole("button", { name: "2 月" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "month", reviewAnchorDate: "2026-02-01" });
-    expect(screen.getByRole("heading", { name: "2026年2月回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "2026年2月", level: 1 })).toBeVisible();
 
-    // 离开当前周期后出现「回到当前周期」，它把锚点交回给时钟（null）。
-    await user.click(screen.getByRole("button", { name: "回到当前周期" }));
+    // 离开当前周期后出现「回到本月」，它把锚点交回给时钟（null）。
+    await user.click(screen.getByRole("button", { name: "回到本月" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: null });
-    expect(screen.getByRole("heading", { name: "2026年3月回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "2026年3月", level: 1 })).toBeVisible();
 
     await user.click(header().getByRole("button", { name: "日" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "day" });
-    expect(screen.getByRole("heading", { name: "今日回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /3月7日\s*周六/, level: 1 })).toBeVisible();
 
     // 日模式：在月历里点某一天。
     await openPicker();
     await user.click(picker().getByRole("button", { name: "2026 年 3 月 12 日" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "day", reviewAnchorDate: "2026-03-12" });
-    expect(screen.getByRole("heading", { name: "3月12日回顾", level: 1 })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /3月12日\s*周四/, level: 1 })).toBeVisible();
+  });
+
+  it("steps through the period with the arrows and names the way back by day, week and month", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const harness = renderPage();
+    const periodGroup = () => within(screen.getByRole("group", { name: "回顾周期" }));
+
+    // 当前周：标题是日期范围，右侧是安静的状态徽标；没有「回到…」按钮。
+    expect(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 })).toBeVisible();
+    expect(screen.getByText("本周")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /^回到/ })).toBeNull();
+
+    // 下一周：写显式锚点，同一个位置换成「回到本周」。
+    await user.click(screen.getByRole("button", { name: "下一周" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-03-09" });
+    expect(screen.getByRole("heading", { name: "3月9日 — 3月15日", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "回到本周" })).toBeVisible();
+
+    // 「选择日期」里也有同一个动作：不必把鼠标移回页头左侧；点完日历收起。
+    await user.click(document.querySelector<HTMLElement>(".review-picker-trigger")!);
+    const picker = within(document.querySelector<HTMLElement>(".review-picker")!);
+    await user.click(picker.getByRole("button", { name: "回到本周" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: null });
+    expect(document.querySelector(".review-picker")).toBeNull();
+    expect(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 })).toBeVisible();
+
+    // 页头那颗「回到本周」会随状态一起消失：焦点交给页面标题而不是掉到 body。
+    await user.click(screen.getByRole("button", { name: "下一周" }));
+    await user.click(screen.getByRole("button", { name: "回到本周" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: null });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 })));
+
+    // 日：徽标说「今天」，按钮说「回到今日」；箭头按天走。
+    await user.click(periodGroup().getByRole("button", { name: "日" }));
+    expect(screen.getByRole("heading", { name: /3月7日\s*周六/, level: 1 })).toBeVisible();
+    expect(screen.getByText("今天")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "后一天" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-03-08" });
+    expect(screen.getByRole("heading", { name: /3月8日\s*周日/, level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "回到今日" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "前一天" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-03-07" });
+    expect(screen.getByText("今天")).toBeVisible();
+
+    // 月：徽标说「本月」，按钮说「回到本月」；箭头按自然月走。
+    await user.click(periodGroup().getByRole("button", { name: "月" }));
+    expect(screen.getByRole("heading", { name: "2026年3月", level: 1 })).toBeVisible();
+    expect(screen.getByText("本月")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "下个月" }));
+    expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewAnchorDate: "2026-04-01" });
+    expect(screen.getByRole("heading", { name: "2026年4月", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "回到本月" })).toBeVisible();
   });
 
   it("keeps the calendar on the month grid for weeks and highlights the whole row", async () => {
@@ -326,8 +382,9 @@ describe("review page", () => {
     // 周模式仍然是月历，但每一行是一整条可点的横条。
     expect(picker.querySelector(".review-picker-grid.is-week")).not.toBeNull();
     expect(picker.querySelectorAll(".review-picker-week")).toHaveLength(6);
-    // 当前周那一条有标记。
+    // 当前周那一条有标记；已经在当前周期时底部不出现「回到本周」。
     expect(picker.querySelectorAll(".review-picker-week.is-current")).toHaveLength(1);
+    expect(picker.querySelector(".review-picker-foot")).toBeNull();
     // 点的是整条横条，落点取那一周的周一。
     await user.click(within(picker).getByRole("button", { name: "2026 年 3 月 9 日 那一周" }));
     expect(harness.onPreferences).toHaveBeenLastCalledWith({ reviewPeriod: "week", reviewAnchorDate: "2026-03-09" });
@@ -471,7 +528,7 @@ describe("review page", () => {
     fireEvent.keyDown(document.querySelector<HTMLElement>(".review-detail")!, { key: "Escape" });
     expect(document.querySelector(".review-detail")).toBeNull();
     // 没有任何入口可还焦点时退到页面标题，不掉到 body。
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "本周回顾", level: 1 })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "3月2日 — 3月8日", level: 1 })));
   });
 
   it("tells a date outside the current period apart from a missing project", () => {

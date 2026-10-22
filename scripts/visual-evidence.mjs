@@ -491,7 +491,7 @@ function scenarios(port) {
       name: "review-day",
       seed: { port, clock, preferences: preference({ lastPage: "review" }), workspace: reviewWorkspace() },
       act: async (page) => {
-        await page.getByRole("heading", { name: "本周回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
         await page.getByRole("group", { name: "回顾周期" }).getByRole("button", { name: "日" }).click();
         // 日视图自 P4-08 之后不再有 `.review-charts`（投入去向与任务明细合成一张合并卡），
         // P4-15 又把那张合并卡拆掉、把圆环收进 `.review-tasks` —— 等 `.review-tasks`，
@@ -503,7 +503,7 @@ function scenarios(port) {
       name: "review-week",
       seed: { port, clock, preferences: preference({ lastPage: "review" }), workspace: reviewWorkspace() },
       act: async (page) => {
-        await page.getByRole("heading", { name: "本周回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
         await page.locator(".review-charts").waitFor();
       },
     },
@@ -511,9 +511,9 @@ function scenarios(port) {
       name: "review-month",
       seed: { port, clock, preferences: preference({ lastPage: "review" }), workspace: reviewWorkspace() },
       act: async (page) => {
-        await page.getByRole("heading", { name: "本周回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
         await page.getByRole("group", { name: "回顾周期" }).getByRole("button", { name: "月" }).click();
-        await page.getByRole("heading", { name: "2026年8月回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "2026年8月", level: 1 }).waitFor();
       },
     },
     {
@@ -589,9 +589,9 @@ function scenarios(port) {
         workspace: reviewWorkspace(),
       },
       act: async (page) => {
-        await page.getByRole("heading", { name: "本周回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
         await page.getByRole("group", { name: "回顾周期" }).getByRole("button", { name: "月" }).click();
-        await page.getByRole("heading", { name: "2026年8月回顾", level: 1 }).waitFor();
+        await page.getByRole("heading", { name: "2026年8月", level: 1 }).waitFor();
       },
     })),
     // P4-12：实际记录叠加层的改前／改后对照。开启「显示实际记录」，浅／深各一张全页 +

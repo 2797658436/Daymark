@@ -516,6 +516,11 @@ fn show_reminder(
     Ok(())
 }
 
+/// 开机自启时 autostart 插件会把 `--autostart` 追加到命令行；只有这种启动才静默到托盘。
+fn launched_from_autostart(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|argument| argument == "--autostart")
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -672,6 +677,13 @@ fn snapshot_with_expired_outcomes(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 开机自启动：Windows 写 HKCU\...\Run，启动时追加 --autostart，让应用静默到托盘。
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("Daymark")
+                .arg("--autostart")
+                .build(),
+        )
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -695,6 +707,12 @@ pub fn run() {
                     .map_err(|_| std::io::Error::other("无法记录自动备份失败状态"))? = Some(error);
             }
             app.manage(state);
+            // 开机自启时静默启动到托盘：登录系统后不抢焦点、不弹出主窗口；手动启动仍照常显示。
+            if launched_from_autostart(std::env::args()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
             let show = MenuItem::with_id(app, "show", "显示 Daymark", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -794,6 +812,16 @@ mod phase2_tests {
         let config: serde_json::Value = serde_json::from_str(&raw).expect("tauri.conf.json 应是合法 JSON");
         let windows = config["app"]["windows"].as_array().expect("app.windows 应是数组");
         assert_eq!(windows.first().expect("至少一个窗口")["dragDropEnabled"], serde_json::Value::Bool(false));
+    }
+
+    /// 开机自启只在带 `--autostart` 时静默到托盘；手动启动必须仍然显示主窗口。
+    #[test]
+    fn autostart_launch_is_recognised_by_its_argument() {
+        assert!(launched_from_autostart(vec![
+            "Daymark.exe".to_string(),
+            "--autostart".to_string()
+        ]));
+        assert!(!launched_from_autostart(vec!["Daymark.exe".to_string()]));
     }
 
     #[test]

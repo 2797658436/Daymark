@@ -46,6 +46,17 @@ describe("browser preview project constraints", () => {
     expect((await api.deleteProjectMilestone("milestone-1")).projectMilestones).toEqual([]);
   });
 
+  it("keeps the browser-preview autostart flag out of the workspace snapshot", async () => {
+    const api = createNativeApi();
+    expect(await api.isAutostartEnabled()).toBe(false);
+    await api.setAutostartEnabled(true);
+    expect(await api.isAutostartEnabled()).toBe(true);
+    // 只写独立的预览键，不污染工作区快照。
+    expect(localStorage.getItem("daymark.phase1.workspace")).toBeNull();
+    await api.setAutostartEnabled(false);
+    expect(await api.isAutostartEnabled()).toBe(false);
+  });
+
   it("rejects an ordered-task milestone whose task belongs elsewhere", async () => {
     localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
       projects: [{ id: "project-1", title: "项目一" }, { id: "project-2", title: "项目二" }],

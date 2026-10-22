@@ -226,6 +226,10 @@ export interface ReviewResult {
 }
 
 export const REVIEW_PERIOD_LABEL: Record<ReviewPeriod, string> = { day: "日", week: "周", month: "月" };
+/** 当前周期徽标与「回到当前周期」的文案：日／周／月各自用「今日／本周／本月」。
+ *  页头与「选择日期」里的日历共用一份，避免两处各写一套说法。 */
+export const REVIEW_CURRENT_LABEL: Record<ReviewPeriod, string> = { day: "今天", week: "本周", month: "本月" };
+export const REVIEW_BACK_LABEL: Record<ReviewPeriod, string> = { day: "回到今日", week: "回到本周", month: "回到本月" };
 
 /** 周期覆盖的本地日期范围；周为周一至周日，月为自然月。 */
 export function reviewRange(period: ReviewPeriod, anchorDate: string): { startDate: string; endDate: string } {

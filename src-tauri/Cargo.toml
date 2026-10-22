@@ -1,6 +1,6 @@
 [package]
 name = "daymark"
-version = "0.1.8"
+version = "0.1.11"
 description = "Daymark local-first planning desktop app"
 authors = ["Daymark contributors"]
 edition = "2024"
@@ -32,6 +32,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = ["tray-icon"] }
+# 开机自启动。**钉在 2.5.x**：2.6+ 要求 Tauri ≥2.12，会把 tauri／wry 整条原生依赖从 2.11.5
+# 抬上去；升级插件时要单独评估原生依赖链，不要顺手改成 "2"。JS 侧同样停在 2.5.1。
+tauri-plugin-autostart = "~2.5.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-store = "2"

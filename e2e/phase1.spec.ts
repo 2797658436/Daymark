@@ -129,7 +129,7 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await page.reload();
   await expect(page.getByText("拉伸", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "回顾", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "本周回顾" })).toBeVisible();
+  await expect(page.locator("#review-title")).toContainText("—");
 });
 
 test("running execution ends with a manual progress summary and remains after reload", async ({ page }) => {
@@ -985,7 +985,7 @@ async function seedReview(page: import("@playwright/test").Page) {
     localStorage.setItem("daymark.phase1.workspace", JSON.stringify(workspace));
   }, reviewWorkspace());
   await page.reload();
-  await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
 }
 
 /** 周视图的等价数值表在「详细」气泡里：先点开对应那张图的按钮。 */
@@ -1014,6 +1014,16 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect(page.locator('[data-review-stat="actual"]')).toContainText("60 分钟");
   await expect(page.locator('[data-review-stat="progress"]')).toContainText("-10 净进度");
 
+  // 页头箭头：下一周写显式锚点，回到本周把锚点交回时钟。
+  await page.getByRole("button", { name: "下一周" }).click();
+  await expect(page.getByRole("heading", { name: "8月10日 — 8月16日", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "week", reviewAnchorDate: "2026-08-10" });
+  await page.getByRole("button", { name: "回到本周" }).click();
+  await expect(page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewAnchorDate: null });
+  // 「回到本周」按钮随即被徽标替换：焦点交给页面标题，不会掉到 body。
+  await expect(page.locator("#review-title")).toBeFocused();
+
   // ① 汇总能被 ② 的等价数值表核对：周视图的四列表格同时给出投入与百分点。
   await openWeeklyTable(page, 0);
   await expect(chartCell(page, "2026-08-04", 1)).toHaveText("60 分钟");
@@ -1021,10 +1031,12 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   await expect(chartCell(page, "2026-08-04", 2)).toHaveText("+20 百分点");
   await expect(chartCell(page, "2026-08-05", 2)).toHaveText("-30 百分点");
   await closeWeeklyTable(page);
-  // 切成净进度：零基线不在底部，并且有文字说明，不用正向热度暗示。
+  // 切成净进度：虚线是「有数值日均 -5」而不是零基线，不用正向热度暗示；单位与平均值在图的右下角。
   await page.locator(".review-metric-switch").getByRole("button", { name: "净进度" }).click();
-  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-zero")).toHaveAttribute("style", /top: 40%/);
-  await expect(page.getByText(/零基线以上是上调，以下是下调/)).toBeVisible();
+  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-average")).toHaveAttribute("style", /top: 50%/);
+  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-zero")).toHaveCount(0);
+  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-unit")).toContainText("单位：百分点 · 平均 -5");
+  await expect(page.locator(".review-chart-figure").first().locator(".review-chart-note")).toHaveCount(0);
   await page.locator(".review-metric-switch").getByRole("button", { name: "实际投入" }).click();
 
   // ③ 明细与 ② 一致；没有事件的时段任务显示「本周期无进度记录，当前 N%」，不冒充历史。
@@ -1040,12 +1052,12 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
 
   // 日视图：就是那一天。
   await page.getByRole("button", { name: "日", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "今日回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /8月5日\s*周三/, level: 1 })).toBeVisible();
   await expect.poll(storedReview).toMatchObject({ reviewPeriod: "day" });
 
   // 月视图：自然月，日期概览覆盖整月。
   await page.getByRole("button", { name: "月", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2026年8月", level: 1 })).toBeVisible();
   // 月视图的等价数值物是「详细」气泡里的月历：31 天一个不少，点开才出现。
   await expect(page.locator(".review-chart-figure").first().locator("[data-chart-row]")).toHaveCount(0);
   await page.getByRole("button", { name: "详细" }).first().click();
@@ -1056,15 +1068,28 @@ test("phase 4 M11 keeps day, week and month summaries checkable against their de
   // 在日历里跳到上个月：写锚点，重启后仍然是同一个月。
   await page.getByRole("button", { name: "选择日期" }).click();
   await page.locator(".review-picker").getByRole("button", { name: "7 月" }).click();
-  await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2026年7月", level: 1 })).toBeVisible();
   await expect.poll(storedReview).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-01" });
   await page.reload();
-  await expect(page.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2026年7月", level: 1 })).toBeVisible();
   await expect(page.getByRole("button", { name: "月", exact: true })).toHaveAttribute("aria-pressed", "true");
 
-  // 「回到当前周期」把锚点交回给时钟。
-  await page.getByRole("button", { name: "回到当前周期" }).click();
-  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  // 「选择日期」的日历底部也能回到当前周期，不必把鼠标移回页头左侧；点完日历收起。
+  await page.getByRole("button", { name: "选择日期" }).click();
+  const pickerFooter = page.locator(".review-picker .review-picker-foot");
+  await expect(pickerFooter.getByRole("button", { name: "回到本月" })).toBeVisible();
+  await pickerFooter.getByRole("button", { name: "回到本月" }).click();
+  await expect(page.getByRole("heading", { name: "2026年8月", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewAnchorDate: null });
+  await expect(page.locator(".review-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "选择日期" })).toBeFocused();
+
+  // 月视图的箭头同样写锚点：离开当前月后才出现「回到本月」。
+  await page.getByRole("button", { name: "下个月" }).click();
+  await expect(page.getByRole("heading", { name: "2026年9月", level: 1 })).toBeVisible();
+  await expect.poll(storedReview).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-09-01" });
+  await page.getByRole("button", { name: "回到本月" }).click();
+  await expect(page.getByRole("heading", { name: "2026年8月", level: 1 })).toBeVisible();
   await expect.poll(storedReview).toMatchObject({ reviewAnchorDate: null });
 });
 
@@ -1073,7 +1098,7 @@ test("phase 4 M11 opens the detail as a bubble under the trigger and closes it o
   const main = page.locator("#main-content");
   // 月视图的数值表足够长，滚动位置才有意义。
   await page.getByRole("button", { name: "月", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "2026年8月", level: 1 })).toBeVisible();
   // 月视图的等价数值表在「详细」气泡的月历里，先点开才能从日期下钻。
   const detailButton = page.getByRole("button", { name: "详细" }).first();
   await detailButton.click();
@@ -1116,7 +1141,7 @@ test("phase 4 M11 review page has no automated accessibility violations in light
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("slider", { name: "界面缩放" }).fill("200");
   await page.getByRole("button", { name: "回顾", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
 
   await page.addScriptTag({ path: path.join(process.cwd(), "node_modules", "axe-core", "axe.min.js") });
   const light = await page.evaluate(async () => (await (window as typeof window & { axe: { run(): Promise<{ violations: unknown[] }> } }).axe.run()).violations);
@@ -1187,10 +1212,10 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
 
       // 回顾页：周期切换、图表等价数值表、下钻开关都要能走完，且不横向溢出。
       await sidebar(page).getByRole("button", { name: "回顾", exact: true }).click();
-      await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
       expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth), cell).toBeLessThanOrEqual(2);
       await page.getByRole("button", { name: "月", exact: true }).click();
-      await expect(page.getByRole("heading", { name: "2026年8月回顾", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "2026年8月", level: 1 })).toBeVisible();
       // 月视图的等价数值物是「详细」气泡里的月历，点开后才可下钻。
       await page.getByRole("button", { name: "详细" }).first().click();
       await expect(page.locator(".review-calendar-grid")).toBeVisible();
@@ -1199,7 +1224,7 @@ test("phase 4 M12 keeps every core path completable across the scaling matrix", 
       await page.keyboard.press("Escape");
       await expect(page.locator(".review-detail")).toHaveCount(0);
       await page.getByRole("button", { name: "周", exact: true }).click();
-      await expect(page.getByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
 
       // 截止页：筛选组与行级入口在缩放下仍然可操作。
       await sidebar(page).getByRole("button", { name: "截止", exact: true }).click();

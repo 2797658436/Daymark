@@ -480,7 +480,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
           onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }} />}
         {page === "data" && <DataPage native={native} />}
-        {page === "appearance" && <SettingsPage preferences={preferences} onChange={updatePreferences} />}
+        {page === "appearance" && <SettingsPage preferences={preferences} onChange={updatePreferences} native={native} />}
         {hasTaskPool && !showTaskPool && <button className="task-pool-toggle" aria-label="打开任务池" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(true) : setTaskPoolOpen(true)}><Inbox size={18} /><span>任务池</span></button>}
       </main>
 
@@ -1954,8 +1954,32 @@ const MOTION_OPTIONS: Array<{ value: AppSettings["motion"]; label: string }> = [
 const [CHECK_IN_GRACE_MIN, CHECK_IN_GRACE_MAX] = CHECK_IN_GRACE_MINUTES_RANGE;
 const [MINIMUM_SESSION_MIN, MINIMUM_SESSION_MAX] = MINIMUM_SESSION_MINUTES_RANGE;
 
-function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onChange: (patch: Partial<AppSettings>) => void }) {
+function SettingsPage({ preferences, onChange, native }: { preferences: AppSettings; onChange: (patch: Partial<AppSettings>) => void; native: NativeApi }) {
   const slots = preferences.defaultTimeSlots;
+  // 开机自启动是**系统状态**（Windows 注册表），不写进 AppSettings：用户可能在任务管理器里
+  // 改过它，界面必须以系统为准，而不是以一份可能过期的偏好镜像为准。
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    native.isAutostartEnabled()
+      .then((enabled) => { if (!cancelled) setAutostart(enabled); })
+      .catch(() => { if (!cancelled) setAutostartError("无法读取系统里的开机自启动状态。"); });
+    return () => { cancelled = true; };
+  }, [native]);
+  const toggleAutostart = async (enabled: boolean) => {
+    setAutostartBusy(true);
+    setAutostartError(null);
+    try {
+      await native.setAutostartEnabled(enabled);
+      setAutostart(enabled);
+    } catch {
+      setAutostartError(enabled ? "开启开机自启动失败，请检查系统权限后重试。" : "关闭开机自启动失败，请重试。");
+    } finally {
+      setAutostartBusy(false);
+    }
+  };
   const [slotDraft, setSlotDraft] = useState<DefaultTimeSlot | null>(null);
   // 提交态由 DefaultTimeSlotEditor 上报；偏好写入失败仍由侧栏的「未保存／重试」负责。
   const [slotBusy, setSlotBusy] = useState(false);
@@ -1988,6 +2012,11 @@ function SettingsPage({ preferences, onChange }: { preferences: AppSettings; onC
       <SettingsRow label="提前分钟数" note="在执行时段开始前多久发出提醒。" htmlFor="settings-lead" dependent muted={!preferences.remindersEnabled} modified={changed("reminderLeadMinutes")} onReset={() => onChange({ reminderLeadMinutes: DEFAULT_SETTINGS.reminderLeadMinutes })}>
         <NumberField id="settings-lead" label="提前分钟数" suffix="分钟" min={0} max={120} step={5} disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(value) => { if (value !== null) onChange({ reminderLeadMinutes: value }); }} />
       </SettingsRow>
+      <SettingsToggleRow label="开机自启动" note={autostart === null ? "正在读取系统设置…" : "登录 Windows 后自动启动 Daymark，并留在托盘，不主动弹出主窗口。"}
+        checked={autostart === true} disabled={autostart === null || autostartBusy} modified={autostart === true}
+        onReset={autostart === true && !autostartBusy ? () => void toggleAutostart(false) : undefined}
+        onChange={(enabled) => void toggleAutostart(enabled)} />
+      {autostartError && <p className="error-message" role="alert"><CircleAlert aria-hidden="true" />{autostartError}</p>}
       <SettingsRow label="启动摘要" note="应用启动后汇总临近与逾期任务。" htmlFor="settings-startup" modified={changed("startupSummary")} onReset={() => onChange({ startupSummary: DEFAULT_SETTINGS.startupSummary })}>
         <SelectField id="settings-startup" value={preferences.startupSummary} onChange={(value) => onChange({ startupSummary: value as AppSettings["startupSummary"] })} options={[{ value: "never", label: "从不提醒" }, { value: "daily", label: "每天首次启动" }, { value: "everyLaunch", label: "每次启动" }]} />
       </SettingsRow>

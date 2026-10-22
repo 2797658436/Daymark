@@ -64,6 +64,8 @@ function createNativeApi(initial: WorkspaceSnapshot = structuredClone(EMPTY_WORK
     })),
     applyProgress: vi.fn((event) => write({ ...state, tasks: state.tasks.map((task) => task.id === event.taskId ? { ...task, progress: event.toProgress } : task), progressEvents: [...state.progressEvents, event] })),
     showReminder: vi.fn().mockResolvedValue(undefined),
+    isAutostartEnabled: vi.fn().mockResolvedValue(false),
+    setAutostartEnabled: vi.fn().mockResolvedValue(undefined),
     getDataOverview: vi.fn(async () => ({ schemaVersion: 5, databasePath: "C:\\Daymark\\daymark.db", backupDirectory: "C:\\Daymark\\backups", backupError: null, counts: { projects: state.projects.length, tasks: state.tasks.length, executionSessions: state.executionSessions.length, executionRecords: state.executionRecords.length, progressEvents: state.progressEvents.length, timeBlocks: state.timeBlocks.length }, backups: [] })),
     createDailyBackup: vi.fn().mockResolvedValue({ path: "C:\\Daymark\\backups\\daymark.db", kind: "daily" } satisfies BackupInfo),
     createManualBackup: vi.fn().mockResolvedValue(null), chooseRestoreSource: vi.fn().mockResolvedValue(null),
@@ -1205,6 +1207,45 @@ describe("phase 1 manual alpha", () => {
   });
 
   /**
+   * 开机自启动是**系统级开关**：写系统状态（Windows 注册表）而不是 AppSettings，
+   * 读取期间不可操作；写入失败时开关留在原状态并给出提示。
+   */
+  it("toggles launch at startup through the native bridge and reports write failures", async () => {
+    const user = userEvent.setup();
+    const native = createNativeApi();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    const toggle = await screen.findByRole("checkbox", { name: "开机自启动" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+
+    await user.click(toggle);
+    expect(vi.mocked(native.setAutostartEnabled)).toHaveBeenLastCalledWith(true);
+    await waitFor(() => expect(toggle).toBeChecked());
+
+    await user.click(toggle);
+    expect(vi.mocked(native.setAutostartEnabled)).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+
+  it("keeps the startup switch off and shows a message when the system write fails", async () => {
+    const user = userEvent.setup();
+    const native = createNativeApi(structuredClone(EMPTY_WORKSPACE), {
+      setAutostartEnabled: vi.fn().mockRejectedValue(new Error("拒绝访问")),
+    });
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    const toggle = await screen.findByRole("checkbox", { name: "开机自启动" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.click(toggle);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("开启开机自启动失败");
+    expect(toggle).not.toBeChecked();
+  });
+
+  /**
    * 开始宽限期与最低有效时长从固定档位下拉框改成分钟输入框：保留常用值快捷按钮，
    * 但允许直接键入任意区间内的整数分钟。输入在失焦时提交，和既有的分钟输入控件一致。
    */
@@ -2046,7 +2087,7 @@ describe("phase 4 P4-06 deadline view", () => {
     ["calendar", "日历", "日历"],
     ["deadlines", "截止", "截止事项"],
     ["projects", "项目", "项目"],
-    ["review", "回顾", "本周回顾"],
+    ["review", "回顾", "8月3日 — 8月9日"],
     ["data", "数据", "数据与安全"],
     ["appearance", "设置", "设置"],
   ];
@@ -2191,18 +2232,18 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
     const first = render(<App settings={new SettingsRepository(backend)} native={createNativeApi(reviewScenario())} />);
     try {
       // 锚点为 null 时按「当前周期」计算：默认停在当前周。
-      expect(await screen.findByRole("heading", { name: "本周回顾", level: 1 })).toBeVisible();
+      expect(await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 })).toBeVisible();
 
       await user.click(screen.getByRole("button", { name: "月" }));
       // 不再用左右箭头：点「选择日期」在日历里跳到上个月。
       await user.click(screen.getByRole("button", { name: "选择日期" }));
       await user.click(within(document.querySelector<HTMLElement>(".review-picker")!).getByRole("button", { name: "7 月" }));
       await waitFor(() => expect(backend.value).toMatchObject({ reviewPeriod: "month", reviewAnchorDate: "2026-07-01" }));
-      expect(screen.getByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "2026年7月", level: 1 })).toBeVisible();
 
       first.unmount();
       render(<App settings={new SettingsRepository(backend)} native={createNativeApi(reviewScenario())} />);
-      expect(await screen.findByRole("heading", { name: "2026年7月回顾", level: 1 })).toBeVisible();
+      expect(await screen.findByRole("heading", { name: "2026年7月", level: 1 })).toBeVisible();
       expect(screen.getByRole("button", { name: "月" })).toHaveAttribute("aria-pressed", "true");
     } finally {
       vi.useRealTimers();
@@ -2219,7 +2260,7 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
     const first = render(<App settings={new SettingsRepository(backend)} native={native} />);
     const navigation = () => within(screen.getByRole("navigation", { name: "主导航" }));
     try {
-      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 });
       // 项目下钻：明细区先看项目，再把它设成引擎查询的一部分。
       // 项目名下钻现在有两个入口（圆环图例、项目卡头），点卡头那一个。
       await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学习项目」的明细" }));
@@ -2238,14 +2279,14 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
       await screen.findByRole("heading", { name: "项目", level: 1 });
       expect(document.querySelector(".review-detail")).toBeNull();
       await user.click(navigation().getByRole("button", { name: "回顾" }));
-      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 });
       expect(screen.getByText("仅统计项目：学习项目")).toBeVisible();
       expect(document.querySelector(".review-detail")).toBeNull();
 
       // 重启（整页重载）后不恢复：项目筛选与明细选择只活在 App 层内存里。
       first.unmount();
       render(<App settings={new SettingsRepository(backend)} native={native} />);
-      await screen.findByRole("heading", { name: "本周回顾", level: 1 });
+      await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 });
       expect(screen.queryByText("仅统计项目：学习项目")).toBeNull();
       expect(document.querySelector(".review-detail")).toBeNull();
     } finally {

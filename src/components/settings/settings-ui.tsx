@@ -71,6 +71,8 @@ interface SettingsToggleRowProps extends ResetProps {
   checked: boolean;
   dependent?: boolean;
   muted?: boolean;
+  /** 系统级开关在读取/写入真实状态期间不可操作，避免界面先勾上又弹回去。 */
+  disabled?: boolean;
   onChange: (checked: boolean) => void;
 }
 
@@ -78,7 +80,7 @@ interface SettingsToggleRowProps extends ResetProps {
  * 开关行。标题用 `<label htmlFor>` 与开关关联，**不用整行 `<label>` 包住** ——
  * 否则重置按钮会变成 label 的后代，点它等于点开关。
  */
-export function SettingsToggleRow({ label, note, checked, dependent, muted, modified, onReset, onChange }: SettingsToggleRowProps) {
+export function SettingsToggleRow({ label, note, checked, dependent, muted, disabled, modified, onReset, onChange }: SettingsToggleRowProps) {
   const id = useId();
   return (
     <div className={rowClass(dependent, muted)}>
@@ -87,7 +89,7 @@ export function SettingsToggleRow({ label, note, checked, dependent, muted, modi
         {note ? <small>{note}</small> : null}
       </span>
       <div className="settings-control">
-        <input id={id} type="checkbox" className="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+        <input id={id} type="checkbox" className="switch" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
         {onReset ? <SettingsReset label={label} modified={Boolean(modified)} onReset={onReset} /> : null}
       </div>
     </div>

@@ -12,8 +12,9 @@ import { useOverlayLayer } from "../ui/overlay-host";
  *
  * 1. **一张图只有一个单位**：投入图只用分钟，进度图只用百分点。两个量纲不混进同一张图 ——
  *    混起来会把「投入了 60 分钟」读成「推进了 60 个百分点」。
- * 2. **零基线**：进度变化可能为负（下调），零基线以上是上调、以下是下调，并且带一句
- *    文字说明。**不用「越深越好」的色阶**：下调是事实，不是失败，也不代表热度。
+ * 2. **平均参考线**（2026-10-22 起）：虚线画「有数值日的平均」，不再画零基线；柱子的
+ *    起算位置仍是 0，方向由柱的正负、颜色与等价数值表表达。**不用「越深越好」的色阶**：
+ *    下调是事实，不是失败，也不代表热度；平均值只作比较参考，不参与任何统计口径。
  * 3. **等价数值表**：每张图都带一张数值表，悬停只是增强而不是唯一入口。
  *
  * 只用 CSS 画（规格 §9／§12：本阶段不新增依赖），没有图表库；图表本身对辅助技术
@@ -78,10 +79,8 @@ export interface ReviewChartProps {
   /** 单位：投入图「分钟」，进度图「百分点」。 */
   unit: string;
   rows: ReviewChartRow[];
-  /** 是否含可正可负的值（进度图）。非负图不需要零基线说明。 */
+  /** 是否含可正可负的值（进度图）：决定正负号显示与「详细」月历的默认口径。 */
   signed?: boolean;
-  /** 有符号图的零基线文字说明。 */
-  baselineNote?: string;
   /** 全周期为零时的文字：空周期不绘制全零图表。 */
   emptyText: string;
   /** 提供时，「详细」气泡改用它：周视图要同时看日期、星期、投入与百分点。 */
@@ -143,14 +142,26 @@ function usePairCount(rowCount: number) {
   return { ref, pairs };
 }
 
-export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText, splitDetail, monthGrid, onOpenDate, expanded, onExpand, detailOpen, onDetailOpen, detailAnchor }: ReviewChartProps) {
+export function ReviewChart({ title, unit, rows, signed, emptyText, splitDetail, monthGrid, onOpenDate, expanded, onExpand, detailOpen, onDetailOpen, detailAnchor }: ReviewChartProps) {
   // 全零不画图：没有事实时画一排零柱会把「未记录」误读成「做了但没推进」。
   const hasValues = rows.some((row) => row.value !== 0);
   const maxUp = Math.max(0, ...rows.map((row) => row.value));
   const maxDown = Math.max(0, ...rows.map((row) => -row.value));
   const span = maxUp + maxDown;
-  // 零基线在容器里的位置（从顶往下算）。非负图的零基线落在底部，有负值时上移。
+  // 零值在容器里的位置（从顶往下算）：柱子的锚点。非负图在底部，有负值时上移。
+  // 它不再画成虚线（2026-10-22 起虚线改成平均参考线），但柱子的起算位置仍是 0。
   const zeroPercent = span === 0 ? 100 : (maxUp / span) * 100;
+  // 平均参考线：有数值的日期的平均值。零值代表「未记录／没有变化」，按项目原则不把
+  // 未记录当成 0 参与平均，否则稀疏周期的平均线会贴到底部、失去「哪天多／少」的意义。
+  const activeValues = rows.map((row) => row.value).filter((value) => value !== 0);
+  const averageValue = activeValues.length > 0 ? activeValues.reduce((sum, value) => sum + value, 0) / activeValues.length : null;
+  const valuePercent = (value: number) => {
+    if (value > 0) return zeroPercent - (value / maxUp) * zeroPercent;
+    if (value < 0) return zeroPercent + (-value / maxDown) * (100 - zeroPercent);
+    return zeroPercent;
+  };
+  const averagePercent = averageValue === null ? null : valuePercent(averageValue);
+  const averageLabel = averageValue === null ? null : `${signed && Math.round(averageValue) > 0 ? "+" : ""}${Math.round(averageValue)}`;
   const { ref, pairs } = usePairCount(rows.length);
   const single = rows.length === 1;
   // 周／月的数值表都折进「详细」气泡：周是四列表、月是月历（2026-10-20 去掉月视图的折叠表）。
@@ -162,7 +173,7 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     return { bottom: `${100 - zeroPercent}%`, height: "2px" };
   };
   const barClass = (value: number) => `review-chart-bar ${value > 0 ? "up" : value < 0 ? "down" : "flat"}`;
-  /** 柱顶常驻数值：正数贴在柱顶上方，零值贴零基线，负数贴零基线下方（柱子的起点）。
+  /** 柱顶常驻数值：正数贴在柱顶上方，零值贴在 0 高度，负数贴在 0 高度下方（柱子的起点）。
    *  未记录与未来都显示 0 —— 图上的高度本来就是 0，写 0 比留白更好核对；「未记录」这层
    *  语义仍由悬停气泡与等价数值表承担，不在图上改写事实。 */
   const valueLabel = (value: number) => {
@@ -175,7 +186,7 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     if (value < 0) return { top: `calc(${zeroPercent}% + 3px)` };
     return { bottom: `calc(${100 - zeroPercent}% + 3px)` };
   };
-  /** 气泡挂在柱顶：底部位置 = 柱底 + 柱高。0 值挂在零基线上。 */
+  /** 气泡挂在柱顶：底部位置 = 柱底 + 柱高。0 值挂在 0 高度上。 */
   const tipStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent + (value / maxUp) * zeroPercent}%` };
     if (value < 0) return { top: `${zeroPercent}%` };
@@ -234,13 +245,18 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
 
   const plot = !single && <div className="review-chart" aria-hidden="true">
     <div className="review-chart-plot">
-      <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
-      {rows.map((row, index) => <div className={`review-chart-column${row.isToday ? " is-today" : ""}${row.isFuture ? " is-future" : ""}`} key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
-        <span className={barClass(row.value)} style={barStyle(row.value)} />
-        {row.value !== 0 && <span className="review-chart-value" style={valueLabelStyle(row.value)}>{valueLabel(row.value)}</span>}
-        {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
-        <span className={`review-chart-tip${index < tipEdge ? " is-start" : index >= rows.length - tipEdge ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
-      </div>)}
+      {/* 画布是「柱子的坐标系」：高度 = 去掉 34px 气泡留白后的内容高度。平均线必须放进
+          这一层，top 的百分比才与柱子的 bottom 百分比同源（直接挂在带 padding 的 plot 上，
+          百分比会按 padding box 计算，线会整体偏高约 19px —— 2026-10-22 实测）。 */}
+      <div className="review-chart-canvas">
+        {averagePercent !== null && <span className="review-chart-average" style={{ top: `${averagePercent}%` }} />}
+        {rows.map((row, index) => <div className={`review-chart-column${row.isToday ? " is-today" : ""}${row.isFuture ? " is-future" : ""}`} key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+          <span className={barClass(row.value)} style={barStyle(row.value)} />
+          {row.value !== 0 && <span className="review-chart-value" style={valueLabelStyle(row.value)}>{valueLabel(row.value)}</span>}
+          {/* 边缘几列的气泡贴边对齐，否则居中会让气泡越出卡片、把 #main-content 撑出横向滚动。 */}
+          <span className={`review-chart-tip${index < tipEdge ? " is-start" : index >= rows.length - tipEdge ? " is-end" : ""}`} style={tipStyle(row.value)}>{row.fullLabel} · {row.label}</span>
+        </div>)}
+      </div>
     </div>
     <div className="review-chart-ticks">{rows.map((row) => <span key={row.date} className={row.isToday ? "is-today" : undefined}>
       <span className="is-long">{row.tick}</span>
@@ -256,8 +272,12 @@ export function ReviewChart({ title, unit, rows, signed, baselineNote, emptyText
     style={{ "--chart-columns": rows.length } as CSSProperties}>
     {hasValues ? <>{plot}{slot}</> : <p className="review-chart-empty">{emptyText}</p>}
 
-    {/* 单日没有零基线可比，这句说明只会变成噪音；正负号本身已经表达了方向。 */}
-    {signed && hasValues && baselineNote && !single && <p className="review-chart-note">{baselineNote}</p>}
+    {/* 单位放到图的右下角（2026-10-22 用户要求）：标题行只留切换与按钮，不再被单位挤到换行。
+        没有图（全零）时不显示单位：此时这句话没有可解释的对象。平均值跟在单位后面，
+        让「虚线是什么」不用再写一句解释；悬停可看到平均按几天计算。 */}
+    {hasValues && <p className="review-chart-unit" title={averageValue === null ? undefined : `按本周期有数值的 ${activeValues.length} 天平均`}>
+      单位：{unit}{averageLabel !== null && <> · 平均 {averageLabel}</>}
+    </p>}
 
     {/* 周视图的数值表：「详细」按钮打开气泡，表格仍然是可键盘到达的等价物。 */}
     {detailOpen && <FloatingPanel kind="action" label={monthGrid ? "按日期查看数值" : `${title}每日数值`} anchorElement={detailAnchor.current} closeOnOutsideClick
@@ -378,6 +398,14 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
   }, [onClose]);
 
   const drag = useRef<{ x: number; left: number } | null>(null);
+  // 与页内图一致：虚线是「有数值日平均」，不再画零基线。
+  const activeValues = rows.map((row) => row.value).filter((value) => value !== 0);
+  const averageValue = activeValues.length > 0 ? activeValues.reduce((sum, value) => sum + value, 0) / activeValues.length : null;
+  const averagePercent = averageValue === null ? null
+    : averageValue > 0 ? zeroPercent - (averageValue / maxUp) * zeroPercent
+      : averageValue < 0 ? zeroPercent + (-averageValue / maxDown) * (100 - zeroPercent)
+        : zeroPercent;
+  const averageLabel = averageValue === null ? null : `${signed && Math.round(averageValue) > 0 ? "+" : ""}${Math.round(averageValue)}`;
   const barStyle = (value: number): CSSProperties => {
     if (value > 0) return { bottom: `${100 - zeroPercent}%`, height: `${(value / maxUp) * zeroPercent}%` };
     if (value < 0) return { top: `${zeroPercent}%`, height: `${(-value / maxDown) * (100 - zeroPercent)}%` };
@@ -400,7 +428,7 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
   return createPortal(<div className="chart-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="chart-modal" style={{ width: modalWidth }} role="dialog" aria-modal="true" aria-labelledby={headingId}>
       <header>
-        <div><h2 id={headingId}>{title}</h2><span>单位：{unit}</span></div>
+        <div><h2 id={headingId}>{title}</h2><span>单位：{unit}{averageLabel !== null && ` · 平均 ${averageLabel}`}</span></div>
         <button type="button" className="chart-modal-close" aria-label="关闭放大的图表" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="chart-modal-scroll" ref={scroller} tabIndex={0} role="group" aria-label={`${title}图表，可左右滚动`}
@@ -409,13 +437,15 @@ function ExpandedChart({ title, unit, rows, signed, zeroPercent, maxUp, maxDown,
         onPointerUp={(event) => { drag.current = null; if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
         onPointerCancel={() => { drag.current = null; }}>
         <div className="chart-modal-plot" style={{ width: `${rows.length * 3.5}rem` }} aria-hidden="true">
-          <span className="review-chart-zero" style={{ top: `${zeroPercent}%` }} />
-          {rows.map((row) => <div className="chart-modal-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
-            <span className="chart-modal-value" style={valueStyle(row.value)}>{row.value === 0 ? "—" : `${row.value > 0 && signed ? "+" : ""}${Math.round(row.value)}`}</span>
-            <span className={`review-chart-bar ${row.value > 0 ? "up" : row.value < 0 ? "down" : "flat"}`} style={barStyle(row.value)} />
-            <span className="chart-modal-tick">{row.fullLabel}</span>
-            <span className="chart-modal-tip">{row.fullLabel} · {valueText(row.value)}</span>
-          </div>)}
+          <div className="chart-modal-canvas">
+            {averagePercent !== null && <span className="review-chart-average" style={{ top: `${averagePercent}%` }} />}
+            {rows.map((row) => <div className="chart-modal-column" key={row.date} data-chart-date={row.date} data-chart-value={row.value}>
+              <span className="chart-modal-value" style={valueStyle(row.value)}>{row.value === 0 ? "—" : `${row.value > 0 && signed ? "+" : ""}${Math.round(row.value)}`}</span>
+              <span className={`review-chart-bar ${row.value > 0 ? "up" : row.value < 0 ? "down" : "flat"}`} style={barStyle(row.value)} />
+              <span className="chart-modal-tick">{row.fullLabel}</span>
+              <span className="chart-modal-tip">{row.fullLabel} · {valueText(row.value)}</span>
+            </div>)}
+          </div>
         </div>
       </div>
     </section>

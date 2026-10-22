@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 
-import { reviewRange, type ReviewPeriod } from "../../lib/review";
+import { REVIEW_BACK_LABEL, reviewRange, type ReviewPeriod } from "../../lib/review";
 import { WEEKDAY_LABELS, monthRows, shiftMonth, type MonthCell } from "../../lib/calendar-grid";
 import { FloatingPanel } from "../ui/floating-panel";
 
@@ -14,6 +14,10 @@ import { FloatingPanel } from "../ui/floating-panel";
  * - 月：年视图，12 个月四列三行，`<` / `>` 换年。
  *
  * 相邻月份的日期也画出来并且可点，只是颜色浅一级。
+ *
+ * 底部还有一行「回到今日／本周／本月」：翻到别的周期后，用户往往先点「选择日期」，
+ * 这时不必再把鼠标移回页头左侧；离开当前周期时才出现，语义与页头那颗药丸一致
+ * （把锚点交回时钟，锚点为 null）。
  */
 const MONTH_LABEL = ["1 月", "2 月", "3 月", "4 月", "5 月", "6 月", "7 月", "8 月", "9 月", "10 月", "11 月", "12 月"];
 
@@ -26,7 +30,8 @@ export function ReviewPeriodPicker({ period, anchorDate, today, onSelect }: {
   period: ReviewPeriod;
   anchorDate: string;
   today: string;
-  onSelect: (period: ReviewPeriod, anchor: string) => void;
+  /** 选日期时写具体锚点；「回到今日／本周／本月」写 null（跟随时钟，与页头一致）。 */
+  onSelect: (period: ReviewPeriod, anchor: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [month, setMonth] = useState(() => monthOf(anchorDate));
@@ -46,6 +51,14 @@ export function ReviewPeriodPicker({ period, anchorDate, today, onSelect }: {
 
   const choose = (anchor: string) => {
     onSelect(period, anchor);
+    setOpen(false);
+  };
+
+  /** 选择器自己判断「当前周期」：与页头同一口径（周期起点相同即同一周期）。
+   *  回到当前周期把锚点交回时钟（null），与页头那颗药丸写的是同一件事。 */
+  const isCurrentPeriod = reviewRange(period, anchorDate).startDate === reviewRange(period, today).startDate;
+  const backToCurrent = () => {
+    onSelect(period, null);
     setOpen(false);
   };
 
@@ -98,6 +111,9 @@ export function ReviewPeriodPicker({ period, anchorDate, today, onSelect }: {
             </div>)}
           </div>}
       </>}
+      {!isCurrentPeriod && <div className="review-picker-foot">
+        <button type="button" className="review-back-current" onClick={backToCurrent}>{REVIEW_BACK_LABEL[period]}</button>
+      </div>}
     </FloatingPanel>}
   </>;
 }
