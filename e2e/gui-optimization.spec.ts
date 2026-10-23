@@ -150,12 +150,64 @@ test("project task creation and import drafts remain separate", async ({ page })
   await page.getByRole("dialog").getByRole("button", { name: "创建", exact: true }).click();
   await page.getByRole("button", { name: "添加任务", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "添加项目任务" });
+  // 添加任务与编辑任务共用两列字段布局：标签和右侧控件之间要留出间距。
+  await expect(dialog.locator(".task-editor-fields")).toHaveCount(1);
+  const titleRow = dialog.locator(".task-editor-fields form > label").first();
+  const layout = await titleRow.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const input = node.querySelector("input")!;
+    const text = document.createRange();
+    text.selectNodeContents(node.firstChild!);
+    const textBox = text.getBoundingClientRect();
+    const inputBox = input.getBoundingClientRect();
+    return { display: style.display, gap: style.columnGap, columns: style.gridTemplateColumns, textToInput: inputBox.left - textBox.right };
+  });
+  expect(layout.display).toBe("grid");
+  expect(layout.columns.split(" ").filter(Boolean)).toHaveLength(2);
+  expect(parseFloat(layout.gap)).toBeGreaterThanOrEqual(8);
+  expect(layout.textToInput).toBeGreaterThan(24);
+
+  // 点空白等同取消：气泡关闭、草稿丢弃，项目详情保持打开。
+  await dialog.getByLabel("标题", { exact: true }).fill("未保存草稿");
+  await page.mouse.click(5, 5);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#project-detail")).toBeVisible();
+  await page.getByRole("button", { name: "添加任务", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("标题", { exact: true })).toHaveValue("");
   await dialog.getByLabel("标题", { exact: true }).fill("追加内容");
   await dialog.getByRole("button", { name: "保存任务" }).click();
   await expect(dialog).toHaveCount(0);
+
+  // 进度条悬停显示把手，拖动直接改变，松手后写库。
+  const row = page.locator(".project-task-row", { hasText: "追加内容" });
+  const slider = row.getByRole("slider", { name: "追加内容 完成度" });
+  const thumb = row.locator(".project-task-thumb");
+  await page.mouse.move(5, 5);
+  await expect(thumb).toHaveCSS("opacity", "0");
+  await row.locator(".project-task-slider").hover();
+  await expect(thumb).toHaveCSS("opacity", "1");
+  const sliderBox = (await slider.boundingBox())!;
+  await page.mouse.move(sliderBox.x + sliderBox.width * 0.05, sliderBox.y + sliderBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sliderBox.x + sliderBox.width * 0.6, sliderBox.y + sliderBox.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const dragged = await slider.inputValue();
+  expect(Number(dragged)).toBeGreaterThanOrEqual(50);
+  await expect(row.locator(".project-task-pct")).toHaveText(dragged + "%");
+
   await page.reload();
   await page.getByRole("button", { name: "打开项目 课程项目" }).click();
   await expect(page.locator(".project-detail")).toContainText("追加内容");
+  await expect(page.locator(".project-task-row", { hasText: "追加内容" }).getByRole("slider", { name: "追加内容 完成度" })).toHaveValue(dragged);
+
+  // 任务区只留一个筛选 chip；最近推进定位移到底栏左侧。
+  const filterChip = page.getByRole("button", { name: "只看未完成" });
+  await expect(filterChip).toHaveClass("filter-chip");
+  await expect(filterChip).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator(".project-detail-section-head .switch")).toHaveCount(0);
+  await expect(page.locator(".project-detail-foot").getByRole("button", { name: "跳转最近推进" })).toBeVisible();
+  await expect(page.locator(".project-detail-section-head").getByRole("button", { name: "跳转最近推进" })).toHaveCount(0);
 });
 
 test("the project detail is always a right drawer and keeps the full card grid behind", async ({ page }) => {
@@ -177,6 +229,37 @@ test("the project detail is always a right drawer and keeps the full card grid b
   expect(await page.locator(".project-list").evaluate((node) => node.hasAttribute("inert"))).toBe(true);
   expect(await page.locator(".project-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").filter(Boolean).length)).toBe(2);
   expect(await page.locator("#main-content").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+
+  // 编辑项目与任务编辑器同一套左右两列布局；旧的截止说明文案已移除。
+  await page.getByRole("button", { name: "编辑项目 抽屉验收项目" }).click();
+  const editor = page.getByRole("dialog", { name: "编辑项目 抽屉验收项目" });
+  await expect(editor).toBeVisible();
+  await expect(editor).not.toContainText("截止日期属于项目整体");
+  const projectLayout = await editor.locator("form > label").first().evaluate((node) => {
+    const style = getComputedStyle(node);
+    const input = node.querySelector("input")!;
+    const range = document.createRange();
+    range.selectNodeContents(node.firstChild!);
+    const textBox = range.getBoundingClientRect();
+    const inputBox = input.getBoundingClientRect();
+    return { display: style.display, columns: style.gridTemplateColumns, gap: style.columnGap, textToInput: inputBox.left - textBox.right };
+  });
+  expect(projectLayout.display).toBe("grid");
+  expect(projectLayout.columns.split(" ").filter(Boolean)).toHaveLength(2);
+  expect(parseFloat(projectLayout.gap)).toBeGreaterThanOrEqual(8);
+  expect(projectLayout.textToInput).toBeGreaterThan(24);
+
+  // 点空白等同取消：气泡关闭、草稿丢弃，详情抽屉仍在。
+  await editor.getByLabel("项目标题", { exact: true }).fill("未保存草稿");
+  await page.mouse.click(5, 5);
+  await expect(editor).toHaveCount(0);
+  await expect(detail).toBeVisible();
+  await page.getByRole("button", { name: "编辑项目 抽屉验收项目" }).click();
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("项目标题", { exact: true })).toHaveValue("抽屉验收项目");
+  await page.mouse.click(5, 5);
+  await expect(editor).toHaveCount(0);
+  await expect(detail).toBeVisible();
 
   // 遮罩点击关闭，焦点回到项目卡。
   await page.getByRole("button", { name: "关闭项目详情遮罩" }).click({ position: { x: 40, y: 40 } });

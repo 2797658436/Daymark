@@ -51,7 +51,7 @@ const SPLIT_PALETTE = 6;
 /** 与 CSS `.review-split-list li { flex: 1 1 15rem }`、`gap: 6px 24px` 同源。 */
 const SPLIT_ITEM_BASIS_REM = 15;
 const SPLIT_ITEM_GAP = 24;
-/** 周视图的刻度要带星期：只有 7 列，放得下「周一 10/19」。 */
+/** 周视图的刻度要带星期：只有 7 列，放得下「周一 10月19日」。 */
 const WEEKDAY_LABEL = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 export interface ReviewPageProps {
@@ -266,11 +266,11 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
 
   const tickOf = (date: string) => {
     if (period === "day") return formatDayLabel(date);
-    // 周视图只有 7 列，放得下「周一 10/19」；月视图 31 列只留日号。
-    if (period === "week") return `${WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()]} ${date.slice(5, 7)}/${date.slice(8, 10)}`;
+    // 周视图只有 7 列，放得下「周一 10月19日」；月视图 31 列只留日号。
+    if (period === "week") return `${WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()]} ${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
     return String(Number(date.slice(8, 10)));
   };
-  /** 200% 缩放下列宽只剩一半：「周一 10/19」会叠在一起，退成「周一」。 */
+  /** 200% 缩放下列宽只剩一半：「周一 10月19日」会叠在一起，退成「周一」。 */
   const shortTickOf = (date: string) => period === "week" ? WEEKDAY_LABEL[new Date(`${date}T12:00:00`).getDay()] : undefined;
   // 今天与未来要分开着色：未来还没到，画成和「做过但没记录」一样的灰会误读成漏记。
   const columnState = (date: string) => ({ isToday: date === today, isFuture: date > today });

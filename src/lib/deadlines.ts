@@ -249,7 +249,7 @@ export function localDateOf(value: Date): string {
 }
 
 export function formatDeadlineDate(date: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
 }
 
 export function formatDeadlineWeekday(date: string): string {

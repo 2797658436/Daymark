@@ -251,15 +251,101 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .surface-card { padding: 18px 20px; box-shadow: var(--shadow-low); }
 .surface-card:hover { border-color: var(--line); }
 .now-card { padding: 18px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-left: 3px solid var(--accent); border-color: var(--line-soft); border-left-color: var(--accent); background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 38%, var(--panel)) 0%, var(--panel) 70%); box-shadow: var(--shadow-low); }
-.now-card h2 { font-size: 1.375rem; margin-bottom: 4px; letter-spacing: -.01em; }.now-card p { margin: 0; font-size: .82rem; }
-.today-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(230px, .85fr); gap: 16px; align-items: start; }
+/* 今日页：页头只留日期与事实摘要；「现在」是唯一行动焦点，待回顾紧随其后，
+   时间线与临期在可用宽度足够时并排。宽度断点用 rem —— 200% 界面缩放下
+   同样的 CSS 宽度只剩一半可读空间，px 断点会漏掉。 */
+.today-page { container-type: inline-size; }
+.today-header { align-items: flex-start; }
+.today-heading { min-width: 0; }
+.today-date { font-size: clamp(1.375rem, 1.05rem + 1.1cqi, 1.75rem); line-height: 1.3; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.today-subtitle { margin: 4px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); font-size: .8rem; }
+.today-subtitle > span { white-space: nowrap; }
+.today-subtitle > span + span::before { content: "·"; margin-right: 8px; color: var(--line-strong); }
+.today-subtitle .is-review { color: var(--accent-strong); }
+.today-header .header-actions { padding-top: 2px; }
+.now-card.is-live { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 58%, var(--panel)) 0%, var(--panel) 72%); }
+.now-main { flex: 1 1 auto; min-width: 0; }
+.now-eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.now-dot { width: .5rem; height: .5rem; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.now-card h2 { margin: 0; font-size: 1.75rem; line-height: 2.25rem; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.now-card p { margin: 4px 0 0; color: var(--muted-strong); font-size: .82rem; }
+.now-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.today-quiet-action { min-height: 2.75rem; display: inline-flex; align-items: center; gap: 8px; padding: 0 .5rem; border: 0; border-radius: .625rem; background: transparent; color: var(--muted-strong); font: inherit; font-size: .78rem; }
+.today-quiet-action:hover { background: var(--panel-strong); color: var(--accent-strong); }
+.today-quiet-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.today-review { padding-bottom: 12px; }
+.today-review .section-heading { padding-bottom: 4px; }
+.today-review-list { display: grid; }
+.today-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.today-review-main { display: grid; gap: 2px; min-width: 0; }
+.today-review-main strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .84rem; }
+.today-review-main span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.today-review-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.today-review-actions .button { min-height: 2.75rem; padding-inline: .75rem; font-size: .78rem; }
+.today-review-actions .button-quiet { color: var(--muted-strong); }
+.today-main { display: grid; gap: 16px; align-items: start; }
+.today-main.has-aside { grid-template-columns: minmax(0, 1.7fr) minmax(15rem, .9fr); }
+.today-timeline-card { padding-bottom: 12px; }
+.today-timeline { list-style: none; margin: 0; padding: 0; display: grid; }
+.today-session { --today-time-width: 4.25rem; position: relative; display: grid; grid-template-columns: var(--today-time-width) 1.125rem minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 8px; border-top: 1px solid var(--line-soft); border-radius: 10px; transition: background .12s ease; }
+.today-session:first-child { border-top: 0; }
+.today-session::before { content: ""; position: absolute; z-index: 0; top: 0; bottom: 0; left: calc(8px + var(--today-time-width) + 12px + .5625rem); width: 1px; background: var(--line-soft); }
+.today-session:first-child::before { top: 50%; }
+.today-session:last-child::before { bottom: 50%; }
+.today-session:only-child::before { display: none; }
+.today-session > * { position: relative; z-index: 1; }
+.today-session:hover:not(.is-current) { background: var(--panel-strong); }
+.today-session.is-current { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 82%, var(--panel)) 0%, color-mix(in srgb, var(--accent-soft) 34%, var(--panel)) 100%); border-top-color: transparent; box-shadow: inset 3px 0 0 var(--accent); }
+.today-session time { display: grid; gap: 2px; color: var(--muted); font-size: .75rem; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.today-session time strong { color: var(--text); font-size: .82rem; font-weight: 600; }
+.today-session.is-past time strong, .today-session.is-past .today-session-title strong { color: var(--muted-strong); }
+.today-session-dot { width: .5625rem; height: .5625rem; justify-self: center; border: 2px solid var(--line-strong); border-radius: 999px; background: var(--panel); }
+.today-session.is-past .today-session-dot { border-color: var(--line-strong); background: var(--line-soft); }
+.today-session.is-current .today-session-dot { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.today-session-main { display: grid; gap: 2px; min-width: 0; }
+.today-session-main > .progress-control { max-width: 26rem; }
+.today-session-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.today-session-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .84rem; }
+.today-status { flex: none; padding: .08rem .45rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted-strong); font-size: .75rem; font-weight: 600; line-height: 1.4; }
+.today-status.is-now { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent-strong); }
+.today-status.is-review { background: var(--panel-strong); color: var(--muted-strong); }
+.today-session-actions { display: flex; align-items: center; gap: 2px; }
+.today-session-actions .icon-action { border-color: transparent; background: transparent; }
+.today-session-actions .icon-action:hover { border-color: var(--line-soft); background: var(--panel); }
+.today-completed { margin-top: 8px; border-top: 1px solid var(--line-soft); padding-top: 2px; }
+.today-completed > summary { min-height: 2.75rem; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: var(--muted-strong); font-size: .78rem; cursor: pointer; list-style: none; }
+.today-completed > summary::-webkit-details-marker { display: none; }
+.today-completed > summary svg:first-child { color: var(--success); }
+.today-completed > summary svg:last-child { margin-left: auto; transition: transform .12s ease; }
+.today-completed[open] > summary svg:last-child { transform: rotate(180deg); }
+.today-completed-list { display: grid; }
+.today-completed-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--line-soft); color: var(--muted-strong); font-size: .78rem; }
+.today-completed-row svg { flex: none; color: var(--success); }
+.today-completed-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.today-completed-row span { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.today-due { min-width: 0; }
+.today-due-list { display: grid; }
+.today-due-row { display: grid; gap: 4px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.today-due-row:first-child { border-top: 0; }
+.today-due-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
+.today-due-head strong { min-width: 0; overflow-wrap: anywhere; font-size: .84rem; font-weight: 600; }
+.today-due-state { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.today-due-state.is-overdue { color: var(--danger); }
+.today-due-state.is-today { color: var(--accent-strong); }
+.today-due-state.is-soon { color: var(--muted-strong); }
+.today-due-row .progress-control { grid-template-columns: minmax(0, 1fr) 2.25rem; }
+@container (max-width: 44rem) {
+  .today-main.has-aside { grid-template-columns: minmax(0, 1fr); }
+  .today-review-row { grid-template-columns: minmax(0, 1fr); }
+  .today-review-actions { justify-content: flex-start; }
+  .now-card { align-items: stretch; flex-direction: column; }
+  .now-actions { justify-content: flex-start; }
+  .rescue-card { align-items: stretch; flex-direction: column; }
+  .rescue-actions { width: 100%; }
+}
 .section-heading, .panel-heading, .project-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
-.timeline-list, .attention-list { display: grid; }
-.timeline-item { display: grid; grid-template-columns: 62px 1fr repeat(2, 38px); gap: 12px; padding: 12px 4px; align-items: center; border-top: 1px solid var(--line-soft); transition: background .12s ease; }
-.timeline-item:hover { background: var(--panel-strong); }
-.timeline-item.current { background: linear-gradient(90deg, var(--accent-soft) 0%, color-mix(in srgb, var(--accent-soft) 40%, transparent) 100%); margin-inline: -10px; padding-inline: 12px; border-radius: 10px; border-top-color: transparent; box-shadow: inset 3px 0 0 var(--accent); }
-.timeline-item time { color: var(--accent-strong); font-weight: 600; font-variant-numeric: tabular-nums; }.timeline-item time small { display: block; color: var(--muted); font-weight: 400; }
+.attention-list { display: grid; }
 .attention-list > div { padding: 14px 0; border-top: 1px solid var(--line-soft); }.attention-list > div > div { display: flex; justify-content: space-between; gap: 10px; }.attention-list span { color: var(--danger); font-size: .75rem; }
 .empty-state { min-height: 132px; display: grid; place-items: center; align-content: center; text-align: center; gap: 5px; color: var(--muted); padding: 16px; border-style: dashed; }.empty-state > span { color: var(--accent); }.empty-state p { max-width: 320px; margin-bottom: 6px; font-size: .82rem; }
 
@@ -520,7 +606,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .progress-track { height: 6px; border-radius: 999px; background: var(--bg); overflow: hidden; box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
 .progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 80%, var(--accent-strong))); border-radius: inherit; transition: width .22s ease; }
 .project-deadline { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; padding: .3rem .62rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; }
-.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-editor small, .milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; }
+.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .78rem; }.project-editor label > input, .project-editor label > .date-field { width: 100%; min-width: 0; }.milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; }
 /* 里程碑表单的字段行：标签在左、控件在右，同一行排布；气泡底色由 .floating-panel 的 --panel 统一提供。 */
 .milestone-field { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); align-items: center; gap: 10px; color: var(--muted); font-size: .78rem; }
 .milestone-field > input, .milestone-field > .select-shell, .milestone-field > .date-field { width: 100%; min-width: 0; }
@@ -736,7 +822,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .rescue-card { padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line)); border-radius: 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 72%, var(--panel)) 0%, var(--panel) 80%); box-shadow: var(--shadow-low); }
 .rescue-card h2 { margin: 2px 0 4px; font-size: 1.15rem; letter-spacing: -.005em; }
 .rescue-card p { margin: 0; color: var(--muted); font-size: .82rem; }
-.rescue-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.rescue-main { min-width: 0; }
+.rescue-actions { width: min(100%, 19rem); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.rescue-actions .button { min-height: 2.75rem; padding-inline: .75rem; }
 .pool-topbar { display: flex; align-items: center; gap: 6px; }
 .pool-topbar input { flex: 1; min-width: 0; min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font-size: .8rem; }
 .pool-topbar input:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring-accent); }
@@ -1338,7 +1426,6 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
   .app-shell.with-task-pool.day-view-pool > .pool-splitter-region { display: block; }
 }
 @media (max-width: 1050px) {
-  .today-grid { grid-template-columns: 1fr; }
   .page-header { align-items: flex-start; }
   .time-block-form { grid-template-columns: 1fr 1fr; }
   .rescue-card { align-items: flex-start; flex-direction: column; }
@@ -1535,7 +1622,10 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .project-detail-section-head h3 span { color: var(--muted); font-size: .74rem; font-weight: 500; font-variant-numeric: tabular-nums; }
 .project-quiet-action { display: inline-flex; align-items: center; gap: 4px; min-height: 2.75rem; padding: 0; border: 0; background: transparent; color: var(--accent-strong); font-size: .76rem; white-space: nowrap; }
 .project-quiet-action:hover { text-decoration: underline; }
-.project-task-filter { display: inline-flex; align-items: center; gap: 6px; min-height: 2.75rem; color: var(--muted); font-size: .76rem; white-space: nowrap; }
+/* 跳转最近推进：底栏左侧的安静胶囊，和右侧项目动作分开。 */
+.project-recent-jump { margin-right: auto; gap: 6px; padding: 0 .8rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.project-recent-jump:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); text-decoration: none; }
+.project-recent-jump:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .project-empty-line { margin: 0; padding: 8px 0; color: var(--muted); font-size: .8rem; }
 
 .project-milestone-list { display: grid; }
@@ -1561,11 +1651,22 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .project-task-title:hover { color: var(--accent-strong); text-decoration: underline; }
 .project-task-row.is-done .project-task-title { color: var(--muted-strong); }
 .project-task-main small { color: var(--muted); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-task-progress { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem; align-items: center; gap: 8px; min-height: 2.75rem; padding: 0; border: 0; background: transparent; }
-.project-task-track { display: block; height: .375rem; overflow: hidden; border-radius: 999px; background: var(--bg); box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
-.project-task-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
-.project-task-progress b { color: var(--muted); font-size: .75rem; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
-.project-task-progress:hover b { color: var(--accent-strong); }
+/* 细进度轨＋透明原生滑块：悬停/聚焦才显示把手；百分比仍打开精确编辑气泡。 */
+.project-task-progress { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) 2.75rem; align-items: center; gap: 8px; min-width: 0; min-height: 2.75rem; }
+.project-task-slider { position: relative; display: flex; align-items: center; height: 2.75rem; min-width: 0; }
+.project-task-track { position: relative; display: block; width: 100%; height: .3125rem; padding: 0; border: 0 solid var(--line); border-radius: 999px; background: var(--line-soft); transition: height .12s ease, padding .12s ease, border-width .12s ease, border-radius .12s ease, background-color .12s ease; }
+.project-task-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: background-color .12s ease, border-radius .12s ease; }
+/* 悬浮/聚焦时与任务池的紧凑 RangeBar 同款：20px 轨道、内缩填充和矩形把手。 */
+.project-task-thumb { position: absolute; top: 50%; width: .625rem; height: 1rem; transform: translate(-50%, -50%); border: 1px solid var(--thumb-border); border-radius: .3125rem; background-color: var(--thumb-surface); background-image: linear-gradient(var(--accent-strong), var(--accent-strong)); background-size: .125rem .375rem; background-position: center; background-repeat: no-repeat; box-shadow: 0 1px 3px rgb(35 31 27 / 22%); opacity: 0; transition: opacity .12s ease; pointer-events: none; }
+.project-task-slider:hover .project-task-thumb, .project-task-slider:focus-within .project-task-thumb { opacity: 1; }
+.project-task-slider:hover .project-task-track, .project-task-slider:focus-within .project-task-track { height: 1.25rem; padding: .1875rem; border-width: 1px; border-radius: .4375rem; background: var(--panel-strong); box-shadow: none; }
+.project-task-slider:hover .project-task-fill, .project-task-slider:focus-within .project-task-fill { border-radius: .3125rem; background: var(--accent-tint); }
+.project-task-range { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; appearance: none; opacity: 0; cursor: pointer; }
+.project-task-range:active { cursor: grabbing; }
+.project-task-slider:focus-within .project-task-track { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.project-task-pct { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 2.75rem; min-height: 2.75rem; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.project-task-pct:hover { color: var(--accent-strong); text-decoration: underline; }
+.project-task-pct:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
 .project-task-actions { grid-column: 3; grid-row: 1 / span 2; display: flex; justify-content: flex-end; }
 .project-task-actions .button { min-height: 2.75rem; padding: 0 .65rem; font-size: .75rem; }
 .project-task-done { display: inline-flex; align-items: center; gap: 4px; color: var(--success); font-size: .74rem; white-space: nowrap; }

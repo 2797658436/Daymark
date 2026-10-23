@@ -69,7 +69,7 @@ export function DeadlineRow({ index, item, today, focused, onFocus, onEditTask, 
       return `当前任务 ${counts.completed}/${counts.total} 已完成`;
     }
     if (milestone) {
-      if (outcome) return `${outcome.resultText} · ${formatDeadlineDate(outcome.targetLocalDate)} 到期冻结`;
+      if (outcome) return `${outcome.resultText} · ${formatDeadlineDate(outcome.targetLocalDate)}到期冻结`;
       return milestoneSummary(milestone, projectTasksOf(index, milestone.projectId));
     }
     return "";

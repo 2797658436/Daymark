@@ -435,7 +435,8 @@ describe("review page", () => {
     await user.click(within(document.querySelector<HTMLElement>(".review-task-group-head")!).getByRole("button", { name: "查看项目「学会 Rust」的明细" }));
     const projectDetail = document.querySelector<HTMLElement>(".review-detail")!;
     expect(projectDetail.querySelector(".review-detail-sub")).toBeNull();
-    expect((projectDetail.textContent ?? "").split("2026-03-31").length - 1).toBe(1);
+    expect((projectDetail.textContent ?? "").split("3月31日").length - 1).toBe(1);
+    expect(projectDetail.textContent).not.toContain("2026-03-31");
   });
 
   it("drops the execution card entirely when there is nothing to report", async () => {

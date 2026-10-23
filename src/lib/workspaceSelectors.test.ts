@@ -144,6 +144,6 @@ describe("shared milestone and project rules", () => {
 
   it("renders a readable milestone summary", () => {
     const counted: ProjectMilestone = { id: "m-1", projectId: "p-1", title: "m-1", targetLocalDate: "2026-03-09", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 3, targetProgress: null };
-    expect(milestoneSummary(counted, [])).toBe("完成 3 个项目任务 · 3/9 前");
+    expect(milestoneSummary(counted, [])).toBe("完成 3 个项目任务 · 3月9日前");
   });
 });

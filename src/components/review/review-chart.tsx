@@ -43,7 +43,7 @@ export interface ReviewChartRow {
   label: string;
   /** 图下方的短刻度（周／月是日号，日是当天日期）。 */
   tick: string;
-  /** 容器很窄时用的更短刻度（周视图「周一 10/19」→「周一」）。缺省时沿用 `tick`。 */
+  /** 容器很窄时用的更短刻度（周视图「周一 10月19日」→「周一」）。缺省时沿用 `tick`。 */
   tickShort?: string;
   /** 数值表里的完整日期。 */
   fullLabel: string;

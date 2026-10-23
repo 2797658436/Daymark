@@ -215,9 +215,9 @@ export function milestoneSummary(milestone: ProjectMilestone, tasks: Task[]) {
   const goal = milestone.criterionKind === "orderedTask" ? `按顺序完成至「${task?.title ?? "任务已不在项目中"}」`
     : milestone.criterionKind === "taskCount" ? `完成 ${milestone.targetCount} 个项目任务`
       : `项目加权进度达到 ${milestone.targetProgress}%`;
-  return `${goal} · ${formatShortLocalDate(milestone.targetLocalDate)} 前`;
+  return `${goal} · ${formatShortLocalDate(milestone.targetLocalDate)}前`;
 }
 
 function formatShortLocalDate(date: string) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
 }

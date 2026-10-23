@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -534,40 +534,143 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
   const sessions = workspace.executionSessions.filter((item) => item.localDate <= today && item.endLocalDate >= today && item.status === "scheduled").sort(compareSessions);
   const missed = workspace.executionSessions.filter((item) => item.localDate <= today && (item.endLocalDate ?? item.localDate) === today && (item.status === "missed" || isPendingReviewIn(index, item, now))).sort(compareSessions);
   const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-  const current = sessions.find((session) => sessionContains(session, now))
-    ?? sessions.find((session) => localSessionStart(session) > now.getTime());
+  const current = sessions.find((session) => sessionContains(session, now)) ?? null;
+  const next = sessions.find((session) => localSessionStart(session) > now.getTime()) ?? null;
+  const startable = current ?? next;
   const rescue = preferences.checkInEnabled && preferences.rescuePromptsEnabled && !running
     ? workspace.executionSessions.find((session) => (session.status === "scheduled" || session.status === "missed") && session.localDate === today && workspace.rescuePromptedSessionIds.includes(session.id) && !workspace.executionRecords.some((record) => record.sessionId === session.id) && timeMinutes(session.startLocal) + preferences.checkInGraceMinutes < nowMinutes)
     : undefined;
-  const due = workspace.tasks.filter((task) => task.status === "active" && task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7);
+  const due = workspace.tasks.filter((task) => task.status === "active" && task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
+  const missedIds = new Set(missed.map((session) => session.id));
   const todayEvents = workspace.progressEvents.filter((event) => toLocalDate(new Date(event.occurredAtUtc)) === today);
-  const progressed = new Set(todayEvents.map((event) => event.taskId)).size;
-  const delta = todayEvents.reduce((sum, event) => sum + event.toProgress - event.fromProgress, 0);
-  return <section className="page-stack" aria-labelledby="today-title">
-    <PageHeader eyebrow={formatLongDate(today)} title="今天从下一步开始" actions={<div className="summary-pills"><span>{due.length} 项临期</span><span>进度变化 {progressed} 项 · {delta >= 0 ? "+" : ""}{delta} 百分点</span></div>} />
-    {rescue && <section className="rescue-card" aria-labelledby="rescue-title"><div><span className="eyebrow">重新安排一下</span><h2 id="rescue-title">{taskTitle(workspace, rescue.taskId)}</h2><p>原定 {rescue.startLocal} 开始。选择一个现在容易做到的下一步。</p></div><div className="rescue-actions"><Button variant="primary" onClick={() => void onStart(rescue)}><Play size={16} />现在开始</Button><Button onClick={() => void onDelay(rescue)}>延后 10 分钟</Button><Button onClick={() => onGoCalendar()}>重新选择时间</Button><Button onClick={() => void onSkip(rescue)}><Ban size={16} />本次跳过</Button></div></section>}
-    <section className="now-card" aria-labelledby="now-title">
-      <div><span className="eyebrow">现在</span><h2 id="now-title">{running ? taskTitle(workspace, running.taskId) : current ? taskTitle(workspace, current.taskId) : "暂时没有安排"}</h2>
-        <p>{running ? `已于 ${formatClock(running.actualStartUtc)} 开始，结束本次不会自动完成任务。` : current ? `${current.startLocal}–${current.endLocal} · 手动开始后才记录实际投入` : "从右侧任务池拖到日历，为今天留出一个真实时段。"}</p></div>
-      {running ? <Button variant="primary" onClick={() => onFinish(running)}><Square size={16} />结束本次</Button>
-        : current && preferences.checkInEnabled ? <Button variant="primary" onClick={() => void onStart(current)}><Play size={16} />开始本次</Button>
-        : current ? <span className="muted-chip">开始／结束记录未开启</span>
-        : <Button variant="primary" onClick={() => onGoCalendar()}>去安排</Button>}
+  const completedToday = (() => {
+    const seen = new Map<string, { task: Task; at: string }>();
+    for (const event of todayEvents) {
+      if (event.toProgress !== 100) continue;
+      const task = index.tasksById.get(event.taskId);
+      const existing = seen.get(event.taskId);
+      if (task && (!existing || event.occurredAtUtc < existing.at)) seen.set(event.taskId, { task, at: event.occurredAtUtc });
+    }
+    return [...seen.values()].sort((left, right) => right.at.localeCompare(left.at));
+  })();
+  const runningTask = running ? index.tasksById.get(running.taskId) ?? null : null;
+  const runningSession = running?.sessionId ? index.sessionsById.get(running.sessionId) ?? null : null;
+  const currentTask = current ? index.tasksById.get(current.taskId) ?? null : null;
+  const nextTask = next ? index.tasksById.get(next.taskId) ?? null : null;
+  const runningMinutes = running ? Math.max(1, Math.round((now.getTime() - new Date(running.actualStartUtc).getTime()) / 60_000)) : 0;
+  const currentRemaining = current ? Math.max(1, Math.round((localSessionEnd(current) - now.getTime()) / 60_000)) : 0;
+  const nextWaiting = next ? Math.max(1, Math.round((localSessionStart(next) - now.getTime()) / 60_000)) : 0;
+  const nowState = running ? {
+    eyebrow: "正在记录",
+    title: runningTask?.title ?? "执行中的任务",
+    description: `始于 ${formatClock(running.actualStartUtc)} · 已进行 ${formatDuration(runningMinutes)} · 结束本次只结束这一段`,
+    live: true,
+  } : current ? {
+    eyebrow: "现在",
+    title: currentTask?.title ?? "未命名任务",
+    description: `${current.startLocal}–${current.endLocal} · 还剩 ${formatDuration(currentRemaining)} · 手动完成度 ${currentTask?.progress ?? 0}%`,
+    live: true,
+  } : next ? {
+    eyebrow: "下一项",
+    title: nextTask?.title ?? "未命名任务",
+    description: `${next.startLocal}–${next.endLocal} · ${formatDuration(nextWaiting)}后开始 · 手动完成度 ${nextTask?.progress ?? 0}%`,
+    live: false,
+  } : sessions.length ? {
+    eyebrow: "现在",
+    title: "今天的安排已经结束",
+    description: missed.length > 0 ? `还有 ${missed.length} 个时段等待确认；需要的话可以再从任务池安排一段。` : "需要的话可以再从任务池安排一段，或到回顾里看看今天的结果。",
+    live: false,
+  } : {
+    eyebrow: "现在",
+    title: "今天还没有安排",
+    description: "从任务池拖入，或打开日历，为今天留出一个真实时段。",
+    live: false,
+  };
+  return <section className="page-stack today-page" aria-labelledby="today-title">
+    <header className="page-header today-header">
+      <div className="today-heading">
+        <h1 id="today-title" className="today-date">{formatLongDate(today)}</h1>
+        <p className="today-subtitle">
+          <span>{sessions.length} 个执行时段</span>
+          {missed.length > 0 && <span className="is-review">{missed.length} 个待回顾</span>}
+          {due.length > 0 && <span>{due.length} 项临期</span>}
+          {completedToday.length > 0 && <span>{completedToday.length} 项完成</span>}
+        </p>
+      </div>
+      <div className="header-actions">
+        <Button onClick={() => onGoCalendar()}><CalendarDays size={16} aria-hidden="true" />打开日历</Button>
+      </div>
+    </header>
+    {rescue && <section className="rescue-card" aria-labelledby="rescue-title"><div className="rescue-main"><span className="eyebrow">重新安排一下</span><h2 id="rescue-title">{taskTitle(workspace, rescue.taskId)}</h2><p>原定 {rescue.startLocal} 开始。选择一个现在容易做到的下一步。</p></div><div className="rescue-actions"><Button variant="primary" onClick={() => void onStart(rescue)}><Play size={16} aria-hidden="true" />现在开始</Button><Button onClick={() => void onDelay(rescue)}>延后 10 分钟</Button><Button onClick={() => onGoCalendar()}>重新选择时间</Button><Button onClick={() => void onSkip(rescue)}><Ban size={16} aria-hidden="true" />本次跳过</Button></div></section>}
+    <section className={nowState.live ? "now-card is-live" : "now-card"} aria-labelledby="now-title">
+      <div className="now-main">
+        <span className="eyebrow now-eyebrow">{nowState.live && <span className="now-dot" aria-hidden="true" />}{nowState.eyebrow}</span>
+        <h2 id="now-title">{nowState.title}</h2>
+        <p>{nowState.description}</p>
+      </div>
+      <div className="now-actions">
+        {running ? <Button variant="primary" onClick={() => onFinish(running)}><Square size={16} aria-hidden="true" />结束本次</Button>
+          : startable ? (preferences.checkInEnabled
+            ? <Button variant="primary" onClick={() => void onStart(startable)}><Play size={16} aria-hidden="true" />开始本次</Button>
+            : <span className="muted-chip">开始／结束记录未开启</span>)
+          : <Button variant="primary" onClick={() => onGoCalendar()}><CalendarDays size={16} aria-hidden="true" />去安排</Button>}
+        {(running || startable) && <button type="button" className="today-quiet-action" onClick={() => onGoCalendar(runningSession ?? startable ?? undefined)}><CalendarDays size={15} aria-hidden="true" />在日历中查看</button>}
+      </div>
     </section>
-    <div className="today-grid">
-      <section className="surface-card"><div className="section-heading"><h2>今日时间线</h2><span>{sessions.length} 个执行时段</span></div>
-        {sessions.length ? <div className="timeline-list">{sessions.map((session) => {
+    {missed.length > 0 && <section className="surface-card today-review" aria-labelledby="today-review-title">
+      <div className="section-heading"><h2 id="today-review-title">待回顾</h2><span>{missed.length} 个时段等待确认</span></div>
+      <div className="today-review-list">{missed.map((session) => <article key={session.id} className="today-review-row">
+        <div className="today-review-main">
+          <strong title={taskTitle(workspace, session.taskId)}>{taskTitle(workspace, session.taskId)}</strong>
+          <span>{session.startLocal}–{session.endLocal} · {session.status === "missed" ? "本次未推进" : "时段已结束，等待确认"}</span>
+        </div>
+        <div className="today-review-actions">
+          <Button onClick={() => onGoCalendar(session)}>更新进度</Button>
+          <Button onClick={() => onGoCalendar(session)}>继续安排</Button>
+          {session.status === "scheduled" && <Button variant="quiet" onClick={() => void onSkipReview(session)}>本次未推进</Button>}
+        </div>
+      </article>)}</div>
+    </section>}
+    <div className={due.length > 0 ? "today-main has-aside" : "today-main"}>
+      <section className="surface-card today-timeline-card" aria-labelledby="today-timeline-title">
+        <div className="section-heading"><h2 id="today-timeline-title">今日时间线</h2><span>{sessions.length} 个执行时段</span></div>
+        {sessions.length ? <ol className="today-timeline">{sessions.map((session) => {
           const task = index.tasksById.get(session.taskId); if (!task) return null;
-          return <article key={session.id} className={running?.sessionId === session.id ? "timeline-item current" : "timeline-item"}>
-            <time>{session.startLocal}<small>{session.endLocal}</small></time><div><strong>{task.title}</strong><ProgressControl task={task} onCommit={onProgress} /></div>
-            <button className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>{preferences.checkInEnabled && !running && <button className="icon-action" aria-label={`开始 ${task.title}`} onClick={() => void onStart(session)}><Play size={16} /></button>}
+          const isRunning = running?.sessionId === session.id;
+          const isCurrent = isRunning || sessionContains(session, now);
+          const isPast = !isCurrent && localSessionEnd(session) <= now.getTime();
+          const isUpcoming = !isCurrent && localSessionStart(session) > now.getTime();
+          return <li key={session.id} className={["today-session", isCurrent ? "is-current" : isPast ? "is-past" : ""].filter(Boolean).join(" ")}>
+            <time dateTime={`${session.localDate}T${session.startLocal}`}><strong>{session.startLocal}</strong><span>{session.endLocal}</span></time>
+            <span className="today-session-dot" aria-hidden="true" />
+            <div className="today-session-main">
+              <div className="today-session-title">
+                <strong title={task.title}>{task.title}</strong>
+                {isRunning ? <span className="today-status is-now">正在记录</span> : isCurrent ? <span className="today-status is-now">现在</span> : missedIds.has(session.id) ? <span className="today-status is-review">{session.status === "missed" ? "未推进" : "待回顾"}</span> : null}
+              </div>
+              <ProgressControl task={task} onCommit={onProgress} />
+            </div>
+            <div className="today-session-actions">
+              <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+              {preferences.checkInEnabled && !running && (isCurrent || isUpcoming) && <button type="button" className="icon-action" aria-label={`开始 ${task.title}`} onClick={() => void onStart(session)}><Play size={16} /></button>}
+            </div>
+          </li>;
+        })}</ol> : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
+        {completedToday.length > 0 && <details className="today-completed">
+          <summary><Check size={15} aria-hidden="true" /><span>今日完成 {completedToday.length} 项</span><ChevronDown size={15} aria-hidden="true" /></summary>
+          <div className="today-completed-list">{completedToday.map(({ task, at }) => <div key={task.id} className="today-completed-row"><Check size={13} aria-hidden="true" /><strong title={task.title}>{task.title}</strong><span>完成于 {formatClock(at)}</span></div>)}</div>
+        </details>}
+      </section>
+      {due.length > 0 && <aside className="surface-card today-due" aria-labelledby="today-due-title">
+        <div className="section-heading"><h2 id="today-due-title">临期</h2><span>{due.length} 项</span></div>
+        <div className="today-due-list">{due.map((task) => {
+          const urgency = deadlineUrgency(task.deadlineLocal!, today);
+          return <article key={task.id} className="today-due-row">
+            <div className="today-due-head"><strong title={task.title}>{task.title}</strong><span className={`today-due-state is-${urgency}`} title={formatShortDate(task.deadlineLocal!)}><Flag size={12} aria-hidden="true" />{deadlineLabel(today, task.deadlineLocal!)}</span></div>
+            <ProgressControl task={task} onCommit={onProgress} />
           </article>;
-        })}</div> : <EmptyState icon={<Clock3 />} title="今天还没有安排" text="任务不会因此消失。打开日历拖入一个时段即可。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
-      </section>
-      <section className="surface-card"><div className="section-heading"><h2>待回顾与临期</h2><span>{missed.length} 个待回顾／未推进时段</span></div>
-        {(missed.length > 0 || due.length > 0) ? <div className="attention-list">{missed.map((session) => <div key={session.id}><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.status === "missed" ? "本次未推进" : "待回顾"} · {session.startLocal}–{session.endLocal}</span></div><div><Button onClick={() => onGoCalendar(session)}>更新进度</Button><Button onClick={() => onGoCalendar(session)}>继续安排</Button>{session.status === "scheduled" && <Button onClick={() => void onSkipReview(session)}>本次未推进</Button>}</div></div>)}{due.sort(compareDeadlines).map((task) => <div key={task.id}><div><strong>{task.title}</strong><span>{deadlineLabel(today, task.deadlineLocal!)}</span></div><ProgressControl task={task} onCommit={onProgress} /></div>)}</div>
-          : <EmptyState icon={<Check />} title="没有待回顾或临近期任务" text="这里保持安静；任务池仍保存全部活动任务。" />}
-      </section>
+        })}</div>
+      </aside>}
     </div>
   </section>;
 }
@@ -687,7 +790,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
 /** 单张任务卡；`sessions` 已经是**该任务自己的**时段（来自 `WorkspaceIndex.sessionsByTaskId`），不再自行过滤全量。 */
 function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const upcoming = sessions.filter(hasFutureSchedule).sort(compareSessions);
-  const hint = upcoming.length ? `拖动安排 · 下次：${upcoming[0].localDate} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
+  const hint = upcoming.length ? `拖动安排 · 下次：${formatShortDate(upcoming[0].localDate)} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
   return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
     <strong className="task-row-title">{task.title}</strong>
     {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
@@ -1017,7 +1120,7 @@ function CalendarDateDetails({ date, workspace, taskId, projectId, onOpenDay }: 
   const project = projectId ? workspace.projects.find((item) => item.id === projectId) ?? null : null;
   const sessions = workspace.executionSessions.filter((session) => session.localDate === date && session.status !== "cancelled").sort(compareSessions);
   const blocks = workspace.timeBlocks.filter((block) => block.localDate === date).sort((left, right) => left.startLocal.localeCompare(right.startLocal));
-  return <aside className="calendar-date-details" aria-label={`${date} ${formatLongDate(date)}详情`}><header><div><span className="eyebrow">已选日期</span><h2>{formatLongDate(date)}</h2></div><Button onClick={onOpenDay}>打开日视图</Button></header>{task ? <section className="calendar-task-detail"><span className="eyebrow">截止任务</span><h3>{task.title}</h3><p>{workspace.projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"} · 当前进度 {task.progress}%</p><span className="deadline-chip">截止 {date}</span></section> : project ? <section className="calendar-project-detail"><span className="eyebrow">项目</span><h3>{project.title}</h3>{project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={date} /> : <p>没有设置项目截止日期。</p>}<div className="calendar-project-milestones">{workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder).map((milestone) => <article key={milestone.id} className={milestone.targetLocalDate === date ? "on-date" : ""}><Diamond size={14} aria-hidden="true" /><div><strong>{milestone.title}</strong><span>{milestone.targetLocalDate === date ? "今天到期" : `${formatShortDate(milestone.targetLocalDate)} 到期`} · {milestoneSummary(milestone, workspace.tasks.filter((item) => item.projectId === project.id))}</span></div></article>)}{workspace.projectMilestones.some((milestone) => milestone.projectId === project.id) || <p className="empty-inline">该项目还没有里程碑。</p>}</div></section> : <><section><h3>重要事实</h3>{summary.deadlines.map((item) => <article key={item.id}><Flag size={14} /><div><strong>{item.title}</strong><span>任务截止 · {item.progress}%</span></div></article>)}{summary.projectDeadlines.map((item) => <article key={`project-${item.id}`}><Flag size={14} /><div><strong>{item.title}</strong><span>项目截止</span></div></article>)}{summary.milestones.map((item) => <article key={`milestone-${item.id}`}><Diamond size={14} /><div><strong>{item.title}</strong><span>里程碑到期</span></div></article>)}{summary.completedTasks.map((item) => <article key={`done-${item.id}`}><Check size={14} /><div><strong>{item.title}</strong><span>当天曾完成 · 当前 {item.progress}%</span></div></article>)}{summary.progressedTasks.map((item) => <article key={`progress-${item.id}`}><ArrowUp size={14} /><div><strong>{item.title}</strong><span>当天有进度变化</span></div></article>)}{summary.missedTasks.map((item) => <article key={`missed-${item.id}`}><Ban size={14} /><div><strong>{item.title}</strong><span>本次未推进</span></div></article>)}{summary.deadlines.length + summary.projectDeadlines.length + summary.milestones.length + summary.completedTasks.length + summary.progressedTasks.length + summary.missedTasks.length === 0 && <p className="empty-inline">当天没有截止、完成或推进事实。</p>}</section><section><h3>当天安排</h3>{sessions.map((session) => <article key={session.id}><Clock3 size={14} /><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.startLocal}–{session.endLocal}</span></div></article>)}{blocks.map((block) => <article key={block.id}><Clock3 size={14} /><div><strong>{block.title}</strong><span>{block.startLocal}–{block.endLocal} · 时间块</span></div></article>)}{sessions.length + blocks.length === 0 && <p className="empty-inline">当天没有执行时段或时间块。</p>}</section></>}</aside>;
+  return <aside className="calendar-date-details" aria-label={`${date} ${formatLongDate(date)}详情`}><header><div><span className="eyebrow">已选日期</span><h2>{formatLongDate(date)}</h2></div><Button onClick={onOpenDay}>打开日视图</Button></header>{task ? <section className="calendar-task-detail"><span className="eyebrow">截止任务</span><h3>{task.title}</h3><p>{workspace.projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"} · 当前进度 {task.progress}%</p><span className="deadline-chip">截止 {formatShortDate(date)}</span></section> : project ? <section className="calendar-project-detail"><span className="eyebrow">项目</span><h3>{project.title}</h3>{project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={date} /> : <p>没有设置项目截止日期。</p>}<div className="calendar-project-milestones">{workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder).map((milestone) => <article key={milestone.id} className={milestone.targetLocalDate === date ? "on-date" : ""}><Diamond size={14} aria-hidden="true" /><div><strong>{milestone.title}</strong><span>{milestone.targetLocalDate === date ? "今天到期" : `${formatShortDate(milestone.targetLocalDate)}到期`} · {milestoneSummary(milestone, workspace.tasks.filter((item) => item.projectId === project.id))}</span></div></article>)}{workspace.projectMilestones.some((milestone) => milestone.projectId === project.id) || <p className="empty-inline">该项目还没有里程碑。</p>}</div></section> : <><section><h3>重要事实</h3>{summary.deadlines.map((item) => <article key={item.id}><Flag size={14} /><div><strong>{item.title}</strong><span>任务截止 · {item.progress}%</span></div></article>)}{summary.projectDeadlines.map((item) => <article key={`project-${item.id}`}><Flag size={14} /><div><strong>{item.title}</strong><span>项目截止</span></div></article>)}{summary.milestones.map((item) => <article key={`milestone-${item.id}`}><Diamond size={14} /><div><strong>{item.title}</strong><span>里程碑到期</span></div></article>)}{summary.completedTasks.map((item) => <article key={`done-${item.id}`}><Check size={14} /><div><strong>{item.title}</strong><span>当天曾完成 · 当前 {item.progress}%</span></div></article>)}{summary.progressedTasks.map((item) => <article key={`progress-${item.id}`}><ArrowUp size={14} /><div><strong>{item.title}</strong><span>当天有进度变化</span></div></article>)}{summary.missedTasks.map((item) => <article key={`missed-${item.id}`}><Ban size={14} /><div><strong>{item.title}</strong><span>本次未推进</span></div></article>)}{summary.deadlines.length + summary.projectDeadlines.length + summary.milestones.length + summary.completedTasks.length + summary.progressedTasks.length + summary.missedTasks.length === 0 && <p className="empty-inline">当天没有截止、完成或推进事实。</p>}</section><section><h3>当天安排</h3>{sessions.map((session) => <article key={session.id}><Clock3 size={14} /><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.startLocal}–{session.endLocal}</span></div></article>)}{blocks.map((block) => <article key={block.id}><Clock3 size={14} /><div><strong>{block.title}</strong><span>{block.startLocal}–{block.endLocal} · 时间块</span></div></article>)}{sessions.length + blocks.length === 0 && <p className="empty-inline">当天没有执行时段或时间块。</p>}</section></>}</aside>;
 }
 
 function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, hideHeader = false, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
@@ -1472,7 +1575,7 @@ function SessionEditPopover({ session: planned, task, anchorElement, onClose, on
     <header><strong>{task.title}</strong><span className="session-edit-popover-label">编辑时间</span></header>
     <label>日期<input type="date" value={draft.localDate} onChange={(event) => patchDraft({ localDate: event.target.value })} /></label>
     <div className="time-inputs"><label>开始<input type="time" value={draft.startLocal} onChange={(event) => patchDraft({ startLocal: event.target.value })} /></label><label>结束<input type="time" value={draft.endLocal} onChange={(event) => patchDraft({ endLocal: event.target.value })} /></label></div>
-    <small>{draft.localDate} {draft.startLocal}–{draft.endLocal} · 持续 {duration} 分钟</small>
+    <small>{formatShortDate(draft.localDate)} {draft.startLocal}–{draft.endLocal} · 持续 {duration} 分钟</small>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
     <div className="form-actions"><Button disabled={busy} onClick={editor.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !editor.canSave}>{busy ? "正在保存…" : "保存时间"}</Button></div>
   </form></FloatingPanel>;
@@ -1917,7 +2020,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
       {importDraft.mode !== "bilibili" && projectImport.error && <p role="alert">{projectImport.error}</p>}{!importTitle.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={importBusy} onClick={() => patchImport({ mode: "none" })}>取消</Button><Button type="submit" variant="primary" disabled={importBusy || !projectImport.canSave}>{importBusy ? "正在写入…" : "创建"}</Button></div>
     </form></FloatingPanel>}
 
-    {newProjectTask && <FloatingPanel label="添加项目任务" busy={newProjectTaskBusy} onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></FloatingPanel>}
+    {newProjectTask && <FloatingPanel className="task-editor-panel" label="添加项目任务" busy={newProjectTaskBusy} closeOnOutsideClick onClose={() => setNewProjectTask(null)}><div className="task-editor-fields"><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></div></FloatingPanel>}
 
     <div className="project-layout">
       <div className="project-list" inert={selectedProject ? true : undefined}>
@@ -1961,7 +2064,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
                   const status = outcome
                     ? { className: "milestone-status missed", label: "未达成" }
                     : reached ? { className: "milestone-status reached", label: "已达成" } : { className: "milestone-status", label: "进行中" };
-                  const detail = outcome ? outcome.resultText + " · " + formatShortDate(outcome.targetLocalDate) + " 到期" : milestoneSummary(milestone, selectedTasks);
+                  const detail = outcome ? outcome.resultText + " · " + formatShortDate(outcome.targetLocalDate) + "到期" : milestoneSummary(milestone, selectedTasks);
                   return <div key={milestone.id} id={"milestone-" + milestone.id} className="project-milestone-row">
                     <span className={"project-milestone-dot" + (outcome ? " is-missed" : reached ? " is-reached" : " is-active")} aria-hidden="true" />
                     <div className="project-milestone-main"><strong>{milestone.title}</strong><small>{detail}</small></div>
@@ -1980,8 +2083,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
             <section className="project-detail-section" aria-labelledby="project-tasks-title">
               <div className="project-detail-section-head">
                 <h3 id="project-tasks-title">任务 <span>{shownSelectedTasks.length}</span></h3>
-                <label className="project-task-filter"><input type="checkbox" className="switch" checked={taskFilter} onChange={(event) => setTaskFilter(event.target.checked)} />只看未完成</label>
-                {selectedRecentTaskId && <button type="button" className="project-quiet-action" onClick={() => setPendingScrollId("project-task-" + selectedRecentTaskId)}>回到最近推进</button>}
+                <button type="button" className="filter-chip" aria-pressed={taskFilter} onClick={() => setTaskFilter((value) => !value)}>只看未完成</button>
               </div>
               <div className="project-task-list">
                 {shownSelectedTasks.map((task) => {
@@ -1992,10 +2094,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
                       <button type="button" className="project-task-title" aria-label={"编辑任务 " + task.title} onClick={(event) => onEditTask(task, event.currentTarget)}>{task.title}</button>
                       {meta && <small>{meta}</small>}
                     </div>
-                    <button type="button" className="project-task-progress" aria-label={"调整进度 " + task.title} onClick={(event) => setProgressEdit({ taskId: task.id, anchor: event.currentTarget })}>
-                      <span className="project-task-track"><span style={{ width: task.progress + "%" }} /></span>
-                      <b>{task.progress}%</b>
-                    </button>
+                    <InlineTaskProgress task={task} onCommit={onProgress} onOpen={(anchor) => setProgressEdit({ taskId: task.id, anchor })} />
                     <div className="project-task-actions">
                       {isTaskCompleted(task)
                         ? <span className="project-task-done"><Check size={13} aria-hidden="true" />已完成</span>
@@ -2008,6 +2107,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
             </section>
           </div>
           <footer className="project-detail-foot">
+            {selectedRecentTaskId && <button type="button" className="project-quiet-action project-recent-jump" onClick={() => { setTaskFilter(false); setPendingScrollId("project-task-" + selectedRecentTaskId); }}><LocateFixed size={14} aria-hidden="true" />跳转最近推进</button>}
             <Button aria-label={"编辑项目 " + selectedProject.title} onClick={(event) => { setProjectEditAnchor(event.currentTarget); setEditingProjectId(selectedProject.id); }}>编辑项目</Button>
             <Button variant="primary" onClick={() => setNewProjectTask({ id: crypto.randomUUID(), projectId: selectedProject.id, title: "", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: null, priority: "normal", sortOrder: selectedTasks.length, kind: "task" })}><Plus size={16} />添加任务</Button>
           </footer>
@@ -2017,7 +2117,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
 
     {editingProjectId && (() => {
       const project = index.projectsById.get(editingProjectId);
-      return project ? <FloatingPanel label={"编辑项目 " + project.title} anchorElement={projectEditAnchor} onClose={() => setEditingProjectId(null)}><ProjectEditor project={project} onSave={async (next) => { await onUpdateProject(next); setEditingProjectId(null); }} onClose={() => setEditingProjectId(null)} /></FloatingPanel> : null;
+      return project ? <FloatingPanel label={"编辑项目 " + project.title} anchorElement={projectEditAnchor} closeOnOutsideClick onClose={() => setEditingProjectId(null)}><ProjectEditor project={project} onSave={async (next) => { await onUpdateProject(next); setEditingProjectId(null); }} onClose={() => setEditingProjectId(null)} /></FloatingPanel> : null;
     })()}
 
     {milestoneDraft && (() => {
@@ -2059,7 +2159,6 @@ function ProjectEditor({ project, onSave, onClose }: { project: Project; onSave:
   return <form className="project-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
     <label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
     <label>项目截止日期<DateField label="项目截止日期" value={deadline || null} today={toLocalDate(new Date())} onChange={(value) => setDeadline(value ?? "")} /></label>
-    <small>截止日期属于项目整体，不是子任务的截止。</small>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
     <div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy} onClick={() => void save()}>{busy ? "正在保存…" : "保存项目"}</Button></div>
   </form>;
@@ -2094,7 +2193,7 @@ function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false,
   const goalText = draft.criterionKind === "orderedTask" ? `完成任务「${tasks.find((task) => task.id === draft.targetTaskId)?.title ?? "…"}」`
     : draft.criterionKind === "taskCount" ? `完成 ${draft.targetCount ?? 1} 个项目任务`
     : `项目加权进度达到 ${draft.targetProgress ?? 50}%`;
-  const summaryText = draft.targetLocalDate ? `${goalText} · ${formatShortDate(draft.targetLocalDate)} 前` : goalText;
+  const summaryText = draft.targetLocalDate ? `${goalText} · ${formatShortDate(draft.targetLocalDate)}前` : goalText;
 
   return <form aria-busy={busy} className="milestone-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <div className="section-heading"><h3>{continuing ? `续排里程碑：${editing?.title ?? ""}` : editing ? `编辑里程碑：${editing.title}` : "新增里程碑"}</h3><button className="icon-action" type="button" disabled={busy} aria-label="关闭里程碑表单" onClick={session.cancel}><X size={15} /></button></div>
@@ -2221,7 +2320,7 @@ function BackupRow({ backup, native, disabled, onPreview }: { backup: BackupInfo
     <div className="settings-label">
       <strong>{backup.kind === "daily" ? "每日备份" : backup.kind === "manual" ? "手动备份" : "恢复前备份"}</strong>
       {preview
-        ? <small className="backup-meta">{new Date(preview.modifiedAt).toLocaleString()} · {(preview.sizeBytes / 1024).toFixed(1)} KB<span className="backup-status ok">检查通过</span></small>
+        ? <small className="backup-meta">{formatDateTimeLong(preview.modifiedAt)} · {(preview.sizeBytes / 1024).toFixed(1)} KB<span className="backup-status ok">检查通过</span></small>
         : <small className="backup-meta">{error ? <span className="backup-status bad">{error}</span> : "正在检查备份…"}</small>}
     </div>
     <div className="settings-control">
@@ -2378,6 +2477,25 @@ function ConfirmDialog({ id, children, busy, onClose, className, labelledBy }: {
   return createPortal(<div id={id} className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}><section className={className ? `modal ${className}` : "modal"} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>{children}</section></div>, document.body);
 }
 
+/** 任务行内进度：悬浮或聚焦时出现把手，拖动实时预览，松手再写库。 */
+function InlineTaskProgress({ task, onCommit, onOpen }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; onOpen: (anchor: HTMLElement) => void }) {
+  const [value, setValue] = useState(task.progress);
+  useEffect(() => setValue(task.progress), [task.progress]);
+  const commit = () => { if (value !== task.progress) void onCommit(task, value); };
+  return <div className="project-task-progress">
+    <span className="project-task-slider">
+      <span className="project-task-track" aria-hidden="true">
+        <span className="project-task-fill" style={{ width: value + "%" }} />
+        <span className="project-task-thumb" style={{ left: `clamp(.3125rem, ${value}%, calc(100% - .3125rem))` }} />
+      </span>
+      <input type="range" className="project-task-range" min={0} max={100} step={5} value={value}
+        aria-label={task.title + " 完成度"} aria-valuetext={value + "%"}
+        onChange={(event) => setValue(Number(event.target.value))} onPointerUp={commit} onKeyUp={commit} />
+    </span>
+    <button type="button" className="project-task-pct" aria-label={"调整进度 " + task.title} onClick={(event) => onOpen(event.currentTarget)}>{value}%</button>
+  </div>;
+}
+
 function ProgressControl({ task, onCommit, showComplete = false }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; showComplete?: boolean }) {
   const [value, setValue] = useState(task.progress); useEffect(() => setValue(task.progress), [task.progress]);
   const commit = () => { if (value !== task.progress) void onCommit(task, value); };
@@ -2477,19 +2595,20 @@ function daysBetween(from: string, to: string) { return Math.round((new Date(`${
 function deadlineLabel(today: string, deadline: string) { const days = daysBetween(today, deadline); return days < 0 ? `逾期 ${Math.abs(days)} 天` : days === 0 ? "今天截止" : days === 1 ? "明天截止" : `还有 ${days} 天`; }
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(new Date(`${date}T12:00:00`)); }
 function formatLongDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00`)); }
-function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
+function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
 function formatRecentAdvanceDate(date: string, today: string) {
   const sameYear = date.slice(0, 4) === today.slice(0, 4);
   return new Intl.DateTimeFormat("zh-CN", sameYear ? { month: "long", day: "numeric" } : { year: "numeric", month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
 }
 function formatMonth(date: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(`${date}T12:00:00`)); }
+function formatDateTimeLong(value: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 function formatClock(iso: string) { return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
 function taskTitle(workspace: WorkspaceSnapshot, taskId: string) { return workspace.tasks.find((task) => task.id === taskId)?.title ?? "未知任务"; }
 function isEditable(target: EventTarget | null) { return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)); }
 function applyDisplayPreferences(settings: AppSettings, systemDark: boolean, systemReduced: boolean) { const root = document.documentElement; root.dataset.theme = settings.appearance === "system" ? (systemDark ? "dark" : "light") : settings.appearance; root.dataset.motion = settings.motion === "system" ? (systemReduced ? "reduce" : "full") : settings.motion; root.dataset.scale = settings.scale >= 150 ? "large" : "normal"; root.style.fontSize = `${settings.scale}%`; }
 function readError(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-function formatDuration(minutes: number) { return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`; }
+function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const rest = minutes % 60; return hours === 0 ? `${rest} 分钟` : rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分钟`; }
 
 function SchedulePreview({ allocations }: { allocations: ScheduleAllocation[] }) {
   const dates = [...new Set(allocations.map((item) => item.localDate))].sort();

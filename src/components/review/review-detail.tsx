@@ -235,13 +235,14 @@ function ProjectDetail({ review, index, projectId, onOpenTask }: {
   // 明细只列出引擎已经算好的行：不在页面里对任务再求一次和，避免长出第二套口径。
   const tasks = review.tasks.filter((detail) => detail.projectId === projectId);
   const milestones = review.milestones.filter((milestone) => milestone.projectId === projectId);
+  const project = index.projectsById.get(projectId);
 
   return <>
     <section className="review-detail-card" aria-label="这个项目">
       <dl className="review-detail-stats">
         <Fact label="周期内有事实的任务" value={`${tasks.length} 项`} />
         <Fact label="周期内到期的里程碑" value={`${milestones.length} 个`} />
-        <Fact label="项目截止日期" value={index.projectsById.get(projectId)?.deadlineLocal ?? "未设置"} />
+        <Fact label="项目截止日期" value={project?.deadlineLocal ? formatDayLabel(project.deadlineLocal) : "未设置"} />
       </dl>
     </section>
 

@@ -97,11 +97,54 @@ function rescueScenario(endLocal = "13:00") {
 describe("phase 1 manual alpha", () => {
   it("restores the Today page with accessible navigation and task pool", async () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
-    expect(await screen.findByRole("heading", { name: "今天从下一步开始", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(/\d+月\d+日星期/);
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
     expect(screen.getByRole("complementary", { name: /任务池/ })).toBeVisible();
     const results = await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } });
     expect(results.violations).toEqual([]);
+  });
+
+  it("separates the current focus, review, timeline and due facts on the today page", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, checkInEnabled: true };
+    const task = (id: string, title: string, progress: number, deadlineLocal: string | null, sortOrder: number, status: "active" | "completed" = "active") => ({
+      id, projectId: null, title, progress, status, deadlineLocal, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal" as const, sortOrder, kind: "task" as const,
+    });
+    const initial: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [task("now-task", "正在推进", 65, null, 0), task("review-task", "需要回顾", 30, null, 1), task("due-task", "临期任务", 20, "2026-08-06", 2), task("later-task", "更晚的截止", 0, "2026-09-01", 3), task("done-task", "今天做完", 100, null, 4, "completed")],
+      executionSessions: [
+        { id: "s-review", taskId: "review-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "s-now", taskId: "now-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:00", endLocal: "12:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "s-next", taskId: "due-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+      progressEvents: [{ id: "e-done", taskId: "done-task", fromProgress: 80, toProgress: 100, occurredAtUtc: "2026-08-05T10:30:00.000Z" }],
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    await screen.findByRole("heading", { name: /8月5日/, level: 1 });
+
+    const nowCard = document.querySelector<HTMLElement>(".now-card")!;
+    expect(within(nowCard).getByRole("heading", { name: "正在推进" })).toBeVisible();
+    expect(nowCard).toHaveTextContent("还剩 30 分钟");
+    expect(within(nowCard).getByRole("button", { name: "开始本次" })).toBeVisible();
+
+    const review = screen.getByRole("heading", { name: "待回顾", level: 2 }).closest("section")!;
+    expect(review).toHaveTextContent("需要回顾");
+    const currentRow = document.querySelector(".today-session.is-current")!;
+    expect(currentRow).toHaveTextContent("正在推进");
+    expect(currentRow).toHaveTextContent("现在");
+    expect(document.querySelector(".today-session.is-past")).toHaveTextContent("需要回顾");
+
+    const due = document.querySelector<HTMLElement>(".today-due")!;
+    expect(within(due).getByText("临期任务")).toBeVisible();
+    expect(within(due).queryByText("更晚的截止")).not.toBeInTheDocument();
+
+    const completed = screen.getByText("今日完成 1 项").closest("details")!;
+    expect(completed).not.toHaveAttribute("open");
+    expect(completed).toHaveTextContent("今天做完");
+    vi.useRealTimers();
   });
 
   it("removes the task-pool column on utility pages", async () => {
@@ -444,12 +487,12 @@ describe("phase 1 manual alpha", () => {
     try {
       await user.click(await screen.findByRole("button", { name: "日历" }));
       await user.click(screen.getByRole("button", { name: "下一段日期" }));
-      expect(screen.getByText("8/10 — 8/16")).toBeVisible();
+      expect(screen.getByText("8月10日 — 8月16日")).toBeVisible();
       await user.click(screen.getByRole("button", { name: "月" }));
       await user.click(screen.getByRole("button", { name: "下一段日期" }));
       expect(screen.getByText("2026年9月")).toBeVisible();
       await user.click(screen.getByRole("button", { name: "周" }));
-      expect(screen.getByText("8/10 — 8/16")).toBeVisible();
+      expect(screen.getByText("8月10日 — 8月16日")).toBeVisible();
       await user.click(screen.getByRole("button", { name: "月" }));
       expect(screen.getByText("2026年9月")).toBeVisible();
       await waitFor(() => expect(backend.value).toMatchObject({ calendarView: "month" }));
@@ -1139,7 +1182,7 @@ describe("phase 1 manual alpha", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-08-02T14:00:00"));
     const { native } = rescueScenario();
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
-    await screen.findByRole("heading", { name: "今天从下一步开始", level: 1 });
+    await screen.findByRole("heading", { name: /8月2日/, level: 1 });
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
@@ -1460,6 +1503,28 @@ describe("phase 1 manual alpha", () => {
 
     const beta = document.querySelector<HTMLElement>('[data-project-card="project-2"]')!;
     expect(beta.querySelector<HTMLElement>(".project-card-recent")!).toHaveTextContent("还没有推进");
+  });
+
+  it("shows project, task and milestone dates as Chinese month-day expressions", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: "2027-01-15" }],
+      tasks: [{ id: "task-1", projectId: "project-1", title: "写大纲", progress: 0, status: "active", deadlineLocal: "2027-01-12", estimatedMinutes: 60, sortOrder: 0 }],
+      projectMilestones: [{ id: "ms-1", projectId: "project-1", title: "第一阶段", targetLocalDate: "2027-01-15", sortOrder: 0, criterionKind: "taskCount", targetTaskId: null, targetCount: 1, targetProgress: null }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    const card = await screen.findByRole("heading", { name: "Alpha", level: 2 });
+    const cardArticle = card.closest<HTMLElement>("[data-project-card]")!;
+    expect(cardArticle).toHaveTextContent("项目截止 1月15日");
+    expect(cardArticle).not.toHaveTextContent("1/15");
+
+    await openProject(user, "Alpha");
+    const detail = document.getElementById("project-detail")!;
+    expect(detail).toHaveTextContent("完成 1 个项目任务 · 1月15日前");
+    expect(detail).not.toHaveTextContent("1/15");
+    expect(detail).toHaveTextContent("截止 1月12日");
+    expect(detail).not.toHaveTextContent("1/12");
   });
 
   it("filters projects by a 临期项目 chip instead of a switch", async () => {
@@ -1847,7 +1912,7 @@ describe("phase 1 manual alpha", () => {
     const previewTitles = Array.from(document.querySelectorAll(".schedule-preview strong")).map((node) => node.textContent ?? "");
     const stretchTitles = previewTitles.filter((title) => title.startsWith("拉伸 ·"));
     expect(stretchTitles.length).toBe(6);
-    expect(stretchTitles.every((title) => !title.includes("8/2"))).toBe(true);
+    expect(stretchTitles.every((title) => /^拉伸 · 8月\d+日$/.test(title))).toBe(true);
     vi.useRealTimers();
   });
 
@@ -1897,6 +1962,63 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(document.querySelector(".task-editor-fields")).toBeNull());
     expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
     expect(native.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("updates a project task progress from the inline slider and keeps the precise bubble", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "四级冲刺", deadlineLocal: null }],
+      tasks: [{ id: "task-watch", projectId: "project-1", title: "使用说明", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await openProject(user, "四级冲刺");
+
+    const slider = screen.getByRole("slider", { name: "使用说明 完成度" });
+    fireEvent.change(slider, { target: { value: "55" } });
+    fireEvent.keyUp(slider);
+    await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-watch", toProgress: 55 })));
+
+    // 百分比仍是打开精确编辑气泡的入口，完成按钮不丢。
+    await user.click(screen.getByRole("button", { name: "调整进度 使用说明" }));
+    expect(screen.getByRole("button", { name: "标记 使用说明 已完成" })).toBeVisible();
+  });
+
+  it("filters unfinished tasks with a chip and keeps the recent jump in the detail footer", async () => {
+    const user = userEvent.setup();
+    const occurred = new Date();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: null }],
+      tasks: [
+        { id: "task-1", projectId: "project-1", title: "已完成任务", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" },
+        { id: "task-2", projectId: "project-1", title: "未完成任务", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 1, kind: "task" },
+      ],
+      progressEvents: [{ id: "event-1", taskId: "task-1", fromProgress: 50, toProgress: 100, occurredAtUtc: occurred.toISOString() }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await openProject(user, "Alpha");
+
+    const filter = screen.getByRole("button", { name: "只看未完成" });
+    expect(filter).toHaveAttribute("aria-pressed", "false");
+    expect(document.querySelector(".project-detail-section-head .switch")).toBeNull();
+    expect(screen.getByRole("button", { name: "编辑任务 已完成任务" })).toBeInTheDocument();
+
+    await user.click(filter);
+    expect(screen.getByRole("button", { name: "只看未完成" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "编辑任务 已完成任务" })).toBeNull();
+    expect(screen.getByRole("button", { name: "编辑任务 未完成任务" })).toBeInTheDocument();
+
+    // 最近推进是详情级动作，放在固定底栏；它不属于任务区头部。
+    const recentJump = screen.getByRole("button", { name: "跳转最近推进" });
+    expect(document.querySelector(".project-detail-foot")).toContainElement(recentJump);
+    expect(document.querySelector(".project-detail-section-head")).not.toContainElement(recentJump);
+
+    // 最近推进的任务被“只看未完成”藏起来时，点击跳转先恢复列表。
+    await user.click(recentJump);
+    await waitFor(() => expect(screen.getByRole("button", { name: "编辑任务 已完成任务" })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "只看未完成" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("marks a project task complete in one click from the project card", async () => {
@@ -2207,8 +2329,8 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
  * 回退、重启后仍停在原页。
  */
 describe("phase 4 P4-06 deadline view", () => {
-  const NAVIGATION: Array<[PageId, string, string]> = [
-    ["today", "今日", "今天从下一步开始"],
+  const NAVIGATION: Array<[PageId, string, string | RegExp]> = [
+    ["today", "今日", /\d+月\d+日星期/],
     ["calendar", "日历", "日历"],
     ["deadlines", "截止", "截止事项"],
     ["projects", "项目", "项目"],
