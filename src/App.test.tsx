@@ -10,6 +10,15 @@ import { DEFAULT_SETTINGS, PAGE_IDS, SettingsRepository, type AppSettings, type 
 
 beforeEach(() => { Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 }); });
 
+async function openProject(user: ReturnType<typeof userEvent.setup>, title: string) {
+  await user.click(await screen.findByRole("button", { name: "打开项目 " + title }));
+  await screen.findByRole("button", { name: "关闭项目详情" });
+}
+
+async function openImportMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "导入" }));
+}
+
 const tauriEventCallbacks = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, callback: (event: { payload: unknown }) => void) => {
@@ -1091,7 +1100,8 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(structuredClone(EMPTY_WORKSPACE), { fetchBilibiliVideo: vi.fn().mockResolvedValue({ bvid: "BV1xx411c7mD", title: "公开课程", ownerName: "UP 主", parts: [{ page: 1, title: "第一讲", durationSeconds: 600, sourceKey: "BV1xx411c7mD:1", sourceUrl: "https://www.bilibili.com/video/BV1xx411c7mD?p=1" }] }) });
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
+    await openImportMenu(user);
+  await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
     await user.type(screen.getByRole("textbox", { name: "B 站普通视频链接" }), "https://www.bilibili.com/video/BV1xx411c7mD");
     await user.click(screen.getByRole("button", { name: "读取公开元数据" }));
     await screen.findByRole("region", { name: "B 站分 P 预览" });
@@ -1383,7 +1393,8 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(structuredClone(EMPTY_WORKSPACE), { fetchBilibiliVideo });
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
+    await openImportMenu(user);
+  await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
     const link = screen.getByRole("textbox", { name: "B 站普通视频链接" });
     await user.type(link, "https://www.bilibili.com/video/BV1xx411c7mD");
     await user.click(screen.getByRole("button", { name: "读取公开元数据" }));
@@ -1410,11 +1421,73 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
     expect(await screen.findByText(/已逾期 1 天/)).toBeVisible();
+    await openProject(user, "Alpha");
     await user.click(screen.getByRole("button", { name: "编辑项目 Alpha" }));
+    const editor = screen.getByRole("dialog", { name: "编辑项目 Alpha" });
+    // 项目截止日期与回顾页任务截止日期共用自绘月历，不再出现原生 input[type=date]。
+    expect(editor.querySelector('input[type="date"]')).toBeNull();
     const titleInput = screen.getByLabelText("项目标题");
     await user.clear(titleInput); await user.type(titleInput, "Beta");
+    await user.click(within(editor).getByRole("button", { name: /^项目截止日期/ }));
+    await user.click(screen.getByRole("button", { name: "设为今天" }));
     await user.click(screen.getByRole("button", { name: "保存项目" }));
-    await waitFor(() => expect(native.updateProject).toHaveBeenCalledWith(expect.objectContaining({ id: "project-1", title: "Beta", deadlineLocal: yesterday })));
+    await waitFor(() => expect(native.updateProject).toHaveBeenCalledWith(expect.objectContaining({ id: "project-1", title: "Beta", deadlineLocal: isoDaysFromNow(0) })));
+  });
+
+  it("keeps the project card compact and shows the last progress date in the footer", async () => {
+    const user = userEvent.setup();
+    const now = new Date();
+    const occurred = new Date(now.getFullYear(), 6, 15, 12, 0, 0);
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: null }, { id: "project-2", title: "Beta", deadlineLocal: null }],
+      tasks: [{ id: "task-1", projectId: "project-1", title: "写大纲", progress: 40, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      progressEvents: [{ id: "event-1", taskId: "task-1", fromProgress: 0, toProgress: 40, occurredAtUtc: occurred.toISOString() }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await screen.findByRole("heading", { name: "Alpha", level: 2 });
+
+    const alpha = document.querySelector<HTMLElement>('[data-project-card="project-1"]')!;
+    // 旧的“任务完成／里程碑／最近推进”三列事实行已移除，避免和上方摘要重复。
+    expect(alpha.querySelector(".project-card-facts")).toBeNull();
+    // 任务数量用“完成 / 总数”的紧凑分数，不再写“1 个任务 · 0 项完成”。
+    expect(alpha.querySelector(".project-card-count")).toHaveTextContent("0 / 1");
+    // 右下角只留一个可读日期，而不是“8/4”这种像分数的短格式。
+    const alphaRecent = alpha.querySelector<HTMLElement>(".project-card-recent")!;
+    expect(alphaRecent).toHaveTextContent("上次推进 7月15日");
+    expect(alphaRecent).not.toHaveTextContent("7/15");
+    expect(alpha).not.toHaveTextContent("任务完成");
+
+    const beta = document.querySelector<HTMLElement>('[data-project-card="project-2"]')!;
+    expect(beta.querySelector<HTMLElement>(".project-card-recent")!).toHaveTextContent("还没有推进");
+  });
+
+  it("filters projects by a 临期项目 chip instead of a switch", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [
+        { id: "project-1", title: "Alpha", deadlineLocal: isoDaysFromNow(2) },
+        { id: "project-2", title: "Beta", deadlineLocal: isoDaysFromNow(10) },
+        { id: "project-3", title: "Gamma", deadlineLocal: null },
+      ],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await screen.findByRole("heading", { name: "Beta", level: 2 });
+    expect(document.querySelector(".project-filters .switch")).toBeNull();
+
+    const filter = screen.getByRole("button", { name: "只看临期项目" });
+    expect(filter).toHaveAttribute("aria-pressed", "false");
+    expect(filter).toHaveTextContent("临期项目");
+    await user.click(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("heading", { name: "Beta", level: 2 })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Gamma", level: 2 })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Alpha", level: 2 })).toBeVisible();
+
+    await user.click(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("heading", { name: "Beta", level: 2 })).toBeVisible();
   });
 
   it("creates a milestone with an ordered task and shows the reached state", async () => {
@@ -1427,11 +1500,24 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    expect(await screen.findByText("大纲定稿")).toBeVisible();
-    expect(screen.getByText("已达成")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "为 Alpha 新增里程碑" }));
+    await openProject(user, "Alpha");
+    expect((await screen.findAllByText("大纲定稿")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已达成").length).toBeGreaterThan(0);
+    const addMilestone = screen.getByRole("button", { name: "为 Alpha 新增里程碑" });
+    // 里程碑入口是纯 + 图标按钮，不占一行文字。
+    expect(addMilestone.textContent?.trim()).toBe("");
+    expect(addMilestone.querySelector("svg")).not.toBeNull();
+    await user.click(addMilestone);
+    expect(screen.getByRole("dialog", { name: "里程碑" })).toBeVisible();
+    // 编辑里程碑气泡：点空白关闭，不写库。
+    await user.click(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "里程碑" })).toBeNull());
+    expect(native.createProjectMilestone).not.toHaveBeenCalled();
+    await user.click(addMilestone);
     await user.type(screen.getByLabelText("里程碑名称"), "终稿完成");
-    await user.type(screen.getByLabelText("目标日期"), "2026-09-10");
+    // 目标日期用自绘月历（与回顾页任务截止日期同一个 DateField），不再用原生日期输入。
+    await user.click(screen.getByRole("button", { name: /^目标日期/ }));
+    await user.click(screen.getByRole("button", { name: "设为今天" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "顺序目标任务" }), "task-1");
     await user.click(screen.getByRole("button", { name: "保存里程碑" }));
     await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ title: "终稿完成", criterionKind: "orderedTask", targetTaskId: "task-1" })));
@@ -1449,7 +1535,8 @@ describe("phase 1 manual alpha", () => {
     };
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    expect(await screen.findByText("完成到目标任务")).toBeVisible();
+    await openProject(user, "Alpha");
+    expect((await screen.findAllByText("完成到目标任务")).length).toBeGreaterThan(0);
     expect(screen.getByText("进行中")).toBeVisible();
   });
 
@@ -1463,13 +1550,24 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    await screen.findByText("两个任务完成");
+    await openProject(user, "Alpha");
+    await screen.findAllByText("两个任务完成");
     await user.click(screen.getByRole("button", { name: "编辑里程碑 两个任务完成" }));
     const nameInput = screen.getByLabelText("里程碑名称");
     await user.clear(nameInput); await user.type(nameInput, "完成两个任务");
     await user.click(screen.getByRole("button", { name: "保存里程碑" }));
     await waitFor(() => expect(native.updateProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ id: "ms-1", title: "完成两个任务" })));
+    // 删除先出二次确认气泡；点空白取消后不写库。
     await user.click(await screen.findByRole("button", { name: "删除里程碑 完成两个任务" }));
+    expect(await screen.findByText("删除里程碑「完成两个任务」？")).toBeVisible();
+    // 确认气泡是模态：背景 inert，点空白只取消气泡，不会连带关掉项目抽屉。
+    expect(document.querySelector(".app-shell")).toHaveAttribute("inert");
+    await user.click(document.body);
+    await waitFor(() => expect(screen.queryByText("删除里程碑「完成两个任务」？")).toBeNull());
+    expect(document.getElementById("project-detail")).not.toBeNull();
+    expect(native.deleteProjectMilestone).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "删除里程碑 完成两个任务" }));
+    await user.click(await screen.findByRole("button", { name: "删除" }));
     await waitFor(() => expect(native.deleteProjectMilestone).toHaveBeenCalledWith("ms-1"));
     await user.click(await screen.findByRole("button", { name: /恢复项目里程碑/ }));
     await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ id: "ms-1" })));
@@ -1486,13 +1584,14 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
+    await openProject(user, "Alpha");
     expect(await screen.findByText(/完成 1\/2，未达成/)).toBeVisible();
     expect(screen.getByText("未达成")).toBeVisible();
     expect(screen.queryByRole("button", { name: "编辑里程碑 两个任务完成" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除里程碑 两个任务完成" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "续排里程碑 两个任务完成" }));
     expect(screen.getByRole("heading", { name: "续排里程碑：两个任务完成" })).toBeVisible();
-    expect(screen.getByLabelText("完成任务数（项目内共 2 个）")).toHaveValue(2);
+    expect(screen.getByLabelText("完成任务数")).toHaveValue(2);
     await user.click(screen.getByRole("button", { name: "保存续排" }));
     await waitFor(() => expect(native.createProjectMilestone).toHaveBeenCalledWith(expect.objectContaining({ criterionKind: "taskCount", targetCount: 2, projectId: "project-1" })));
   });
@@ -1506,7 +1605,8 @@ describe("phase 1 manual alpha", () => {
     };
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    expect(await screen.findByText("已达成")).toBeVisible();
+    await openProject(user, "Alpha");
+    expect((await screen.findAllByText("已达成")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "续排里程碑 大纲定稿" })).not.toBeInTheDocument();
   });
 
@@ -1776,7 +1876,7 @@ describe("phase 1 manual alpha", () => {
     expect(screen.getByText("使用说明")).toBeVisible();
   });
 
-  it("retains the editor draft until explicit cancellation", async () => {
+  it("closes the task editor on an outside click without toggling the project group", async () => {
     const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       projects: [{ id: "project-1", title: "四级英语单词", deadlineLocal: null }],
@@ -1790,14 +1890,13 @@ describe("phase 1 manual alpha", () => {
     const editButton = await screen.findByRole("button", { name: "编辑任务 视频配套书籍在哪？" });
     await user.click(editButton);
     expect(document.querySelector(".task-editor-fields")).not.toBeNull();
-    // 气泡开着时点折叠 header：应该只关气泡，不切换 header 折叠状态
-    const header = screen.getByRole("button", { name: /四级英语单词/ });
-    expect(header).toHaveAttribute("aria-expanded", "false");
-    await user.click(header);
-    expect(document.querySelector(".task-editor-fields")).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "取消" }));
+    // 点气泡外面的折叠 header：只关气泡，不切换 header 折叠状态。
+    // 编辑气泡是模态：背景整块 inert，真实浏览器里点背景不会触发折叠。
+    expect(document.querySelector(".app-shell")).toHaveAttribute("inert");
+    await user.click(screen.getByRole("button", { name: /四级英语单词/ }));
     await waitFor(() => expect(document.querySelector(".task-editor-fields")).toBeNull());
-    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
+    expect(native.updateTask).not.toHaveBeenCalled();
   });
 
   it("marks a project task complete in one click from the project card", async () => {
@@ -1809,12 +1908,35 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "项目" }));
-    const projectCard = document.querySelector<HTMLElement>(".project-card")!;
-    await user.click(within(projectCard).getByText("进度 10% · 调整"));
-    const completeButton = within(projectCard).getByRole("button", { name: "标记 使用说明 已完成" });
+    await openProject(user, "四级冲刺");
+    await user.click(screen.getByRole("button", { name: "调整进度 使用说明" }));
+    const completeButton = screen.getByRole("button", { name: "标记 使用说明 已完成" });
     await user.click(completeButton);
     await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-watch", toProgress: 100 })));
-    expect(within(projectCard).getAllByText("100%").length).toBeGreaterThan(0);
+    expect(within(document.getElementById("project-detail")!).getAllByText("100%").length).toBeGreaterThan(0);
+  });
+
+  it("opens the project detail as a right drawer and closes it from the scrim or Escape", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: null }],
+      tasks: [{ id: "task-1", projectId: "project-1", title: "写大纲", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0, kind: "task" }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await user.click(await screen.findByRole("button", { name: "打开项目 Alpha" }));
+    expect(document.getElementById("project-detail")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "关闭项目详情" })).toBeVisible();
+    // 抽屉是模态：背后的列表 inert，焦点落在详情标题上。
+    expect(document.querySelector(".project-list")).toHaveAttribute("inert");
+    await user.click(screen.getByRole("button", { name: "关闭项目详情遮罩" }));
+    await waitFor(() => expect(document.getElementById("project-detail")).toBeNull());
+    expect(screen.getByRole("button", { name: "打开项目 Alpha" })).toHaveFocus();
+    // 再开一次，Esc 也能关。
+    await user.click(screen.getByRole("button", { name: "打开项目 Alpha" }));
+    expect(document.getElementById("project-detail")).not.toBeNull();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.getElementById("project-detail")).toBeNull());
   });
 });
 
@@ -1866,17 +1988,20 @@ it("keeps each import mode's draft after cancelling the panel", async () => {
   render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
   await user.click(await screen.findByRole("button", { name: "项目" }));
 
-  await user.click(screen.getByRole("button", { name: "导入文本课程" }));
+  await openImportMenu(user);
+  await user.click(screen.getByRole("button", { name: "文本课程" }));
   await user.type(within(screen.getByRole("dialog")).getByLabelText("粘贴分集文本"), "P1 独立草稿 12:30");
   await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
 
   // 另一种模式不能带上一种模式的草稿。
+  await openImportMenu(user);
   await user.click(screen.getByRole("button", { name: "B 站链接 Beta" }));
   expect(within(screen.getByRole("dialog")).getByLabelText("B 站普通视频链接")).toHaveValue("");
   await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
 
   // 取消保留草稿 —— 规格 §4.1 的显式例外。
-  await user.click(screen.getByRole("button", { name: "导入文本课程" }));
+  await openImportMenu(user);
+  await user.click(screen.getByRole("button", { name: "文本课程" }));
   expect(within(screen.getByRole("dialog")).getByLabelText("粘贴分集文本")).toHaveValue("P1 独立草稿 12:30");
 });
 

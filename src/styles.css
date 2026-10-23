@@ -520,7 +520,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .progress-track { height: 6px; border-radius: 999px; background: var(--bg); overflow: hidden; box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
 .progress-track span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 80%, var(--accent-strong))); border-radius: inherit; transition: width .22s ease; }
 .project-deadline { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; padding: .3rem .62rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; }
-.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-editor small, .milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.milestone-form label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-tasks { margin-top: 8px; max-height: 330px; overflow: auto; padding-right: 6px; scrollbar-gutter: stable; }
+.project-deadline.overdue { background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--danger); }.project-editor { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.project-editor label { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; }.project-editor small, .milestone-form small { color: var(--muted); font-size: .75rem; }.project-milestones { margin-top: 12px; display: grid; gap: 7px; }.milestone-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }.milestone-row > div:first-child { display: grid; gap: 2px; min-width: 0; }.milestone-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.milestone-row span { color: var(--muted); font-size: .72rem; }.milestone-row .icon-action { min-width: 30px; min-height: 30px; }.milestone-status { font-size: .72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap; }.milestone-status.reached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }.milestone-status.missed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }.milestone-empty { color: var(--muted); font-size: .78rem; margin: 0; }.milestone-form { display: grid; gap: 10px; }
+/* 里程碑表单的字段行：标签在左、控件在右，同一行排布；气泡底色由 .floating-panel 的 --panel 统一提供。 */
+.milestone-field { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); align-items: center; gap: 10px; color: var(--muted); font-size: .78rem; }
+.milestone-field > input, .milestone-field > .select-shell, .milestone-field > .date-field { width: 100%; min-width: 0; }
+.milestone-field > .select-shell { --select-text-start: .6rem; --select-text-end: 1.7rem; }
+.milestone-field > .select-shell > select { height: 2.375rem; padding: 0 var(--select-text-end) 0 var(--select-text-start); border-radius: 9px; }.project-tasks { margin-top: 8px; max-height: 330px; overflow: auto; padding-right: 6px; scrollbar-gutter: stable; }
 .project-tasks > div { display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); }.project-tasks > div > span { color: var(--muted); font-size: .75rem; }
 
 /* 设置页（B 方案）：单列分组 + 标准设置行。
@@ -723,7 +728,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .success-message, .error-message { display: flex; align-items: center; gap: 8px; }
 .success-message { color: var(--success); }
 .error-message { color: var(--danger); }
-.modal-backdrop { position: fixed; z-index: 50; inset: 0; background: rgb(22 17 12 / 52%); backdrop-filter: blur(2px); display: grid; place-items: center; padding: 20px; }
+.modal-backdrop { position: fixed; z-index: 80; inset: 0; background: rgb(22 17 12 / 52%); backdrop-filter: blur(2px); display: grid; place-items: center; padding: 20px; }
 .modal { width: min(500px, 100%); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 18px; box-shadow: var(--shadow-modal); padding: 26px; display: grid; gap: 14px; }
 .modal-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-strong); display: grid; place-items: center; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent); }
 .modal h2, .modal p { margin-bottom: 0; }
@@ -1436,3 +1441,147 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .deadline-state.frozenUnmet { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
 .deadline-state.currentlyReached { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, var(--line)); background: color-mix(in srgb, var(--success) 12%, var(--panel)); }
 .deadline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+
+/* ---------------------------------------------------------------------------
+   项目页（2026-10-23 右侧抽屉）
+   列表始终是完整的两列卡；详情从右侧滑出成抽屉（遮罩 + 背景 inert），
+   关闭走遮罩、× 或 Esc。抽屉宽度用 rem，跟随界面缩放。
+   进度轨的尺寸全部用 rem，位置是百分比，不随缩放变化。
+   --------------------------------------------------------------------------- */
+.project-page-header { align-items: flex-start; }
+.project-subtitle { margin: 2px 0 0; color: var(--muted); font-size: .8rem; }
+.project-filters { grid-template-columns: minmax(0, 1fr) auto; }
+.project-filters > .deadline-chip-group { justify-self: end; }
+.project-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.project-list { min-width: 0; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(30rem, 100%), 1fr)); gap: 14px; align-items: start; }
+
+.project-card { position: relative; display: grid; gap: 10px; min-width: 0; padding: 15px 17px 12px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); transition: border-color .12s ease, box-shadow .12s ease; }
+.project-card:hover { border-color: var(--line); }
+.project-card.is-selected { border-color: var(--accent-strong); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-low); }
+/* 整卡是打开/关闭详情的按钮；非交互内容让指针穿透到它，内部动作按钮再浮上来。 */
+.project-card-open { position: absolute; inset: 0; z-index: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
+.project-card-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.project-card > *:not(.project-card-open) { position: relative; z-index: 1; pointer-events: none; }
+.project-card button:not(.project-card-open) { pointer-events: auto; }
+.project-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.project-card-head h2 { margin: 0; font-size: 1rem; line-height: 1.4; overflow-wrap: anywhere; }
+.project-card-pct { color: var(--accent-strong); font-size: 1.35rem; font-weight: 650; line-height: 1.2; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.project-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0; color: var(--muted); font-size: .78rem; }
+.project-card-meta .project-deadline { margin-top: 0; }
+.project-nodeadline { color: var(--muted); }
+.project-card-count { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.project-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 9px; border-top: 1px solid var(--line-soft); }
+.project-card-recent { flex: none; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.project-continue { display: inline-flex; align-items: center; gap: 5px; min-height: 2.75rem; padding: 0 .1rem; border: 0; background: transparent; color: var(--accent-strong); font-size: .82rem; font-weight: 600; text-align: left; min-width: 0; }
+.project-continue span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-continue:hover { text-decoration: underline; }
+
+/* 项目进度轨：横轴是加权进度，菱形是里程碑。 */
+.project-rail-block { position: relative; display: grid; gap: 6px; min-width: 0; }
+/* 紧凑卡把“下一里程碑”贴在菱形下面：标签占一行正常高度，横向仍按里程碑位置绝对对齐。
+   标签到分隔线是卡片 10px 网格间距；菱形旋转后比轨道多探出约 .2361rem，行距补上这段，
+   让菱形下沿到标签也保持 10px（原来标签绝对定位，下方多出一段间距，显得下宽上窄）。 */
+.project-rail-block.is-compact.has-node-label { gap: calc(8px + .2361rem); }
+.project-rail-label-slot { position: relative; height: 1.2em; font-size: .75rem; line-height: 1.2; }
+.project-rail-node-label { position: absolute; top: 0; left: var(--rail-position); display: inline-flex; align-items: baseline; gap: 5px; max-width: min(18rem, 60%); transform: translateX(-50%); color: var(--muted); font-size: .75rem; line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.project-rail-node-label > strong { min-width: 0; overflow: hidden; color: var(--muted-strong); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.project-rail-node-label > span { flex: none; }
+.project-rail-node-label.is-edge-start { left: 0; transform: none; }
+.project-rail-node-label.is-edge-end { right: 0; left: auto; transform: none; }
+.project-rail { position: relative; height: .5rem; margin: 2px 0; border-radius: 999px; background: var(--bg); box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
+.project-rail-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 80%, var(--accent-strong))); }
+.project-rail-node { position: absolute; top: 50%; width: .6875rem; height: .6875rem; transform: translate(-50%, -50%) rotate(45deg); border: 2px solid var(--accent); border-radius: 2px; background: var(--panel); box-shadow: 0 0 0 2px var(--panel); }
+.project-rail-node.is-reached { background: var(--success); border-color: var(--success); }
+.project-rail-node.is-missed { border-color: var(--danger); }
+.project-rail-node.is-active { background: var(--accent-soft); }
+.project-rail-node.is-next { border-color: var(--accent-strong); background: var(--accent-soft); }
+.project-rail-node.is-approximate:not(.is-reached) { border-style: dashed; }
+.project-rail-next { margin: 0; color: var(--muted); font-size: .74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-rail-next strong { color: var(--muted-strong); font-weight: 600; }
+.project-rail-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: .76rem; }
+.project-rail-legend-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.project-rail-legend-item strong { max-width: 9rem; color: var(--muted-strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-rail-legend-dot { width: .5rem; height: .5rem; flex: none; transform: rotate(45deg); border: 2px solid var(--accent); border-radius: 2px; background: var(--panel); }
+.project-rail-legend-item.is-reached .project-rail-legend-dot { background: var(--success); border-color: var(--success); }
+.project-rail-legend-item.is-missed .project-rail-legend-dot { border-color: var(--danger); }
+.project-rail-legend-item.is-active .project-rail-legend-dot { background: var(--accent-soft); }
+.project-rail-approx { color: var(--muted); font-size: .72rem; }
+.project-rail-empty { color: var(--muted); font-size: .76rem; }
+
+/* 详情＝右侧抽屉：固定贴右，遮罩压住整页；打开时页头、筛选和列表都 inert。 */
+.project-detail { position: fixed; z-index: 60; inset: 0 0 0 auto; width: min(32.5rem, 92vw); height: 100%; display: grid; }
+.project-detail-scrim { position: fixed; inset: 0; z-index: 0; border: 0; background: rgb(22 17 12 / 12%); }
+.project-detail-panel { position: relative; z-index: 1; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; overflow: hidden; background: var(--panel); border: 1px solid var(--line-soft); border-right: 0; border-radius: 18px 0 0 18px; box-shadow: var(--shadow-modal); }
+.project-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 20px 13px; border-bottom: 1px solid var(--line-soft); }
+.project-detail-head h2 { margin: 0; font-size: 1.1rem; line-height: 1.45rem; overflow-wrap: anywhere; }
+.project-detail-head p { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 6px 0 0; color: var(--muted); font-size: .8rem; }
+.project-detail-head p .project-deadline { margin-top: 0; }
+.project-detail-close { flex: none; }
+.project-detail-body { overflow: auto; padding: 16px 20px 10px; display: grid; gap: 18px; align-content: start; }
+.project-detail-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+
+.project-progress { display: grid; gap: 6px; }
+.project-progress-top { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.project-progress-value { font-size: 2rem; font-weight: 650; line-height: 1.05; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
+.project-progress-value small { margin-left: 2px; color: var(--muted-strong); font-size: .9rem; font-weight: 500; }
+.project-progress-caption { margin-left: 8px; color: var(--muted-strong); font-size: .78rem; }
+.project-progress-facts { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted-strong); font-size: .8rem; font-variant-numeric: tabular-nums; }
+
+.project-detail-section { display: grid; gap: 0; }
+.project-detail-section-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding-bottom: 4px; }
+.project-detail-section-head h3 { margin: 0 auto 0 0; display: flex; align-items: baseline; gap: 6px; font-size: .95rem; }
+.project-detail-section-head h3 span { color: var(--muted); font-size: .74rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.project-quiet-action { display: inline-flex; align-items: center; gap: 4px; min-height: 2.75rem; padding: 0; border: 0; background: transparent; color: var(--accent-strong); font-size: .76rem; white-space: nowrap; }
+.project-quiet-action:hover { text-decoration: underline; }
+.project-task-filter { display: inline-flex; align-items: center; gap: 6px; min-height: 2.75rem; color: var(--muted); font-size: .76rem; white-space: nowrap; }
+.project-empty-line { margin: 0; padding: 8px 0; color: var(--muted); font-size: .8rem; }
+
+.project-milestone-list { display: grid; }
+.project-milestone-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.project-milestone-row:first-child { border-top: 0; }
+.project-milestone-dot { grid-column: 1; grid-row: 1 / span 2; width: .5rem; height: .5rem; flex: none; border-radius: 50%; background: var(--line-strong); }
+.project-milestone-dot.is-reached { background: var(--success); }
+.project-milestone-dot.is-missed { background: var(--danger); }
+.project-milestone-dot.is-active { background: var(--accent); }
+.project-milestone-main { grid-column: 2; grid-row: 1; display: grid; gap: 2px; min-width: 0; }
+.project-milestone-row > .milestone-status { grid-column: 2; grid-row: 2; justify-self: start; }
+.project-milestone-main strong { font-size: .88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-milestone-main small { color: var(--muted); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-row-actions { grid-column: 3; grid-row: 1 / span 2; display: flex; align-items: center; gap: 4px; }
+.project-row-icon { min-width: 2.75rem; min-height: 2.75rem; }
+
+.project-task-list { display: grid; }
+.project-task-row { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); }
+.project-task-row:first-child { border-top: 0; }
+.project-task-num { grid-column: 1; grid-row: 1; color: var(--muted); font-size: .75rem; text-align: right; font-variant-numeric: tabular-nums; }
+.project-task-main { grid-column: 2; grid-row: 1; display: grid; gap: 2px; min-width: 0; }
+.project-task-title { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: .88rem; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-task-title:hover { color: var(--accent-strong); text-decoration: underline; }
+.project-task-row.is-done .project-task-title { color: var(--muted-strong); }
+.project-task-main small { color: var(--muted); font-size: .76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-task-progress { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem; align-items: center; gap: 8px; min-height: 2.75rem; padding: 0; border: 0; background: transparent; }
+.project-task-track { display: block; height: .375rem; overflow: hidden; border-radius: 999px; background: var(--bg); box-shadow: inset 0 1px 1px rgb(35 31 27 / 6%); }
+.project-task-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.project-task-progress b { color: var(--muted); font-size: .75rem; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.project-task-progress:hover b { color: var(--accent-strong); }
+.project-task-actions { grid-column: 3; grid-row: 1 / span 2; display: flex; justify-content: flex-end; }
+.project-task-actions .button { min-height: 2.75rem; padding: 0 .65rem; font-size: .75rem; }
+.project-task-done { display: inline-flex; align-items: center; gap: 4px; color: var(--success); font-size: .74rem; white-space: nowrap; }
+
+.project-import-menu { width: 19rem; display: grid; gap: 6px; }
+.project-import-menu h2 { margin: 0 0 2px; font-size: .95rem; }
+.project-import-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel-strong); text-align: left; }
+.project-import-option:hover { border-color: var(--line); background: var(--panel); }
+.project-import-option > svg { flex: none; margin-top: 2px; color: var(--accent); }
+.project-import-option > span { display: grid; gap: 2px; }
+.project-import-option strong { font-size: .84rem; }
+.project-import-option small { color: var(--muted); font-size: .74rem; }
+.project-confirm-bubble { width: 17.5rem; display: grid; gap: 8px; }
+.project-confirm-text { margin: 0; color: var(--text); font-size: .86rem; font-weight: 600; }
+.project-confirm-note { margin: 0; color: var(--muted); font-size: .75rem; }
+.project-progress-panel { width: 20rem; display: grid; gap: 10px; }
+.project-progress-panel h2 { margin: 0; font-size: .95rem; }
+.project-progress-panel p { margin: 0; font-size: .78rem; }
+.floating-panel .project-editor { margin: 0; padding: 0; border: 0; background: transparent; }

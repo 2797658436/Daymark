@@ -91,17 +91,19 @@ test("scheduled session can move and return to the pool without copying its task
 
 test("course text is previewed and imported as one project transaction", async ({ page }) => {
   await page.getByRole("button", { name: "项目" }).click();
-  await page.getByRole("button", { name: "导入文本课程" }).click();
+  await page.getByRole("button", { name: "导入", exact: true }).click();
+  await page.getByRole("button", { name: "文本课程" }).click();
   await page.getByRole("textbox", { name: "项目标题" }).fill("Rust 入门");
   await page.getByRole("textbox", { name: "粘贴分集文本" }).fill("P1 起步 12:30\nP2 所有权 | 18:00\nP3 收尾");
   await expect(page.getByLabel("课程导入预览").getByRole("checkbox")).toHaveCount(3);
   await page.getByRole("button", { name: "创建", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Rust 入门", level: 2 })).toBeVisible();
-  await expect(page.locator(".project-tasks")).toContainText("起步");
-  await expect(page.locator(".project-tasks")).toContainText("所有权");
+  await expect(page.locator(".project-detail")).toContainText("Rust 入门");
+  await expect(page.locator(".project-task-list")).toContainText("起步");
+  await expect(page.locator(".project-task-list")).toContainText("所有权");
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Rust 入门", level: 2 })).toBeVisible();
+  await page.getByRole("button", { name: "打开项目 Rust 入门" }).click();
+  await expect(page.locator(".project-task-list")).toContainText("起步");
 });
 
 test("phase 2 scheduling, time blocks and recurring habits persist as one action flow", async ({ page }) => {

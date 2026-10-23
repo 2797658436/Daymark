@@ -28,7 +28,9 @@ for (const width of [960, 1200]) for (const scale of [100, 150, 200]) {
     const milestone = page.getByRole("dialog", { name: "里程碑", exact: true });
     await expect(milestone.getByLabel("达成条件")).toHaveValue("projectProgress");
     await milestone.getByLabel("里程碑名称").fill("第一步");
-    await milestone.getByLabel("目标日期").fill("2026-12-01");
+    // 目标日期是自绘月历（与回顾页任务截止日期同一个 DateField），不再是原生 input[type=date]。
+    await milestone.getByRole("button", { name: /^目标日期/ }).click();
+    await page.getByRole("button", { name: "设为今天" }).click();
     await milestone.getByRole("button", { name: "保存里程碑" }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/gui-${width}-${scale}.png` });
     await milestone.getByRole("button", { name: "保存里程碑" }).click();
@@ -133,13 +135,16 @@ test("an editor bubble traps Tab, survives a composing Escape and restores focus
 test("project task creation and import drafts remain separate", async ({ page }) => {
   await page.goto("/"); await page.evaluate(() => localStorage.clear()); await page.reload();
   await page.getByRole("button", { name: "项目", exact: true }).click();
-  await page.getByRole("button", { name: "导入文本课程" }).click();
+  await page.getByRole("button", { name: "导入", exact: true }).click();
+  await page.getByRole("button", { name: "文本课程" }).click();
   await page.getByLabel("粘贴分集文本").fill("P1 独立草稿 12:30");
   await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
+  await page.getByRole("button", { name: "导入", exact: true }).click();
   await page.getByRole("button", { name: "B 站链接 Beta" }).click();
   await expect(page.getByLabel("B 站普通视频链接")).toHaveValue("");
   await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
-  await page.getByRole("button", { name: "导入文本课程" }).click();
+  await page.getByRole("button", { name: "导入", exact: true }).click();
+  await page.getByRole("button", { name: "文本课程" }).click();
   await expect(page.getByLabel("粘贴分集文本")).toHaveValue("P1 独立草稿 12:30");
   await page.getByLabel("项目标题", { exact: true }).fill("课程项目");
   await page.getByRole("dialog").getByRole("button", { name: "创建", exact: true }).click();
@@ -149,7 +154,46 @@ test("project task creation and import drafts remain separate", async ({ page })
   await dialog.getByRole("button", { name: "保存任务" }).click();
   await expect(dialog).toHaveCount(0);
   await page.reload();
-  await expect(page.locator(".project-tasks")).toContainText("追加内容");
+  await page.getByRole("button", { name: "打开项目 课程项目" }).click();
+  await expect(page.locator(".project-detail")).toContainText("追加内容");
+});
+
+test("the project detail is always a right drawer and keeps the full card grid behind", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 760 });
+  await page.goto("/"); await page.evaluate(() => localStorage.clear()); await page.reload();
+  await page.getByRole("button", { name: "项目", exact: true }).click();
+  await page.getByRole("button", { name: "新建项目", exact: true }).click();
+  const form = page.getByRole("dialog", { name: "创建项目" });
+  await form.getByLabel("项目标题", { exact: true }).fill("抽屉验收项目");
+  await form.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(form).toHaveCount(0);
+
+  const detail = page.locator("#project-detail");
+  await expect(detail).toBeVisible();
+  const wide = (await detail.boundingBox())!;
+  // 宽屏也是抽屉：固定 520px 贴右，而不是把列表挤成 27.5rem 的分栏。
+  expect(Math.round(wide.width)).toBe(520);
+  expect(Math.round(wide.x + wide.width)).toBe(1200);
+  expect(await page.locator(".project-list").evaluate((node) => node.hasAttribute("inert"))).toBe(true);
+  expect(await page.locator(".project-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").filter(Boolean).length)).toBe(2);
+  expect(await page.locator("#main-content").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+
+  // 遮罩点击关闭，焦点回到项目卡。
+  await page.getByRole("button", { name: "关闭项目详情遮罩" }).click({ position: { x: 40, y: 40 } });
+  await expect(detail).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "打开项目 抽屉验收项目" })).toBeFocused();
+  expect(await page.locator(".project-list").evaluate((node) => node.hasAttribute("inert"))).toBe(false);
+
+  // 960 宽同样是抽屉；Esc 关闭。
+  await page.setViewportSize({ width: 960, height: 760 });
+  await page.getByRole("button", { name: "打开项目 抽屉验收项目" }).click();
+  await expect(detail).toBeVisible();
+  const narrow = (await detail.boundingBox())!;
+  expect(Math.round(narrow.width)).toBe(520);
+  expect(Math.round(narrow.x + narrow.width)).toBe(960);
+  expect(await page.locator(".project-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").filter(Boolean).length)).toBe(1);
+  await page.keyboard.press("Escape");
+  await expect(detail).toHaveCount(0);
 });
 
 /**

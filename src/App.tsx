@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -24,12 +24,14 @@ import { TimeField } from "./components/ui/time-picker";
 import { SettingsChoice, SettingsRow, SettingsSection, SettingsToggleRow } from "./components/settings/settings-ui";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
+import { ProjectRail } from "./components/projects/project-rail";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
+import { buildProjectRail } from "./lib/projectRail";
 import { extractBvid } from "./lib/bilibili";
 import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
-import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
+import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
 import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
@@ -110,6 +112,8 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   // 跨页返回仍然有效、应用重启后不恢复，也不写 Tauri Store。周期与锚点是**偏好**，
   // 走 `preferences.reviewPeriod`／`reviewAnchorDate`，不在这里重复一份。
   const [reviewView, setReviewView] = useState<{ projectId: string | null; selection: ReviewSelection | null }>({ projectId: null, selection: null });
+  // 项目页选中的项目：与截止页/回顾页一样只放 App 层内存，同会话跨页返回有效。
+  const [projectView, setProjectView] = useState<{ selectedId: string | null }>({ selectedId: null });
   const reviewScrollTop = useRef(0);
   // 任务编辑气泡的锚点：截止页与回顾页共用同一个气泡与编辑会话，不各造一份表单。
   const [taskEditorAnchor, setTaskEditorAnchor] = useState<{ taskId: string; anchorElement: HTMLElement | null } | null>(null);
@@ -397,7 +401,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
 
   const activeTasks = workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit");
   const running = workspace.executionRecords.find((record) => !record.actualEndUtc) ?? null;
-  const hasTaskPool = page === "today" || page === "calendar" || page === "projects";
+  const hasTaskPool = page === "today" || page === "calendar";
   const poolUsesOverlay = narrowWindow && !(page === "calendar" && preferences.calendarView === "day");
   const showTaskPool = hasTaskPool && (poolUsesOverlay ? poolOverlayOpen : taskPoolOpen);
   // 日视图单列太宽：窄窗口时也让任务池保持侧栏形态，而不是转浮层
@@ -465,7 +469,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
           onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
           onContinueMilestone={(milestone) => { setProjectFocus({ projectId: milestone.projectId, milestoneId: milestone.id, action: "continue" }); updatePreferences({ lastPage: "projects" }); }} />}
-        {page === "projects" && <ProjectsPage workspace={workspace} index={workspaceIndex} focus={projectFocus} onFocusHandled={() => setProjectFocus(null)} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
+        {page === "projects" && <ProjectsPage workspace={workspace} index={workspaceIndex} focus={projectFocus} onFocusHandled={() => setProjectFocus(null)} selectedProjectId={projectView.selectedId} onSelectProject={(selectedId) => setProjectView({ selectedId })} onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
           onUpdateProject={async (project) => { await commit(() => native.updateProject(project)); }}
           onCreateMilestone={async (milestone) => { await commit(() => native.createProjectMilestone(milestone)); }}
           onUpdateMilestone={async (milestone) => { await commit(() => native.updateProjectMilestone(milestone)); }}
@@ -505,7 +509,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         }} />}
       {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
       {/* 截止页与回顾页共用的任务编辑气泡：复用与任务池完全相同的编辑会话，不复制表单。 */}
-      {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
+      {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
         <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setTaskEditorAnchor(null); }} onCancel={() => setTaskEditorAnchor(null)} onPhase={setTaskEditorBusy} />
       </div></FloatingPanel> : null; })()}
     </div>
@@ -674,7 +678,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
     {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
 
     <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
-    {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} onClose={() => setEditing(null)}><div className="task-editor-fields">
+    {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setEditing(null)}><div className="task-editor-fields">
       <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={index.workspace.projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
   </aside>;
@@ -1394,7 +1398,7 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
   const status = current ? { icon: <Clock3 size={12} />, label: "当前安排" }
     : pendingReview ? { icon: <CircleAlert size={12} />, label: "待回顾" }
       : confirmedNoProgress ? { icon: <Ban size={12} />, label: "本次未推进" }
-        : task.status === "completed" || task.progress === 100 ? { icon: <Check size={12} />, label: "已完成" }
+        : isTaskCompleted(task) || task.progress === 100 ? { icon: <Check size={12} />, label: "已完成" }
           : null;
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault(); event.stopPropagation();
@@ -1417,7 +1421,7 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
   };
-  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", task.status === "completed" || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", landing ? "is-landed" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
+  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", isTaskCompleted(task) || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", landing ? "is-landed" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
   return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
     <DragTimePreview active={resize !== null} anchorRef={articleRef} label="调整时长预览" followKey={resize}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize!) % 1440)} · {resize} 分钟</DragTimePreview>
@@ -1608,31 +1612,37 @@ const EMPTY_PROJECT_IMPORT: ProjectImportDraft = {
   source: "", drafts: [], biliSource: "", bilibili: null, biliSelected: [],
 };
 
+type ProjectSort = "recent" | "deadline" | "name";
+
 /**
- * 项目页。
+ * 项目页（2026-10-22 重排）。
  *
- * 数据来源是 App 建好的共享稳定索引：项目下的任务走 `tasksByProjectId`、里程碑走
- * `milestonesByProjectId`、冻结结果走 `outcomesByMilestoneId`。此前每个项目都
- * `workspace.tasks.filter(...)`／`workspace.projectMilestones.filter(...)` 扫一遍全量，
- * 而且**每个项目**都重新 `[...workspace.progressEvents].filter(...).sort(...)` 找「最近推进」
- * （100 个项目 × 5,000 条事件 → 每次渲染约五十万次比较外加 100 次排序）—— 这是规格 §8
- * 点名的模式，现在改成一次遍历建一张 projectId → 最近推进事件的表。
+ * 结构：页头 → 筛选条 → 宽屏「项目列表 + 右侧详情」／窄屏「列表 + 抽屉详情」。
+ * - 详情是页面内的主从分栏，不是二级页面；宽屏停靠、窄屏/200% 退成抽屉。
+ * - 列表卡在详情打开时收成紧凑卡（CSS 容器查询），关闭后恢复两列完整卡。
+ * - 进度轨由 projectRail.ts 派生：项目加权进度 + 里程碑菱形；近似位置在图例标“≈”。
+ * - 任务池不再出现在项目页（项目页已经按项目列任务），今日/日历保留。
+ *
+ * 数据来源仍是 App 建好的共享稳定索引；不要在渲染每一行时重新扫全量数组。
  */
-function ProjectsPage({ workspace, index, focus, onFocusHandled, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onFetchBilibili, onCreateTask, onArrange }: {
+function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProjectId, onSelectProject, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onEditTask, onFetchBilibili, onCreateTask, onArrange }: {
   /** 来自截止事项页的定位／续排请求；处理完立即回调清空，只生效一次。 */
   focus: ProjectFocusRequest | null; onFocusHandled: () => void;
+  /** 当前打开的项目（App 层内存，同会话跨页返回有效）。 */
+  selectedProjectId: string | null; onSelectProject: (projectId: string | null) => void;
   onCreateTask: (task: Task) => Promise<void>; onArrange: (task: Task) => void;
+  onEditTask: (task: Task, anchorElement: HTMLElement) => void;
   workspace: WorkspaceSnapshot; index: WorkspaceIndex; onCreate: (project: Project, tasks: Task[]) => Promise<void>;
   onUpdateProject: (project: Project) => Promise<void>;
   onCreateMilestone: (milestone: ProjectMilestone) => Promise<void>; onUpdateMilestone: (milestone: ProjectMilestone) => Promise<void>; onDeleteMilestone: (milestone: ProjectMilestone) => Promise<void>;
   onProgress: (task: Task, value: number) => Promise<void>; onFetchBilibili: (bvid: string) => Promise<BilibiliVideo>;
 }) {
   const today = toLocalDate(new Date());
+  const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
+
   /**
-   * 每个项目「最近一次进度上调」的事件（用于「回到最近推进」）。
-   *
-   * 一次遍历建表，而不是每个项目各扫一遍全部事件再排序；时间戳相同时保留先出现的那条，
-   * 与原实现（降序排序后取第一条，稳定排序）结果一致。
+   * 每个项目「最近一次进度上调」的事件（用于「继续」和「最近推进」）。
+   * 一次遍历建表，而不是每个项目各扫一遍全部事件再排序。
    */
   const recentAdvanceByProject = useMemo(() => {
     const best = new Map<string, ProgressEvent>();
@@ -1645,10 +1655,8 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, onCreate, onUpd
     }
     return best;
   }, [index, workspace.progressEvents]);
-  // 导入／新建项目的草稿由编辑会话持有。会话放在 ProjectsPage 而不是面板内部，
-  // 是为了满足规格 §4.1 的显式例外：**取消要按模式保留草稿**，草稿不能随面板卸载而消失。
-  // 代价是会话常驻挂载，所以必须退出活动会话注册表 —— 否则一个「记住的草稿」会被
-  // hasUncommittedEditorDraft() 误判成「正在编辑未提交」，拦住恢复备份等破坏性动作。
+
+  // 导入／新建项目的草稿由编辑会话持有；取消按模式保留草稿，草稿不随面板卸载而消失。
   const [importBusy, setImportBusy] = useState(false);
   const [importFetching, setImportFetching] = useState(false);
   const [importFetchError, setImportFetchError] = useState("");
@@ -1673,6 +1681,10 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, onCreate, onUpd
           : [];
       const tasks: Task[] = selected.map((item, index) => ({ id: crypto.randomUUID(), projectId: project.id, title: item.title, progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: item.estimatedMinutes, sessionMinutes: null, priority: "normal", sortOrder: index, sourceUrl: item.sourceUrl, sourceKey: item.sourceKey, mediaMinutes: item.mediaMinutes, kind: "task" }));
       await onCreate(project, tasks);
+      setProjectQuery("");
+      setSoonOnly(false);
+      onSelectProject(project.id);
+      setPendingScrollId("project-" + project.id);
     },
     // 成功＝这次事务结束，整份清空；取消只关面板，各模式草稿原样保留。
     onClose: (reason) => { if (reason === "saved") { projectImportRef.current?.resetDraft(); setImportFetchError(""); } },
@@ -1682,71 +1694,352 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, onCreate, onUpd
   const importDraft = projectImport.draft;
   const patchImport = projectImport.patchDraft;
   const importTitle = importDraft.titles[importDraft.mode === "none" ? "project" : importDraft.mode];
+
+  const [projectQuery, setProjectQuery] = useState("");
+  const [projectSort, setProjectSort] = useState<ProjectSort>("recent");
+  const [soonOnly, setSoonOnly] = useState(false);
+  const [taskFilter, setTaskFilter] = useState(false);
+  const [importMenuAnchor, setImportMenuAnchor] = useState<HTMLElement | null>(null);
+  const [pendingImportMode, setPendingImportMode] = useState<Exclude<ProjectImportMode, "none"> | null>(null);
   const [newProjectTask, setNewProjectTask] = useState<Task | null>(null);
   const [newProjectTaskBusy, setNewProjectTaskBusy] = useState(false);
-  const [taskQuery, setTaskQuery] = useState(""); const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [projectEditAnchor, setProjectEditAnchor] = useState<HTMLElement | null>(null);
   const [milestoneDraft, setMilestoneDraft] = useState<{ projectId: string; editing: ProjectMilestone | null; continuing: boolean } | null>(null);
   const [milestoneBusy, setMilestoneBusy] = useState(false);
-  /**
-   * 截止事项页的行级动作只定位到这里的既有入口，不复制项目编辑器：
-   * 项目 → 滚动到项目卡；里程碑 → 滚动到具体目标行；冻结目标 → 顺带打开「续排」表单。
-   */
+  const [progressEdit, setProgressEdit] = useState<{ taskId: string; anchor: HTMLElement } | null>(null);
+  const [milestoneDelete, setMilestoneDelete] = useState<{ milestone: ProjectMilestone; anchor: HTMLElement } | null>(null);
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
+
+  // 导入菜单是 action 浮层；先让它卸载，再开创建/导入的 editor 浮层，
+  // 否则两层在同一帧里换位，新的 editor 会有一帧被当成非栈顶（pointer-events: none）。
+  useEffect(() => {
+    if (!pendingImportMode) return;
+    patchImport({ mode: pendingImportMode });
+    setPendingImportMode(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingImportMode]);
+
+  /** 每个项目「下一步」：优先最近推进的未完成任务，否则第一个未完成任务。 */
+  const nextTaskOf = (projectId: string, tasks: Task[]) => {
+    const recent = recentAdvanceByProject.get(projectId);
+    const recentTask = recent ? tasks.find((task) => task.id === recent.taskId) : null;
+    if (recentTask && recentTask.status !== "completed") return recentTask;
+    return [...tasks]
+      .filter((task) => !isTaskCompleted(task))
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id))[0] ?? null;
+  };
+
+  const soonCount = workspace.projects.filter((project) => project.deadlineLocal && deadlineUrgency(project.deadlineLocal, today) !== "later").length;
+  const visibleProjects = useMemo(() => {
+    const needle = projectQuery.trim().toLowerCase();
+    const matches = (project: Project) => {
+      if (soonOnly && !(project.deadlineLocal && deadlineUrgency(project.deadlineLocal, today) !== "later")) return false;
+      if (!needle) return true;
+      if (project.title.toLowerCase().includes(needle)) return true;
+      return projectTasksOf(index, project.id).some((task) => task.title.toLowerCase().includes(needle));
+    };
+    const sorted = workspace.projects.filter(matches);
+    sorted.sort((left, right) => {
+      if (projectSort === "name") return left.title.localeCompare(right.title, "zh-CN");
+      if (projectSort === "deadline") {
+        const leftDeadline = left.deadlineLocal ?? "9999-12-31";
+        const rightDeadline = right.deadlineLocal ?? "9999-12-31";
+        return leftDeadline.localeCompare(rightDeadline) || left.title.localeCompare(right.title, "zh-CN");
+      }
+      const leftRecent = recentAdvanceByProject.get(left.id)?.occurredAtUtc ?? "";
+      const rightRecent = recentAdvanceByProject.get(right.id)?.occurredAtUtc ?? "";
+      return rightRecent.localeCompare(leftRecent) || left.title.localeCompare(right.title, "zh-CN");
+    });
+    return sorted;
+  }, [workspace.projects, index, projectQuery, projectSort, soonOnly, today, recentAdvanceByProject]);
+
+  const selectedProject = selectedProjectId ? index.projectsById.get(selectedProjectId) ?? null : null;
+  const selectedTasks = selectedProject ? projectTasksOf(index, selectedProject.id) : [];
+  const selectedWeighted = selectedProject ? projectProgress(selectedTasks) : 0;
+  const selectedMilestones = selectedProject
+    ? [...(index.milestonesByProjectId.get(selectedProject.id) ?? [])].sort((left, right) => left.targetLocalDate.localeCompare(right.targetLocalDate) || left.sortOrder - right.sortOrder || left.id.localeCompare(right.id))
+    : [];
+  const selectedRail = selectedProject ? buildProjectRail({ tasks: selectedTasks, milestones: selectedMilestones, outcomes: index.outcomesByMilestoneId, progress: selectedWeighted }) : null;
+  const selectedCompleted = selectedTasks.filter(isTaskCompleted).length;
+  const selectedReached = selectedMilestones.filter((milestone) => {
+    const outcome = index.outcomesByMilestoneId.get(milestone.id);
+    return outcome ? outcome.reached : milestoneReached(milestone, selectedTasks, selectedWeighted);
+  }).length;
+  const selectedRecent = selectedProject ? recentAdvanceByProject.get(selectedProject.id) ?? null : null;
+  const selectedRecentTaskId = selectedRecent && selectedTasks.some((task) => task.id === selectedRecent.taskId) ? selectedRecent.taskId : null;
+  const selectedNextTask = selectedProject ? nextTaskOf(selectedProject.id, selectedTasks) : null;
+  const shownSelectedTasks = selectedTasks.filter((task) => !taskFilter || !isTaskCompleted(task));
+  const selectedTaskPositions = new Map(selectedTasks.map((task, index) => [task.id, index + 1]));
+
+  // 选中项目被筛选/删除掉时收起详情，避免右侧留一个对不上的面板。
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    if (!visibleProjects.some((project) => project.id === selectedProjectId)) onSelectProject(null);
+  }, [selectedProjectId, visibleProjects, onSelectProject]);
+
+  useEffect(() => {
+    if (!pendingScrollId) return;
+    let attempts = 0;
+    let timer = 0;
+    const attempt = () => {
+      const target = document.getElementById(pendingScrollId);
+      if (target) { target.scrollIntoView?.({ block: "center" }); setPendingScrollId(null); return; }
+      if (++attempts < 12) timer = window.setTimeout(attempt, 40);
+    };
+    timer = window.setTimeout(attempt, 40);
+    return () => window.clearTimeout(timer);
+  }, [pendingScrollId, selectedProjectId]);
+
+  const openProject = (projectId: string) => {
+    onSelectProject(projectId);
+    window.setTimeout(() => detailHeadingRef.current?.focus({ preventScroll: true }), 0);
+  };
+  const closeProject = () => {
+    const previous = selectedProjectId;
+    onSelectProject(null);
+    window.setTimeout(() => {
+      const trigger = previous ? document.querySelector<HTMLElement>('[data-project-open="' + previous + '"]') : null;
+      trigger?.focus({ preventScroll: true });
+    }, 0);
+  };
+  const toggleProject = (projectId: string) => {
+    if (selectedProjectId === projectId) closeProject();
+    else openProject(projectId);
+  };
+  const continueProject = (projectId: string, task: Task | null) => {
+    if (selectedProjectId !== projectId) openProject(projectId);
+    if (task) setPendingScrollId("project-task-" + task.id);
+  };
+
+  /** 截止事项页的行级动作只定位到既有入口：项目卡、里程碑行、续排表单。 */
   useEffect(() => {
     if (!focus) return;
+    setProjectQuery("");
+    setSoonOnly(false);
+    onSelectProject(focus.projectId);
     const milestone = focus.milestoneId ? index.milestonesById.get(focus.milestoneId) ?? null : null;
     if (focus.action === "continue" && milestone) setMilestoneDraft({ projectId: focus.projectId, editing: continueMilestoneDraft(milestone, today), continuing: true });
-    const target = document.getElementById(focus.milestoneId ? `milestone-${focus.milestoneId}` : `project-${focus.projectId}`);
-    // jsdom 没有 scrollIntoView；真实浏览器里这一跳就是「定位」的全部动作。
-    if (target) requestAnimationFrame(() => target.scrollIntoView?.({ block: "center" }));
+    setPendingScrollId(focus.milestoneId ? "milestone-" + focus.milestoneId : "project-" + focus.projectId);
     onFocusHandled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
-  return <section className="page-stack" aria-labelledby="projects-title"><PageHeader eyebrow="把长期结果拆成可行动的任务" title="项目" actions={<><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />新建项目</Button><Button onClick={() => patchImport({ mode: "course" })}><Upload size={17} />导入文本课程</Button><Button onClick={() => patchImport({ mode: "bilibili" })}><Upload size={17} />B 站链接 Beta</Button></>} />
+
+  const clearFilters = () => { setProjectQuery(""); setSoonOnly(false); };
+
+  const taskMeta = (task: Task) => {
+    const parts: string[] = [];
+    if (task.priority === "high") parts.push("高优先级");
+    if (task.deadlineLocal) parts.push("截止 " + formatShortDate(task.deadlineLocal) + " · " + deadlineLabel(today, task.deadlineLocal));
+    if (task.estimatedMinutes) parts.push("预计 " + task.estimatedMinutes + " 分钟");
+    return parts.join(" · ");
+  };
+
+  const renderProjectCard = (project: Project) => {
+    const tasks = projectTasksOf(index, project.id);
+    const weighted = projectProgress(tasks);
+    const milestones = index.milestonesByProjectId.get(project.id) ?? [];
+    const rail = buildProjectRail({ tasks, milestones, outcomes: index.outcomesByMilestoneId, progress: weighted });
+    const completed = tasks.filter(isTaskCompleted).length;
+    const recent = recentAdvanceByProject.get(project.id);
+    const recentDate = recent ? toLocalDate(new Date(recent.occurredAtUtc)) : null;
+    const nextTask = nextTaskOf(project.id, tasks);
+    const isSelected = selectedProjectId === project.id;
+    return <article key={project.id} id={"project-" + project.id} className={"project-card" + (isSelected ? " is-selected" : "")} data-project-card={project.id}>
+      {/* 整卡是打开/关闭详情的按钮；内部动作按钮用 z-index 浮在它上面，避免嵌套按钮。 */}
+      <button type="button" className="project-card-open" data-project-open={project.id}
+        aria-label={(isSelected ? "关闭项目 " : "打开项目 ") + project.title} aria-expanded={isSelected} aria-controls="project-detail"
+        onClick={() => toggleProject(project.id)} />
+      <div className="project-card-head">
+        <h2>{project.title}</h2>
+        <span className="project-card-pct">{weighted}%</span>
+      </div>
+      <p className="project-card-meta">
+        {project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={today} /> : <span className="project-nodeadline">无项目截止</span>}
+        <span className="project-card-count" title="已完成任务 / 任务总数" aria-label={`任务完成 ${completed} / ${tasks.length}`}><Check size={12} aria-hidden="true" />{completed} / {tasks.length}</span>
+      </p>
+      <ProjectRail rail={rail} compact />
+      <div className="project-card-foot">
+        <button type="button" className="project-continue" onClick={(event) => { event.stopPropagation(); continueProject(project.id, nextTask); }}>
+          <span>{nextTask ? "继续：" + nextTask.title : "打开项目"}</span>
+          <ChevronRight size={14} aria-hidden="true" />
+        </button>
+        {recentDate
+          ? <time className="project-card-recent" dateTime={recentDate}>上次推进 {formatRecentAdvanceDate(recentDate, today)}</time>
+          : <span className="project-card-recent">还没有推进</span>}
+      </div>
+    </article>;
+  };
+
+  return <section className="page-stack projects-page" aria-labelledby="projects-title">
+    <header className="page-header project-page-header" inert={selectedProject ? true : undefined}>
+      <div>
+        <h1 id="projects-title">项目</h1>
+        <p className="project-subtitle">{visibleProjects.length === workspace.projects.length ? workspace.projects.length + " 个项目" : visibleProjects.length + " / " + workspace.projects.length + " 个项目"}{soonCount > 0 ? " · " + soonCount + " 个临期" : ""}</p>
+      </div>
+      <div className="header-actions">
+        <Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />新建项目</Button>
+        <Button aria-haspopup="dialog" aria-expanded={Boolean(importMenuAnchor)} onClick={(event) => { event.stopPropagation(); const anchor = event.currentTarget; setImportMenuAnchor((current) => current ? null : anchor); }}><Upload size={17} />导入</Button>
+      </div>
+    </header>
+
+    {importMenuAnchor && <FloatingPanel kind="action" label="导入项目" anchorElement={importMenuAnchor} closeOnOutsideClick onClose={() => setImportMenuAnchor(null)} className="project-import-menu">
+      <h2>导入</h2>
+      <button type="button" className="project-import-option" aria-label="文本课程" onClick={() => { setImportMenuAnchor(null); setPendingImportMode("course"); }}>
+        <Upload size={16} aria-hidden="true" /><span><strong>文本课程</strong><small>粘贴分集文本，批量建立有序任务</small></span>
+      </button>
+      <button type="button" className="project-import-option" aria-label="B 站链接 Beta" onClick={() => { setImportMenuAnchor(null); setPendingImportMode("bilibili"); }}>
+        <Upload size={16} aria-hidden="true" /><span><strong>B 站链接 Beta</strong><small>读取公开视频的分 P 元数据</small></span>
+      </button>
+    </FloatingPanel>}
+
+    <div className="deadline-filters project-filters" role="group" aria-label="项目筛选" inert={selectedProject ? true : undefined}>
+      <div className="deadline-filter-main">
+        <label className="deadline-field deadline-field-grow">搜索
+          <input aria-label="搜索项目或任务" placeholder="搜索项目或任务" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} />
+        </label>
+        <div className="deadline-chip-group" role="group" aria-label="项目排序">
+          <span className="deadline-filter-label">排序</span>
+          {([{ value: "recent", label: "最近推进" }, { value: "deadline", label: "截止日期" }, { value: "name", label: "名称" }] as const).map((option) => <button key={option.value} type="button" className="filter-chip" aria-pressed={projectSort === option.value} onClick={() => setProjectSort(option.value)}>{option.label}</button>)}
+        </div>
+      </div>
+      <div className="deadline-chip-group" role="group" aria-label="项目筛选">
+        <span className="deadline-filter-label">筛选</span>
+        <button type="button" className="filter-chip" aria-pressed={soonOnly} aria-label="只看临期项目"
+          title="已逾期、今天或 7 天内截止的项目" onClick={() => setSoonOnly((current) => !current)}>临期项目</button>
+      </div>
+    </div>
+
     {importDraft.mode !== "none" && <FloatingPanel label="创建项目" wide={importDraft.mode !== "project"} busy={importBusy || importFetching} onClose={() => patchImport({ mode: "none" })}><form aria-busy={importBusy} className="project-form" onSubmit={(event) => { event.preventDefault(); void projectImport.save(); }}><div className="section-heading"><h2>{importDraft.mode === "course" ? "导入课程分集" : importDraft.mode === "bilibili" ? "读取 B 站公开视频" : "创建普通项目"}</h2><button className="icon-action" type="button" disabled={importBusy} aria-label="关闭" onClick={() => patchImport({ mode: "none" })}><X /></button></div><label>项目标题<input autoFocus={importDraft.mode !== "bilibili"} value={importTitle} onChange={(event) => patchImport({ titles: { ...importDraft.titles, [importDraft.mode]: event.target.value } })} /></label>
-      {importDraft.mode === "project" && <label>项目截止日期（可选）<input type="date" value={importDraft.deadline} onChange={(event) => patchImport({ deadline: event.target.value })} /></label>}
-      {importDraft.mode === "course" && <><label>粘贴分集文本<textarea rows={6} value={importDraft.source} placeholder={'P1 起步 12:30\nP2 数据建模 18:00\n\n使用说明\n23:19\nUnit1 Lesson 1\n58:39'} onChange={(event) => patchImport({ source: event.target.value, drafts: parseCourseText(event.target.value) })} /></label><div className="import-preview" aria-label="课程导入预览">{importDraft.drafts.map((draft, index) => <div key={`${draft.title}-${index}`}><input type="checkbox" aria-label={`选择 ${draft.title}`} checked={draft.selected} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, selected: event.target.checked } : item) })} /><input aria-label={`编辑第 ${index + 1} 个分集`} value={draft.title} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, title: event.target.value } : item) })} /><span>{draft.estimatedMinutes ? `${draft.estimatedMinutes} 分钟` : "未估时"}</span></div>)}</div></>}
-      {importDraft.mode === "bilibili" && <><label>B 站普通视频链接<input autoFocus value={importDraft.biliSource} onChange={(event) => patchImport({ biliSource: event.target.value })} placeholder="https://www.bilibili.com/video/BV…" /></label><Button type="button" disabled={!importDraft.biliSource.trim() || importBusy || importFetching} onClick={async () => { setImportFetching(true); setImportFetchError(""); try { const video = await onFetchBilibili(extractBvid(importDraft.biliSource)); patchImport({ bilibili: video, titles: { ...importDraft.titles, bilibili: video.title }, biliSelected: video.parts.map((part) => part.page) }); } catch (error) { setImportFetchError(readError(error)); } finally { setImportFetching(false); } }}>{importFetching ? "正在读取…" : "读取公开元数据"}</Button>{importFetchError && <p className="error-message" role="alert"><CircleAlert />{importFetchError}</p>}{importDraft.bilibili && <><p className="import-source">{importDraft.bilibili.ownerName} · {importDraft.bilibili.bvid} · {importDraft.bilibili.parts.length} 个分 P</p><div className="import-preview" role="region" aria-label="B 站分 P 预览">{importDraft.bilibili.parts.map((part) => <div key={part.sourceKey}><input type="checkbox" aria-label={`选择 ${part.title}`} checked={importDraft.biliSelected.includes(part.page)} onChange={(event) => patchImport({ biliSelected: event.target.checked ? [...importDraft.biliSelected, part.page] : importDraft.biliSelected.filter((page) => page !== part.page) })} /><span>P{part.page}</span><input aria-label={`编辑第 ${part.page} 个分 P`} value={part.title} onChange={(event) => patchImport({ bilibili: importDraft.bilibili ? { ...importDraft.bilibili, parts: importDraft.bilibili.parts.map((item) => item.sourceKey === part.sourceKey ? { ...item, title: event.target.value } : item) } : null })} /><span>{Math.ceil(part.durationSeconds / 60)}分钟</span></div>)}</div></>}</>}
+      {importDraft.mode === "project" && <label>项目截止日期（可选）<DateField label="项目截止日期" value={importDraft.deadline || null} today={today} onChange={(value) => patchImport({ deadline: value ?? "" })} /></label>}
+      {importDraft.mode === "course" && <><label>粘贴分集文本<textarea rows={6} value={importDraft.source} placeholder={'P1 起步 12:30\nP2 数据建模 18:00\n\n使用说明\n23:19\nUnit1 Lesson 1\n58:39'} onChange={(event) => patchImport({ source: event.target.value, drafts: parseCourseText(event.target.value) })} /></label><div className="import-preview" aria-label="课程导入预览">{importDraft.drafts.map((draft, index) => <div key={draft.title + "-" + index}><input type="checkbox" aria-label={"选择 " + draft.title} checked={draft.selected} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, selected: event.target.checked } : item) })} /><input aria-label={"编辑第 " + (index + 1) + " 个分集"} value={draft.title} onChange={(event) => patchImport({ drafts: importDraft.drafts.map((item, at) => at === index ? { ...item, title: event.target.value } : item) })} /><span>{draft.estimatedMinutes ? draft.estimatedMinutes + " 分钟" : "未估时"}</span></div>)}</div></>}
+      {importDraft.mode === "bilibili" && <><label>B 站普通视频链接<input autoFocus value={importDraft.biliSource} onChange={(event) => patchImport({ biliSource: event.target.value })} placeholder="https://www.bilibili.com/video/BV…" /></label><Button type="button" disabled={!importDraft.biliSource.trim() || importBusy || importFetching} onClick={async () => { setImportFetching(true); setImportFetchError(""); try { const video = await onFetchBilibili(extractBvid(importDraft.biliSource)); patchImport({ bilibili: video, titles: { ...importDraft.titles, bilibili: video.title }, biliSelected: video.parts.map((part) => part.page) }); } catch (error) { setImportFetchError(readError(error)); } finally { setImportFetching(false); } }}>{importFetching ? "正在读取…" : "读取公开元数据"}</Button>{importFetchError && <p className="error-message" role="alert"><CircleAlert />{importFetchError}</p>}{importDraft.bilibili && <><p className="import-source">{importDraft.bilibili.ownerName} · {importDraft.bilibili.bvid} · {importDraft.bilibili.parts.length} 个分 P</p><div className="import-preview" role="region" aria-label="B 站分 P 预览">{importDraft.bilibili.parts.map((part) => <div key={part.sourceKey}><input type="checkbox" aria-label={"选择 " + part.title} checked={importDraft.biliSelected.includes(part.page)} onChange={(event) => patchImport({ biliSelected: event.target.checked ? [...importDraft.biliSelected, part.page] : importDraft.biliSelected.filter((page) => page !== part.page) })} /><span>P{part.page}</span><input aria-label={"编辑第 " + part.page + " 个分 P"} value={part.title} onChange={(event) => patchImport({ bilibili: importDraft.bilibili ? { ...importDraft.bilibili, parts: importDraft.bilibili.parts.map((item) => item.sourceKey === part.sourceKey ? { ...item, title: event.target.value } : item) } : null })} /><span>{Math.ceil(part.durationSeconds / 60)}分钟</span></div>)}</div></>}</>}
       {importDraft.mode !== "bilibili" && projectImport.error && <p role="alert">{projectImport.error}</p>}{!importTitle.trim() && <small>填写项目标题后即可创建。</small>}<div className="form-actions"><Button disabled={importBusy} onClick={() => patchImport({ mode: "none" })}>取消</Button><Button type="submit" variant="primary" disabled={importBusy || !projectImport.canSave}>{importBusy ? "正在写入…" : "创建"}</Button></div>
     </form></FloatingPanel>}
+
     {newProjectTask && <FloatingPanel label="添加项目任务" busy={newProjectTaskBusy} onClose={() => setNewProjectTask(null)}><h2>添加任务</h2><TaskEditorFields task={newProjectTask} projects={workspace.projects} onCancel={() => setNewProjectTask(null)} onUpdate={async (task) => { await onCreateTask(task); setNewProjectTask(null); }} onPhase={setNewProjectTaskBusy} /></FloatingPanel>}
-    <div className="project-list-tools"><input aria-label="搜索项目任务" placeholder="搜索项目或任务" value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} /><label><input type="checkbox" className="switch" checked={incompleteOnly} onChange={(event) => setIncompleteOnly(event.target.checked)} />只看未完成</label></div>
-    <div className="project-grid">{workspace.projects.length === 0 ? <article className="surface-card project-card-empty"><span className="eyebrow">还没有项目</span><h2>把长期目标拆成可执行的任务</h2><p>在项目里集中管理一组相关任务，能更快看到推进和截止。</p><Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />创建第一个项目</Button></article> : workspace.projects.map((project) => {
-      const tasks = projectTasksOf(index, project.id);
-      const weighted = projectProgress(tasks);
-      // 复制一份再排序：索引里的数组是共享的，就地 sort 会改动索引。
-      const milestones = [...(index.milestonesByProjectId.get(project.id) ?? [])].sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder);
-      return <article key={project.id} id={`project-${project.id}`} className="surface-card project-card"><div className="project-title"><div><span className="eyebrow">{tasks.length} 个任务</span><h2>{project.title}</h2></div><div className="project-title-side"><strong>{weighted}%</strong><button className="icon-action" aria-label={`编辑项目 ${project.title}`} onClick={() => setEditingProjectId((id) => id === project.id ? null : project.id)}><Pencil size={15} /></button></div></div>
-        {project.deadlineLocal && <ProjectDeadlineChip deadline={project.deadlineLocal} today={today} />}
-        <div className="progress-track"><span style={{ width: `${weighted}%` }} /></div>
-        {editingProjectId === project.id && <ProjectEditor project={project} onSave={async (next) => { await onUpdateProject(next); setEditingProjectId(null); }} onClose={() => setEditingProjectId(null)} />}
-        <div className="project-milestones"><div className="section-heading"><h3>里程碑</h3><button className="icon-action" aria-label={`为 ${project.title} 新增里程碑`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: null, continuing: false })}><Plus size={15} /></button></div>
-          {milestones.map((milestone) => {
-            const reached = milestoneReached(milestone, tasks, weighted);
-            const outcome = index.outcomesByMilestoneId.get(milestone.id);
-            const status = outcome ? { className: "milestone-status missed", label: "未达成" } : reached ? { className: "milestone-status reached", label: "已达成" } : { className: "milestone-status", label: "进行中" };
-            const detail = outcome ? `${outcome.resultText} · ${formatShortDate(outcome.targetLocalDate)} 到期` : milestoneSummary(milestone, tasks);
-            return <div key={milestone.id} id={`milestone-${milestone.id}`} className="milestone-row"><div><strong>{milestone.title}</strong><span>{detail}</span></div><span className={status.className}>{status.label}</span>{outcome ? <button className="icon-action" aria-label={`续排里程碑 ${milestone.title}`} title="将剩余目标纳入后续计划" onClick={() => setMilestoneDraft({ projectId: project.id, editing: continueMilestoneDraft(milestone, today), continuing: true })}><RotateCcw size={14} /></button> : <><button className="icon-action" aria-label={`编辑里程碑 ${milestone.title}`} onClick={() => setMilestoneDraft({ projectId: project.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button className="icon-action" aria-label={`删除里程碑 ${milestone.title}`} onClick={() => void onDeleteMilestone(milestone)}><X size={14} /></button></>}</div>;
-          })}
-          {milestones.length === 0 && <p className="milestone-empty">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
+
+    <div className="project-layout">
+      <div className="project-list" inert={selectedProject ? true : undefined}>
+        {visibleProjects.length === 0
+          ? workspace.projects.length === 0
+            ? <EmptyState icon={<FolderKanban />} title="还没有项目" text="创建普通项目，或粘贴课程分集文本批量建立有序任务。" action={<Button variant="primary" onClick={() => patchImport({ mode: "project" })}><Plus size={17} />创建第一个项目</Button>} />
+            : <EmptyState icon={<ListFilter />} title="没有匹配的项目" text="当前搜索或筛选条件下没有项目。" action={<Button onClick={clearFilters}><RotateCcw size={15} />清除筛选</Button>} />
+          : <div className="project-grid">{visibleProjects.map(renderProjectCard)}</div>}
+      </div>
+
+      {/* 详情始终是右侧抽屉：遮罩 + 背景 inert，列表保持完整两列卡。 */}
+      {selectedProject && selectedRail && <div id="project-detail" className="project-detail" role="dialog" aria-modal="true" aria-labelledby="project-detail-title"
+        onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); closeProject(); } }}>
+        <button type="button" className="project-detail-scrim" tabIndex={-1} aria-label="关闭项目详情遮罩" onClick={closeProject} />
+        <div className="project-detail-panel">
+          <header className="project-detail-head">
+            <div>
+              <h2 id="project-detail-title" ref={detailHeadingRef} tabIndex={-1}>{selectedProject.title}</h2>
+              <p>{selectedProject.deadlineLocal ? <ProjectDeadlineChip deadline={selectedProject.deadlineLocal} today={today} /> : <span className="project-nodeadline">无项目截止</span>}<span>{selectedTasks.length} 个任务</span></p>
+            </div>
+            <button type="button" className="icon-action project-detail-close" aria-label="关闭项目详情" onClick={closeProject}><X size={18} /></button>
+          </header>
+          <div className="project-detail-body">
+            <div className="project-progress">
+              <div className="project-progress-top">
+                <div><span className="project-progress-value">{selectedWeighted}<small>%</small></span><span className="project-progress-caption">项目进度（耗时加权）</span></div>
+                <div className="project-progress-facts"><span>任务 {selectedCompleted} / {selectedTasks.length} 完成</span><span>里程碑 {selectedReached} / {selectedMilestones.length} 达成</span></div>
+              </div>
+              <ProjectRail rail={selectedRail} />
+            </div>
+
+            <section className="project-detail-section" aria-labelledby="project-milestones-title">
+              <div className="project-detail-section-head">
+                <h3 id="project-milestones-title">里程碑 <span>{selectedMilestones.length}</span></h3>
+                <button type="button" className="icon-action project-row-icon" aria-label={"为 " + selectedProject.title + " 新增里程碑"} title="添加里程碑" onClick={() => setMilestoneDraft({ projectId: selectedProject.id, editing: null, continuing: false })}><Plus size={16} /></button>
+              </div>
+              <div className="project-milestone-list">
+                {selectedMilestones.map((milestone) => {
+                  const outcome = index.outcomesByMilestoneId.get(milestone.id);
+                  const reached = milestoneReached(milestone, selectedTasks, selectedWeighted);
+                  const status = outcome
+                    ? { className: "milestone-status missed", label: "未达成" }
+                    : reached ? { className: "milestone-status reached", label: "已达成" } : { className: "milestone-status", label: "进行中" };
+                  const detail = outcome ? outcome.resultText + " · " + formatShortDate(outcome.targetLocalDate) + " 到期" : milestoneSummary(milestone, selectedTasks);
+                  return <div key={milestone.id} id={"milestone-" + milestone.id} className="project-milestone-row">
+                    <span className={"project-milestone-dot" + (outcome ? " is-missed" : reached ? " is-reached" : " is-active")} aria-hidden="true" />
+                    <div className="project-milestone-main"><strong>{milestone.title}</strong><small>{detail}</small></div>
+                    <span className={status.className}>{status.label}</span>
+                    <div className="project-row-actions">
+                      {outcome
+                        ? <Button variant="quiet" aria-label={"续排里程碑 " + milestone.title} onClick={() => setMilestoneDraft({ projectId: selectedProject.id, editing: continueMilestoneDraft(milestone, today), continuing: true })}>续排</Button>
+                        : <><button type="button" className="icon-action project-row-icon" aria-label={"编辑里程碑 " + milestone.title} onClick={() => setMilestoneDraft({ projectId: selectedProject.id, editing: milestone, continuing: false })}><Pencil size={14} /></button><button type="button" className="icon-action project-row-icon" aria-label={"删除里程碑 " + milestone.title} onClick={(event) => setMilestoneDelete({ milestone, anchor: event.currentTarget })}><X size={14} /></button></>}
+                    </div>
+                  </div>;
+                })}
+                {selectedMilestones.length === 0 && <p className="project-empty-line">还没有里程碑，可按任务、数量或进度设定检查点。</p>}
+              </div>
+            </section>
+
+            <section className="project-detail-section" aria-labelledby="project-tasks-title">
+              <div className="project-detail-section-head">
+                <h3 id="project-tasks-title">任务 <span>{shownSelectedTasks.length}</span></h3>
+                <label className="project-task-filter"><input type="checkbox" className="switch" checked={taskFilter} onChange={(event) => setTaskFilter(event.target.checked)} />只看未完成</label>
+                {selectedRecentTaskId && <button type="button" className="project-quiet-action" onClick={() => setPendingScrollId("project-task-" + selectedRecentTaskId)}>回到最近推进</button>}
+              </div>
+              <div className="project-task-list">
+                {shownSelectedTasks.map((task) => {
+                  const meta = taskMeta(task);
+                  return <div key={task.id} id={"project-task-" + task.id} className={"project-task-row" + (isTaskCompleted(task) ? " is-done" : "")}>
+                    <span className="project-task-num">{selectedTaskPositions.get(task.id)}</span>
+                    <div className="project-task-main">
+                      <button type="button" className="project-task-title" aria-label={"编辑任务 " + task.title} onClick={(event) => onEditTask(task, event.currentTarget)}>{task.title}</button>
+                      {meta && <small>{meta}</small>}
+                    </div>
+                    <button type="button" className="project-task-progress" aria-label={"调整进度 " + task.title} onClick={(event) => setProgressEdit({ taskId: task.id, anchor: event.currentTarget })}>
+                      <span className="project-task-track"><span style={{ width: task.progress + "%" }} /></span>
+                      <b>{task.progress}%</b>
+                    </button>
+                    <div className="project-task-actions">
+                      {isTaskCompleted(task)
+                        ? <span className="project-task-done"><Check size={13} aria-hidden="true" />已完成</span>
+                        : <Button variant="quiet" aria-label={"安排 " + task.title} onClick={() => onArrange(task)}>安排</Button>}
+                    </div>
+                  </div>;
+                })}
+                {shownSelectedTasks.length === 0 && <p className="project-empty-line">{selectedTasks.length === 0 ? "这个项目还没有任务。" : "所有任务都已完成。"}</p>}
+              </div>
+            </section>
+          </div>
+          <footer className="project-detail-foot">
+            <Button aria-label={"编辑项目 " + selectedProject.title} onClick={(event) => { setProjectEditAnchor(event.currentTarget); setEditingProjectId(selectedProject.id); }}>编辑项目</Button>
+            <Button variant="primary" onClick={() => setNewProjectTask({ id: crypto.randomUUID(), projectId: selectedProject.id, title: "", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: null, priority: "normal", sortOrder: selectedTasks.length, kind: "task" })}><Plus size={16} />添加任务</Button>
+          </footer>
         </div>
-        {milestoneDraft?.projectId === project.id && <FloatingPanel label="里程碑" busy={milestoneBusy} onClose={() => setMilestoneDraft(null)}><MilestoneForm project={project} tasks={tasks} sortOrder={milestones.length} editing={milestoneDraft.editing} continuing={milestoneDraft.continuing} onCancel={() => setMilestoneDraft(null)} onPhase={setMilestoneBusy} onSave={async (milestone) => { if (milestoneDraft.editing && !milestoneDraft.continuing) await onUpdateMilestone(milestone); else await onCreateMilestone(milestone); setMilestoneDraft(null); }} /></FloatingPanel>}
-        {(() => { const recent = recentAdvanceByProject.get(project.id); return recent && <Button onClick={() => { setTaskQuery(""); setIncompleteOnly(false); requestAnimationFrame(() => document.getElementById(`project-task-${recent.taskId}`)?.scrollIntoView({ block: "center" })); }}>回到最近推进：{index.tasksById.get(recent.taskId)?.title}</Button>; })()}
-        <Button onClick={() => setNewProjectTask({ id: crypto.randomUUID(), projectId: project.id, title: "", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: null, priority: "normal", sortOrder: tasks.length, kind: "task" })}><Plus size={16} />添加任务</Button>
-        {(() => {
-          // 序号、查询串都只算一次：此前每行都 `tasks.indexOf(task)`（O(n²)）并重复
-          // `taskQuery.trim().toLowerCase()`。序号仍按**未过滤**的项目任务顺序给出。
-          const needle = taskQuery.trim().toLowerCase();
-          const positionOf = new Map(tasks.map((task, index) => [task.id, index + 1]));
-          const shownTasks = tasks.filter((task) => (!incompleteOnly || task.status !== "completed") && (!needle || `${project.title} ${task.title}`.toLowerCase().includes(needle)));
-          return <div className="project-tasks">{shownTasks.map((task) => <div id={`project-task-${task.id}`} key={task.id}><span>{positionOf.get(task.id)}</span><div><strong>{task.title}</strong>{task.status === "active" && <Button onClick={() => onArrange(task)}>安排</Button>}<details className="project-task-progress"><summary>进度 {task.progress}% · 调整</summary><ProgressControl task={task} onCommit={onProgress} showComplete /></details></div></div>)}</div>;
-        })()}</article>;
-    })}
-      {workspace.projects.length === 0 && <EmptyState icon={<FolderKanban />} title="还没有项目" text="创建普通项目，或粘贴课程分集文本批量建立有序任务。" />}
+      </div>}
     </div>
+
+    {editingProjectId && (() => {
+      const project = index.projectsById.get(editingProjectId);
+      return project ? <FloatingPanel label={"编辑项目 " + project.title} anchorElement={projectEditAnchor} onClose={() => setEditingProjectId(null)}><ProjectEditor project={project} onSave={async (next) => { await onUpdateProject(next); setEditingProjectId(null); }} onClose={() => setEditingProjectId(null)} /></FloatingPanel> : null;
+    })()}
+
+    {milestoneDraft && (() => {
+      const project = index.projectsById.get(milestoneDraft.projectId);
+      if (!project) return null;
+      const tasks = projectTasksOf(index, project.id);
+      const milestones = index.milestonesByProjectId.get(project.id) ?? [];
+      return <FloatingPanel label="里程碑" busy={milestoneBusy} closeOnOutsideClick onClose={() => setMilestoneDraft(null)}><MilestoneForm project={project} tasks={tasks} sortOrder={milestones.length} editing={milestoneDraft.editing} continuing={milestoneDraft.continuing} onCancel={() => setMilestoneDraft(null)} onPhase={setMilestoneBusy} onSave={async (milestone) => { if (milestoneDraft.editing && !milestoneDraft.continuing) await onUpdateMilestone(milestone); else await onCreateMilestone(milestone); setMilestoneDraft(null); }} /></FloatingPanel>;
+    })()}
+
+    {progressEdit && (() => {
+      const task = index.tasksById.get(progressEdit.taskId);
+      return task ? <FloatingPanel kind="action" label={"调整进度 " + task.title} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)} className="project-progress-panel"><h2>调整进度</h2><p>{task.title}</p><ProgressControl task={task} showComplete onCommit={async (next, value) => { await onProgress(next, value); setProgressEdit(null); }} /></FloatingPanel> : null;
+    })()}
+
+    {milestoneDelete && <FloatingPanel kind="confirm" label={"删除里程碑 " + milestoneDelete.milestone.title} anchorElement={milestoneDelete.anchor} closeOnOutsideClick onClose={() => setMilestoneDelete(null)} className="project-confirm-bubble">
+      <p className="project-confirm-text">删除里程碑「{milestoneDelete.milestone.title}」？</p>
+      <p className="project-confirm-note">删除后可在底部提示里撤销。</p>
+      <div className="form-actions"><Button onClick={() => setMilestoneDelete(null)}>取消</Button><Button variant="danger" onClick={() => { const target = milestoneDelete.milestone; setMilestoneDelete(null); void onDeleteMilestone(target); }}>删除</Button></div>
+    </FloatingPanel>}
   </section>;
 }
-
 function ProjectDeadlineChip({ deadline, today }: { deadline: string; today: string }) {
   const urgency = deadlineUrgency(deadline, today);
   const days = daysBetween(today, deadline);
@@ -1765,7 +2058,7 @@ function ProjectEditor({ project, onSave, onClose }: { project: Project; onSave:
   };
   return <form className="project-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
     <label>项目标题<input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-    <label>项目截止日期（可清除）<input type="date" value={deadline} onChange={(event) => setDeadline(event.target.value)} /></label>
+    <label>项目截止日期<DateField label="项目截止日期" value={deadline || null} today={toLocalDate(new Date())} onChange={(value) => setDeadline(value ?? "")} /></label>
     <small>截止日期属于项目整体，不是子任务的截止。</small>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
     <div className="form-actions"><Button disabled={busy} onClick={onClose}>取消</Button><Button variant="primary" disabled={busy} onClick={() => void save()}>{busy ? "正在保存…" : "保存项目"}</Button></div>
@@ -1806,12 +2099,13 @@ function MilestoneForm({ project, tasks, sortOrder, editing, continuing = false,
   return <form aria-busy={busy} className="milestone-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <div className="section-heading"><h3>{continuing ? `续排里程碑：${editing?.title ?? ""}` : editing ? `编辑里程碑：${editing.title}` : "新增里程碑"}</h3><button className="icon-action" type="button" disabled={busy} aria-label="关闭里程碑表单" onClick={session.cancel}><X size={15} /></button></div>
     {continuing && <small>保留原累计目标并顺延日期；当前差额会随后续进度继续减少。</small>}
-    <label>里程碑名称<input value={draft.title} onChange={(event) => patchDraft({ title: event.target.value } as Partial<ProjectMilestone>)} /></label>
-    <label>目标日期<input type="date" value={draft.targetLocalDate} onChange={(event) => patchDraft({ targetLocalDate: event.target.value } as Partial<ProjectMilestone>)} /></label>
-    <label>达成条件<SelectField value={draft.criterionKind} onChange={(value) => setCriterion(patchDraft, value as ProjectMilestone["criterionKind"])} options={[{ value: "orderedTask", label: "按顺序完成至指定任务", disabled: !tasks.length }, { value: "taskCount", label: "完成任务数量", disabled: !tasks.length }, { value: "projectProgress", label: "项目进度达到" }]} /></label>
-    {draft.criterionKind === "orderedTask" && <label>顺序目标任务<SelectField value={draft.targetTaskId ?? ""} onChange={(value) => patchDraft({ targetTaskId: value } as Partial<ProjectMilestone>)} options={[{ value: "", label: "选择项目内任务" }, ...tasks.map((task) => ({ value: task.id, label: task.title }))]} /></label>}
-    {draft.criterionKind === "taskCount" && <label>完成任务数（项目内共 {tasks.length} 个）<input type="number" min="1" value={draft.targetCount ?? 1} onChange={(event) => patchDraft({ targetCount: Math.max(1, Number(event.target.value) || 1) } as Partial<ProjectMilestone>)} /></label>}
-    {draft.criterionKind === "projectProgress" && <label>项目加权进度（%）<input type="number" min="1" max="100" value={draft.targetProgress ?? 50} onChange={(event) => patchDraft({ targetProgress: Math.min(100, Math.max(1, Number(event.target.value) || 1)) } as Partial<ProjectMilestone>)} /></label>}
+    <label className="milestone-field"><span>里程碑名称</span><input value={draft.title} onChange={(event) => patchDraft({ title: event.target.value } as Partial<ProjectMilestone>)} /></label>
+    <div className="milestone-field"><span>目标日期</span><DateField label="目标日期" value={draft.targetLocalDate || null} today={toLocalDate(new Date())} onChange={(value) => patchDraft({ targetLocalDate: value ?? "" } as Partial<ProjectMilestone>)} /></div>
+    <label className="milestone-field"><span>达成条件</span><SelectField value={draft.criterionKind} onChange={(value) => setCriterion(patchDraft, value as ProjectMilestone["criterionKind"])} options={[{ value: "orderedTask", label: "按顺序完成至指定任务", disabled: !tasks.length }, { value: "taskCount", label: "完成任务数量", disabled: !tasks.length }, { value: "projectProgress", label: "项目进度达到" }]} /></label>
+    {draft.criterionKind === "orderedTask" && <label className="milestone-field"><span>顺序目标任务</span><SelectField value={draft.targetTaskId ?? ""} onChange={(value) => patchDraft({ targetTaskId: value } as Partial<ProjectMilestone>)} options={[{ value: "", label: "选择项目内任务" }, ...tasks.map((task) => ({ value: task.id, label: task.title }))]} /></label>}
+    {draft.criterionKind === "taskCount" && <label className="milestone-field"><span>完成任务数</span><input type="number" min="1" value={draft.targetCount ?? 1} onChange={(event) => patchDraft({ targetCount: Math.max(1, Number(event.target.value) || 1) } as Partial<ProjectMilestone>)} /></label>}
+    {draft.criterionKind === "projectProgress" && <label className="milestone-field"><span>目标进度</span><input type="number" min="1" max="100" value={draft.targetProgress ?? 50} onChange={(event) => patchDraft({ targetProgress: Math.min(100, Math.max(1, Number(event.target.value) || 1)) } as Partial<ProjectMilestone>)} /></label>}
+    {draft.criterionKind === "taskCount" && <small>项目内共 {tasks.length} 个任务。</small>}
     {!tasks.length && <small>项目还没有任务。添加任务后即可设置按任务或数量达成。</small>}<small>保存后：{summaryText}</small>
     {session.error && <p className="error-message" role="alert"><CircleAlert />{session.error}</p>}
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button variant="primary" disabled={busy || !session.canSave} onClick={() => void session.save()}>{busy ? "正在保存…" : continuing ? "保存续排" : "保存里程碑"}</Button></div>
@@ -2184,6 +2478,10 @@ function deadlineLabel(today: string, deadline: string) { const days = daysBetwe
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(new Date(`${date}T12:00:00`)); }
 function formatLongDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00`)); }
 function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
+function formatRecentAdvanceDate(date: string, today: string) {
+  const sameYear = date.slice(0, 4) === today.slice(0, 4);
+  return new Intl.DateTimeFormat("zh-CN", sameYear ? { month: "long", day: "numeric" } : { year: "numeric", month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+}
 function formatMonth(date: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(new Date(`${date}T12:00:00`)); }
 function formatClock(iso: string) { return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
 function taskTitle(workspace: WorkspaceSnapshot, taskId: string) { return workspace.tasks.find((task) => task.id === taskId)?.title ?? "未知任务"; }
