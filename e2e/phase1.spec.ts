@@ -23,10 +23,6 @@ async function waitForScrollSettled(locator: Locator) {
   }));
 }
 
-async function openTaskPoolMenu(page: Page) {
-  await page.getByRole("button", { name: "任务池更多操作" }).click();
-}
-
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -113,7 +109,6 @@ test("course text is previewed and imported as one project transaction", async (
 test("phase 2 scheduling, time blocks and recurring habits persist as one action flow", async ({ page }) => {
   await page.getByRole("textbox", { name: "任务标题" }).fill("准备 21 天候选版");
   await page.getByRole("button", { name: "创建任务" }).click();
-  await openTaskPoolMenu(page);
   await page.getByRole("button", { name: "自动排程" }).click();
   await expect(page.getByRole("dialog", { name: "自动排程 Lite" })).toContainText("准备 21 天候选版");
   await page.getByRole("button", { name: "生成排程草案" }).click();
@@ -127,7 +122,6 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await expect(page.locator(".calendar-time-block", { hasText: "午休" })).toHaveCount(1);
 
   await page.getByRole("button", { name: "今日", exact: true }).click();
-  await openTaskPoolMenu(page);
   await page.getByRole("button", { name: "新建重复习惯" }).click();
   await page.getByRole("textbox", { name: "习惯名称" }).fill("拉伸");
   await page.getByRole("button", { name: "创建习惯" }).click();

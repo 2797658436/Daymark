@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, MoreHorizontal, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -100,6 +100,12 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const [finishing, setFinishing] = useState<ExecutionRecord | null>(null);
   const [taskPoolOpen, setTaskPoolOpen] = useState(true);
   const [poolOverlayOpen, setPoolOverlayOpen] = useState(false);
+  // 面板一关 `<aside>` 就卸载，所以「展开了哪个项目」「需要关注展开没」必须放在 App 这一层：
+  // 留在面板内部的话，收起再打开就回到默认，用户刚展开的项目等于白点一次。
+  // `undefined` = 从没手动选过（继续用「第一个小项目」的默认规则），`null` = 明确全部收起。
+  const [poolOpenProject, setPoolOpenProject] = useState<string | null | undefined>(undefined);
+  // `null` = 没手动动过（按临期数量决定默认），true/false = 用户的选择。
+  const [poolAttentionOpen, setPoolAttentionOpen] = useState<boolean | null>(null);
   // 判据必须与 styles.css 的 @media (max-width: 1199px) 完全一致：React 状态与 CSS 布局
   // 各用一套（innerWidth < 1200 vs 媒体查询）时，窗口尺寸刚变化、resize 监听尚未挂上的
   // 那个间隙会让两者分叉 —— React 仍以为窗口够宽而按内联渲染任务池，CSS 已按窄窗口把它
@@ -608,6 +614,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         </section>
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} />
         <TaskPool index={workspaceIndex} tasks={poolTasks} heldTasks={heldTasks} leavingTaskId={leavingTaskId} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
+          openProject={poolOpenProject} onOpenProjectChange={setPoolOpenProject} attentionOpen={poolAttentionOpen} onAttentionOpenChange={setPoolAttentionOpen}
           onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
         </>
       )}
@@ -860,8 +867,12 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
  * `sessionsById`。此前这里对每一行都 `sessions.some/filter` 扫一遍 3,000 条时段
  * （1,000 任务 → 每次渲染约三百万次比较），是规格 §8 点名要消除的模式。
  */
-function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences, autoScheduleAssist, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
+function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences, autoScheduleAssist, openProject, onOpenProjectChange, attentionOpen: attentionChoice, onAttentionOpenChange, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
   index: WorkspaceIndex; tasks: Task[]; heldTasks: Task[]; leavingTaskId: string | null; habits: RecurringHabit[]; occurrences: HabitOccurrence[]; autoScheduleAssist: boolean;
+  /** 由 App 持有：面板关闭会卸载本组件，展开状态放在这里才不会丢。`undefined` = 没手动选过。 */
+  openProject: string | null | undefined; onOpenProjectChange: (key: string | null) => void;
+  /** 同上：`null` = 没手动动过，按临期数量决定默认。 */
+  attentionOpen: boolean | null; onAttentionOpenChange: (open: boolean) => void;
   onCreate: (title: string) => Promise<Task>; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>;
   onCancelSession: (session: ExecutionSession) => Promise<void>; onClose: () => void; onAutoSchedule: () => void;
   onCreateHabit: (habit: Omit<RecurringHabit, "id" | "taskId" | "status">) => Promise<void>;
@@ -869,28 +880,16 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
 }) {
   const [title, setTitle] = useState("");
   const [filter, setFilter] = useState<"all" | "unscheduled" | "scheduled">("all");
-  // 关注条默认只在 1–2 项时展开；更多时先只给一行摘要，避免把项目列表推出首屏。
-  // 用户手动展开／收起后以这次选择为准（null 表示还没手动动过）。
-  const [attentionOverride, setAttentionOverride] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const [pendingHabitRect, setPendingHabitRect] = useState<DOMRect | null>(null);
-  // 项目默认只展开第一个小项目；手动选择后以这次选择为准（undefined = 还没手动动过）。
-  const [openProject, setOpenProject] = useState<string | null | undefined>(undefined);
   const [habitsOpen, setHabitsOpen] = useState(false);
   // 提交态由 HabitEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
   const [habitBusy, setHabitBusy] = useState(false);
   const [habitAnchor, setHabitAnchor] = useState<DOMRect | null>(null);
-  // 菜单是 action 浮层；先让它卸载，再开习惯编辑器。两层在同一帧换位时，
-  // 新编辑器会被浮层宿主当成非栈顶，保留 pointer-events: none。
-  useEffect(() => {
-    if (!pendingHabitRect || menuAnchor) return;
-    setHabitAnchor(pendingHabitRect);
-    setPendingHabitRect(null);
-  }, [menuAnchor, pendingHabitRect]);
   const today = toLocalDate(useCurrentTime());
   const attention = tasks.filter((task) => task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
-  const attentionOpen = attentionOverride ?? attention.length <= 2;
+  // 关注条默认只在 1–2 项时展开；更多时先只给一行摘要，避免把项目列表推出首屏。
+  // 用户手动展开／收起过就以那个选择为准（`attentionChoice` 记在 App 上）。
+  const attentionOpen = attentionChoice ?? attention.length <= 2;
   // 「需要关注」是 visible 的补集：用 Set 判归属，避免每行 `attention.includes()` 再扫一遍。
   const attentionIds = new Set(attention.map((task) => task.id));
   const visible = tasks.filter((task) => {
@@ -930,11 +929,10 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
   const flattenGroups = groups.length === 1 && groups[0].key === "__independent__";
   // 默认打开第一个小项目；大项目保持收起，避免一次渲染几十上百行。用户手动点开后再全部展开。
   const defaultProjectKey = !flattenGroups && groups[0] && groups[0].tasks.length <= 6 ? groups[0].key : null;
-  const activeProjectKey = openProject === undefined
-    ? defaultProjectKey
-    : openProject && groups.some((group) => group.key === openProject) ? openProject : null;
-  const toggleProject = (key: string) => setOpenProject(activeProjectKey === key ? null : key);
-  const selectedFilterLabel = filter === "unscheduled" ? "未安排" : filter === "scheduled" ? "已安排" : "全部";
+  // 记住的项目可能已经删了或组被拆散：key 失效时退回默认，而不是让整份清单都收起。
+  const rememberedProjectExpired = openProject !== null && openProject !== undefined && !groups.some((group) => group.key === openProject);
+  const activeProjectKey = openProject === undefined || rememberedProjectExpired ? defaultProjectKey : openProject;
+  const toggleProject = (key: string) => onOpenProjectChange(activeProjectKey === key ? null : key);
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
   const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} completed={task.status === "completed"} leaving={leavingTaskId === task.id} progressOpen={progressEdit?.taskId === task.id} onProgressEdit={(next, anchor) => setProgressEdit({ taskId: next.id, anchor })} onEdit={toggleEditor} />;
   return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
@@ -943,8 +941,13 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
     <header className="pool-head">
       <h2>任务池</h2>
       <span className="pool-count">{tasks.length} 项</span>
-      <button type="button" className="icon-action pool-more" aria-label="任务池更多操作" aria-haspopup="dialog" aria-expanded={Boolean(menuAnchor)} title="更多操作" onClick={(event) => { event.stopPropagation(); const anchor = event.currentTarget; setMenuAnchor((current) => current ? null : anchor); }}><MoreHorizontal size={18} aria-hidden="true" /></button>
-      <button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
+      {/* 自动排程与新建习惯从 ⋯ 菜单里提出来常驻：这两件事每天都要点，
+          藏在二级菜单里等于每次多点一步。头部因此正好三个按钮（排程／习惯／收起）。 */}
+      <div className="pool-head-actions">
+        <button type="button" className="icon-action" aria-label="自动排程" title={autoScheduleAssist && assistCount > 0 ? `自动排程：${assistCount} 项还没安排` : "自动排程"} onClick={onAutoSchedule}><Sparkles size={18} aria-hidden="true" /></button>
+        <button type="button" className="icon-action" aria-label="新建重复习惯" title="新建重复习惯" onClick={(event) => setHabitAnchor(event.currentTarget.getBoundingClientRect())}><Repeat2 size={18} aria-hidden="true" /></button>
+        <button className="icon-action" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
+      </div>
     </header>
 
     <form className="pool-compose" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
@@ -953,12 +956,21 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
     </form>
 
     <div className="pool-scroll">
-      {filter !== "all" && <div className="pool-filter-note"><span>只显示{selectedFilterLabel}</span><button type="button" onClick={() => setFilter("all")}>显示全部</button></div>}
-
-      {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOverride((event.currentTarget as HTMLDetailsElement).open)}>
+      {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => {
+        // 只记「用户真的改了」：`open` 由状态驱动，挂载／重渲染时也可能触发 toggle，
+        // 那些事件里的 open 与我们刚设的值相同，直接忽略，否则默认规则会被一次空事件覆盖。
+        const next = (event.currentTarget as HTMLDetailsElement).open;
+        if (next !== attentionOpen) onAttentionOpenChange(next);
+      }}>
         <summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span className="attention-count">{attention.length} 项临期</span><ChevronDown className="attention-chevron" size={14} aria-hidden="true" /></summary>
         <div className="task-list attention-list">{attention.map(row)}</div>
       </details>}
+
+      {/* 筛选从 ⋯ 菜单挪到这里：和「需要关注」贴在一起，选完立刻看得到列表变化，
+          也不用先想「筛选藏在哪」。三段本身就是状态显示，不再另挂一行文字提示。 */}
+      {tasks.length > 0 && <div className="segmented compact pool-filter" role="group" aria-label="任务池筛选">
+        {(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} type="button" className={filter === value ? "active" : ""} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}
+      </div>}
 
       {groups.length > 0 && <div className={flattenGroups ? "task-list pool-project-list is-flat" : "task-list pool-project-list"}>
         {flattenGroups ? groups[0].tasks.map(row) : groups.map(({ key, project, tasks: groupTasks }) => {
@@ -994,22 +1006,6 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
         })}
       </div>
     </details>}
-
-    {menuAnchor && <FloatingPanel kind="action" label="任务池操作" anchorElement={menuAnchor} closeOnOutsideClick onClose={() => setMenuAnchor(null)} className="pool-menu">
-      <button type="button" className="pool-menu-item" aria-label="自动排程" onClick={() => { setMenuAnchor(null); onAutoSchedule(); }}>
-        <Sparkles size={16} aria-hidden="true" /><span><strong>自动排程</strong><small>{autoScheduleAssist && assistCount > 0 ? `${assistCount} 项未安排` : "生成未来 7 天草案"}</small></span>
-      </button>
-      <button type="button" className="pool-menu-item" aria-label="新建重复习惯" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setMenuAnchor(null); setPendingHabitRect(rect); }}>
-        <Repeat2 size={16} aria-hidden="true" /><span><strong>新建习惯</strong><small>每天、工作日或每周选日</small></span>
-      </button>
-      <div className="pool-menu-sep" aria-hidden="true" />
-      <div className="pool-menu-filter" role="group" aria-label="任务池筛选">
-        <span>显示</span>
-        <div className="segmented compact">
-          {(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} type="button" className={filter === value ? "active" : ""} aria-pressed={filter === value} onClick={() => { setFilter(value); setMenuAnchor(null); }}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}
-        </div>
-      </div>
-    </FloatingPanel>}
 
     {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} closeOnOutsideClick onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); setHabitsOpen(true); }} onPhase={setHabitBusy} /></FloatingPanel>}
     {progressEdit && progressTask && <FloatingPanel className="pool-progress-panel" label={`调整进度 ${progressTask.title}`} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)}><PoolProgressEditor task={progressTask} anchor={progressEdit.anchor} onCommit={onProgress} onClose={() => setProgressEdit(null)} /></FloatingPanel>}
@@ -1056,12 +1052,14 @@ function TaskPoolRow({ task, sessions, completed = false, leaving = false, progr
       <div className="pool-task-meta">
         {/* 完成态不再重复一遍百分比：右侧那一格已经是 100%，勾 + 标题 + 一个数字就够。 */}
         {!completed && when && <span className={urgentDeadline ? "pool-task-when is-due" : "pool-task-when"} title={whenTitle}>{when}</span>}
+        {/* 进度与编辑共用一个胶囊外框：一行里只出现一个形状。两个按钮各自保持独立语义，
+            悬停只填被指的那一段（见 `.pool-task-side` 的样式注释）。 */}
         <span className="pool-task-side">
           <button type="button" className="pool-task-progress" aria-haspopup="dialog" aria-expanded={progressOpen} aria-label={`调整进度 ${task.title}，当前 ${task.progress}%`} title="调整完成度" onClick={(event) => onProgressEdit(task, event.currentTarget)}>{task.progress}%</button>
+          {!completed && <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} title="编辑任务" onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={12} /></button>}
         </span>
       </div>
     </div>
-    {!completed && <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>}
   </article>;
 }
 
@@ -1926,8 +1924,11 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
     <label>习惯名称<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
     <label>重复规则<SelectField value={draft.pattern} onChange={(value) => patchDraft({ pattern: value as RecurringHabit["pattern"] })} options={[{ value: "daily", label: "每天" }, { value: "weekdays", label: "工作日" }, { value: "weekly", label: "每周选择" }]} /></label>
     {draft.pattern === "weekly" && <div className="habit-field" role="group" aria-label="选择星期"><span className="editor-field-label" aria-hidden="true">选择星期</span><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></div>}
-    <label>单次投入<NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes} onChange={(value) => { if (value !== null) patchDraft({ sessionMinutes: value }); }} /></label>
-    <label>固定开始<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
+    {/* 这两行必须是 div 而不是 <label>：`label` 的点击激活只认第一个可关联元素，
+        而这里第一个可关联元素是减号按钮 —— 点标签文字或数值框右侧留白都会莫名其妙地减一档。
+        与上面的「选择星期」同一套网格，标签改用 `editor-field-label` 承载。 */}
+    <div className="habit-field"><span className="editor-field-label">单次投入</span><NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes} onChange={(value) => { if (value !== null) patchDraft({ sessionMinutes: value }); }} /></div>
+    <div className="habit-field"><span className="editor-field-label">固定开始</span><TimeField label="固定开始时间" value={draft.preferredStartLocal} placeholder="未设置" allowClear onChange={(value) => patchDraft({ preferredStartLocal: value })} /></div>
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建习惯"}</Button></div>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
   </form>;

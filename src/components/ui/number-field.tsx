@@ -35,6 +35,11 @@ interface NumberFieldProps {
  * 步进按钮 `tabIndex={-1}`：键盘用户直接对着输入框按 ↑/↓ 或输入数字即可，
  * 三个 Tab 停靠点会把设置页的键盘路径拖得很长；鼠标用户仍然可以点 ±。
  * 输入过程中保留草稿（允许清空重打），失焦或回车才夹到 [min, max]。
+ *
+ * 根节点上**必须**拦住「点空白处」的默认行为：这个控件常被整个塞进 `<label>`，
+ * 而 label 的点击激活只会转给**第一个**可关联元素 —— 也就是减号。于是点单位后缀、
+ * 点外框内的空白、点标签文字，都会让数值莫名掉一档（2026-10-24 用户实测：点右侧
+ * 留白 −5）。这里把这类点击改成聚焦输入框，和普通文本框的手感一致。
  */
 export function NumberField({ id, label, value, min, max, step = 1, suffix, nullable = false, presets, disabled = false, onChange }: NumberFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -63,7 +68,16 @@ export function NumberField({ id, label, value, min, max, step = 1, suffix, null
   };
 
   return (
-    <span className="number-field-wrap">
+    <span
+      className="number-field-wrap"
+      onClick={(event) => {
+        // 点在 ± 或输入框上照常走各自的行为；其余位置（单位后缀、外框内空白）
+        // 只把焦点交给输入框，不能让外层 label 把它转成一次减号点击。
+        if ((event.target as HTMLElement).closest("button, input")) return;
+        event.preventDefault();
+        inputRef.current?.focus();
+      }}
+    >
       <span className={`number-field${disabled ? " is-disabled" : ""}`}>
         <button type="button" className="number-step" tabIndex={-1} aria-label={`减少 ${step} ${suffix}`} disabled={disabled || current <= min} onClick={() => stepBy(-step)}>
           <Minus size={14} aria-hidden="true" />

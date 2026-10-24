@@ -14,6 +14,11 @@ import { FloatingPanel } from "./floating-panel";
  */
 
 const ITEM_HEIGHT = 30;
+/**
+ * 空值打开滚轮时的落点。只是滚轮的初始位置 —— 不选就不会写回草稿，
+ * 与 `App` 里习惯排程的兜底值（默认晚间时段的起点，出厂为 19:00）对齐。
+ */
+const EMPTY_ANCHOR = "19:00";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
@@ -124,19 +129,26 @@ interface TimeFieldProps {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
+  /** 空值时按钮上的灰字（可选字段用，例如「未设置」）。不传则保持空白。 */
+  placeholder?: string;
+  /** 允许清除：浮层底部多一个「清除」，把值改回空字符串。 */
+  allowClear?: boolean;
 }
 
-export function TimeField({ label, value, onChange, disabled }: TimeFieldProps) {
+export function TimeField({ label, value, onChange, disabled, placeholder = "", allowClear = false }: TimeFieldProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const minutes = parseClock(value);
+  // 空值也把滚轮摆在有意义的位置：否则会从 00:00 开始，选一次就要滚十几屏。
+  const anchor = value || EMPTY_ANCHOR;
+  const minutes = parseClock(anchor);
+  const shown = value || placeholder;
   return (
     <>
       <button
         ref={buttonRef}
         type="button"
-        className="time-field"
-        aria-label={`${label} ${value}`}
+        className={`time-field${value ? "" : " is-empty"}`}
+        aria-label={`${label} ${shown}`.trim()}
         aria-haspopup="dialog"
         aria-expanded={open}
         disabled={disabled}
@@ -149,7 +161,7 @@ export function TimeField({ label, value, onChange, disabled }: TimeFieldProps) 
           onChange(clockAt(minutes.hour * 60 + minutes.minute + delta));
         }}
       >
-        {value}
+        {shown}
       </button>
       {open && (
         <FloatingPanel
@@ -160,7 +172,12 @@ export function TimeField({ label, value, onChange, disabled }: TimeFieldProps) 
           closeOnOutsideClick
           onClose={() => setOpen(false)}
         >
-          <TimeWheel value={value} onChange={onChange} />
+          <TimeWheel value={anchor} onChange={onChange} />
+          {allowClear && value && (
+            <div className="time-picker-foot">
+              <button type="button" onClick={() => { onChange(""); setOpen(false); }}>清除</button>
+            </div>
+          )}
         </FloatingPanel>
       )}
     </>

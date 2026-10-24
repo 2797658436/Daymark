@@ -363,19 +363,28 @@ body[data-pool-resizing] .task-pool { pointer-events: none; }
 body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* ---------------------------------------------------------------------------
    任务池：右侧 260–560px 的可调宽面板。
-   结构是「标题 → 快速添加 → 一个滚动区（临期 + 项目行/任务行）→ 习惯抽屉」。
-   次要操作和筛选收进 ⋯，同一时间只展开一个项目；只有 pool-scroll 滚动 ——
+   结构是「标题+三按钮 → 快速添加 → 一个滚动区（临期 + 筛选 + 项目行/任务行）→ 习惯抽屉」。
+   自动排程与新建习惯常驻头部，筛选是滚动区里「需要关注」下面的一行；
+   同一时间只展开一个项目，只有 pool-scroll 滚动 ——
    旧版把关注区、筛选和习惯都放在固定 flex 列里，内容一多 project-groups 的
    flex:1 1 0 就会缩到 0，任务列表整个消失（高 760、4 项临期时实测）。
    --------------------------------------------------------------------------- */
 .task-pool { container-type: inline-size; position: relative; min-width: 0; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 14px 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; box-shadow: inset 1px 0 0 var(--panel-raised); }
 .pool-head { display: flex; align-items: center; gap: 6px; min-height: 2.75rem; }
-.pool-head h2 { margin: 0; font-size: 1rem; line-height: 1.4; letter-spacing: -.01em; }
-.pool-count { border: 1px solid var(--line-soft); border-radius: 999px; padding: .16rem .55rem; color: var(--muted); font-size: .72rem; font-weight: 500; font-variant-numeric: tabular-nums; }
-.pool-more { margin-left: auto; border-color: transparent; background: transparent; }
-.pool-more:hover { border-color: var(--line-soft); background: var(--panel-strong); }
-.task-pool-close { min-width: 2.75rem; min-height: 2.75rem; border-color: transparent; background: transparent; }
-.task-pool-close:hover { border-color: var(--line-soft); background: var(--panel-strong); }
+/* 标题可缩：极端窄面板＋大缩放时先让它省略号，而不是把三个按钮挤出可视区。 */
+.pool-head h2 { min-width: 0; margin: 0; overflow: hidden; font-size: 1rem; line-height: 1.4; letter-spacing: -.01em; text-overflow: ellipsis; white-space: nowrap; }
+.pool-count { flex: none; border: 1px solid var(--line-soft); border-radius: 999px; padding: .16rem .55rem; color: var(--muted); font-size: .72rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+/* 头部常驻三按钮：自动排程／新建习惯／收起。用 34px 的紧凑口径（与项目标题栏的 icon-action 同档），
+   三个 44px 会把标题和计数挤出 300px 宽的面板；描边保留，让它们看起来确实是按钮而不是标签。 */
+.pool-head-actions { flex: none; display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.pool-head-actions .icon-action { min-width: 2.125rem; min-height: 2.125rem; }
+/* 再窄就只留按钮：计数比标题更可省。标题被压到只剩一个字（200% 下是「任…」）时
+   不如让三个按钮整体换到第二行——UI-SPEC 对高缩放的要求就是「优先重排、换行」。 */
+@container (max-width: 15rem) {
+  .pool-count { display: none; }
+  .pool-head { flex-wrap: wrap; row-gap: 4px; }
+  .pool-head-actions { margin-left: auto; }
+}
 .task-pool-toggle { position: fixed; z-index: 20; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
 .task-pool-toggle:hover { background: var(--panel-strong); }
 .task-pool-scrim { display: none; }
@@ -392,23 +401,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .pool-scroll { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; align-content: start; gap: 8px; padding: 1px 2px 4px; scrollbar-gutter: stable; }
 .task-list { display: grid; align-content: start; gap: 4px; }
 
-/* 次要操作收进 ⋯：自动排程、新建习惯和筛选不再各占一整行。 */
-.floating-panel.pool-menu { width: 17.5rem; display: grid; gap: 2px; padding: 6px; }
-.pool-menu-item { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-height: 2.75rem; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; }
-.pool-menu-item:hover { background: var(--panel-strong); }
-.pool-menu-item > svg { flex: none; margin-top: 2px; color: var(--accent-strong); }
-.pool-menu-item > span { display: grid; gap: 1px; min-width: 0; }
-.pool-menu-item strong { font-size: .82rem; }
-.pool-menu-item small { color: var(--muted); font-size: .72rem; line-height: 1.35; }
-.pool-menu-sep { height: 1px; margin: 4px 8px; background: var(--line-soft); }
-.pool-menu-filter { display: grid; gap: 6px; padding: 2px 6px 4px; }
-.pool-menu-filter > span { color: var(--muted); font-size: .7rem; }
-.pool-menu-filter .segmented { width: 100%; }
-.pool-menu-filter .segmented button { min-height: 2.75rem; }
-.pool-filter-note { display: flex; align-items: center; gap: 8px; min-height: 2.75rem; padding: 0 3px; color: var(--muted); font-size: .72rem; }
-.pool-filter-note span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pool-filter-note button { flex: none; min-height: 2.75rem; padding: 0 4px; color: var(--accent-strong); font-size: .72rem; font-weight: 500; }
-.pool-filter-note button:hover { text-decoration: underline; }
+/* 筛选挪到「需要关注」下面（原来是 ⋯ 菜单里的一段）：三段并排、撑满整行。
+   高度比菜单里那版矮一档 —— 它是常驻行，不该占掉一条任务的高度。 */
+/* 筛选三段的按钮比通用 compact 矮一档（字号与内边距在 `.segmented` 定义之后同权重覆盖）。 */
+.pool-filter button { min-height: 2.25rem; }
+/* 行高必须是 max-content：`.pool-scroll` 是网格，内容超出它的高度时 auto 行会被压到 min-content，
+   而 `.segmented` 带 `overflow: hidden`（滚动容器），它的 min-content 高度算 0 —— 于是 200% 缩放下
+   筛选那一行会塌成 6px 的一条线（实测 rows = "6px 600px"，按钮本身还是 72px，被裁掉了）。 */
+.pool-scroll { grid-auto-rows: max-content; }
 
 /* 临期：只有一行摘要；打开后任务行直接排进同一个滚动区。 */
 .attention-pool { display: grid; border: 1px solid color-mix(in srgb, var(--danger) 26%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--danger) 4%, var(--panel)); padding: 0 6px; }
@@ -424,24 +424,33 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 
 /* 任务行：标题、一个最近的时间信号和完成度收在同一行；点百分比打开进度气泡。 */
 .task-card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.task-card.pool-task-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 2.75rem; align-items: center; min-height: 2.75rem; padding: 0 0 0 4px; border-bottom: 1px solid var(--line-soft); cursor: grab; transition: background .12s ease; }
+.task-card.pool-task-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-height: 2.75rem; padding: 0 4px; border-bottom: 1px solid var(--line-soft); cursor: grab; transition: background .12s ease; }
 .task-card.pool-task-row:last-child { border-bottom-color: transparent; }
 .task-card.pool-task-row:active { cursor: grabbing; }
 .task-card.pool-task-row:hover, .task-card.pool-task-row:focus-within { background: var(--panel-strong); }
 .pool-task-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 标题行必须是 flex 容器：`.pool-task-title` 上的 `overflow: hidden` / `text-overflow: ellipsis` /
+   `min-width: 0` 只对**块级或 flex 子项**生效。此前这里是裸 `<span>`，标题算行内元素，整套省略号
+   规则全部空转 —— 长标题直接横向溢出，把右侧的百分比和编辑按钮顶出面板，还会让 pool-scroll 出现
+   横向滚动（实测 320px 面板里 91px、200% 缩放下 367px）。 */
+.pool-task-title-row { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .pool-task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; line-height: 1.35; font-weight: 500; }
 .pool-task-meta { display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; margin-left: auto; }
 .pool-task-when { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
 .pool-task-when.is-due { color: var(--danger); font-weight: 600; }
-.pool-task-side { display: flex; align-items: center; justify-content: flex-end; flex: none; width: 2.75rem; height: 2.75rem; margin-left: auto; }
-/* 百分比按钮占满 44px 格：点击是明确动作，不再依赖悬停命中。 */
-.pool-task-progress { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background .12s ease, color .12s ease, box-shadow .12s ease; }
-.pool-task-progress:hover, .pool-task-progress[aria-expanded="true"] { background: var(--panel); color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--line-soft); }
+/* 进度 + 编辑 = 一枚连体胶囊：一行里只出现一个形状。
+   为什么不各自包一圈：两个框紧挨着像把同一个控件拆成两半，而它们是两件不同的事
+   （改进度 / 打开编辑器）；且百分比宽度随数字变，两个框的左缘会参差。
+   悬停只填「被指的那一段」—— 整块高亮会让人以为点哪儿都一样。 */
+.pool-task-side { display: flex; align-items: center; gap: 2px; flex: none; width: auto; height: 1.75rem; margin-left: auto; padding: 0 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.pool-task-progress { display: grid; place-items: center; width: auto; min-width: 2.25rem; height: 1.75rem; padding: 0 .375rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted-strong); font: inherit; font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background .12s ease, color .12s ease; }
+.pool-task-progress:hover, .pool-task-progress[aria-expanded="true"] { background: var(--accent-softer); color: var(--accent-strong); }
 .pool-task-progress:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.pool-task-edit { min-width: 2.75rem; min-height: 2.75rem; border-color: transparent; background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease, border-color .12s ease; }
-.task-card.pool-task-row:hover .pool-task-edit, .task-card.pool-task-row:focus-within .pool-task-edit { opacity: 1; border-color: var(--line-soft); background: var(--panel); color: var(--text); }
-@media (hover: none) { .pool-task-edit { opacity: 1; } }
-/* 16rem 跟着根字号走：窄栏或 150%/200% 时标题独占一行，时间与进度回到下一行。 */
+/* 编辑按钮常驻在胶囊里，口径与百分比同高，只有图标。 */
+.icon-action.pool-task-edit { min-width: 1.5rem; min-height: 1.5rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--muted); transition: color .12s ease, background .12s ease; }
+.icon-action.pool-task-edit:hover { border: 0; background: var(--accent-softer); color: var(--accent-strong); box-shadow: none; }
+.icon-action.pool-task-edit:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* 16rem 跟着根字号走：窄栏或 150%/200% 时标题独占一行，时间与进度胶囊回到下一行。 */
 @container (max-width: 16rem) {
   .task-card.pool-task-row { min-height: 3.25rem; }
   .pool-task-main { flex-wrap: wrap; gap: 1px 8px; padding-block: 5px; }
@@ -483,7 +492,14 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .project-group-meter span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .22s ease; }
 .project-group-body { display: grid; gap: 0; }
 .project-group-body.is-expanded { padding: 0 0 2px; }
-.project-group-body .pool-task-row { padding-left: 6px; }
+/* 项目头与任务同为一级缩进时读起来像同一层（原来只差 4px）。这里给任务行 1.125rem（=18px）的左内边距：
+   项目头文字在 2px，任务文字落在 18px，形成 16px 的清晰台阶。
+   用 rem 而不是 px：界面缩放是靠改根字号实现的（`applyDisplayPreferences`），px 在 200% 下不会跟着长，
+   台阶相对文字会缩成一半，看着像没缩进。
+   只用留白、不加「·」之类的符号 —— 同一视觉偏移下少占一个字形，200% 缩放也不会变成一颗大圆点。
+   注意选择器必须挂在 `.project-group-body` 下：`flattenGroups`（只有一个「独立任务」组）时
+   任务行直接排在列表里、没有项目头，那种平铺清单不该缩进。 */
+.project-group-body .pool-task-row { padding-left: 1.125rem; }
 
 /* 重复习惯：默认收成底部一行；展开后在固定高度内滚动，不把项目列表顶走。 */
 .pool-habits { flex: none; border-top: 1px solid var(--line-soft); padding-top: 2px; }
@@ -526,6 +542,13 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .segmented button:hover:not(.active) { background: var(--panel); color: var(--text); }
 .segmented button.active { background: var(--panel); color: var(--accent-strong); font-weight: 600; box-shadow: var(--shadow-low); }
 .segmented.compact { width: 100%; }.segmented.compact button { flex: 1; font-size: .75rem; padding: .42rem .25rem; }
+/* 任务池的三段筛选比通用 compact 更紧一档；200% 缩放下每个按钮只差 1px 就会把「未安排」折成两行。
+   选择器必须带上 `.segmented`：`.segmented.compact button` 是两个类，单靠 `.pool-filter button`
+   权重不够，会被它压回去。 */
+.segmented.pool-filter button { padding: .34rem .25rem; }
+@container (max-width: 15rem) {
+  .segmented.pool-filter button { padding-inline: .2rem; font-size: .7rem; }
+}
 .icon-action, .today-button { min-width: 44px; min-height: 44px; border: 1px solid var(--line-soft); border-radius: 10px; display: inline-grid; place-items: center; background: var(--panel); color: var(--muted); transition: color .12s ease, background .12s ease, border-color .12s ease; }
 .icon-action:hover, .today-button:hover { color: var(--text); background: var(--panel-strong); border-color: var(--line); }
 .icon-action.is-active { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); }
@@ -862,6 +885,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .time-field { display: flex; align-items: center; width: 100%; height: 2.8125rem; padding: 0 .75rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font-size: .875rem; font-variant-numeric: tabular-nums; text-align: left; transition: border-color .12s ease, box-shadow .12s ease; }
 .time-field:hover:not(:disabled) { border-color: var(--line-strong); }
 .time-field:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring-accent); }
+/* 可选时间字段留空时按钮上的「未设置」：和 `.date-field-button.is-empty` 同一档灰。 */
+.time-field.is-empty { color: var(--muted); }
 
 /* 时间滚轮：两列数字 + 中间的冒号（不写成 `:00`）。选中行底色画在两列后面。
    行高与内边距必须成对：9.375rem 高、1.875rem 行高、上下各 3.75rem —— 缩放时一起走。 */
@@ -877,6 +902,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .wheel-item { display: flex; align-items: center; justify-content: center; height: 1.875rem; scroll-snap-align: center; color: var(--muted); font-size: .8125rem; font-variant-numeric: tabular-nums; cursor: pointer; }
 .wheel-item:hover { color: var(--text); }
 .wheel-item.is-active { color: var(--accent-strong); font-size: 1rem; font-weight: 600; }
+/* 可选时间字段的「清除」：只在有值时出现，按钮口径与日期字段浮层底部一致。 */
+.time-picker-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: .5rem; }
+.time-picker-foot button { min-height: 28px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .74rem; }
+.time-picker-foot button:hover { border-color: var(--line-strong); color: var(--accent-strong); }
 
 /* 时长快选：点一下就把「结束」定好，比先改开始再改结束少一半操作。
    5 个按钮必须在 336px 内排成一行（加「时长」前缀或总计都会把「自定义」顶到第二行）。 */
