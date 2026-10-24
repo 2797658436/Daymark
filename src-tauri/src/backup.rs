@@ -457,6 +457,10 @@ fn validate_database(path: &Path) -> Result<(), String> {
     if version >= 7 {
         required_tables.push("milestone_outcomes");
     }
+    if version >= 8 {
+        required_tables.push("completion_records");
+        required_tables.push("completion_images");
+    }
     for table in required_tables {
         let exists: bool = connection
             .query_row(
@@ -486,7 +490,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::models::{Project, Task};
+    use crate::models::{
+        CompletionImage, CompletionRecord, ProgressEvent, Project, Task,
+    };
 
     fn save_named_task(database: &Database, suffix: &str) {
         database
@@ -660,6 +666,112 @@ mod tests {
         let restored = Database::open(&clean_path).unwrap().snapshot().unwrap();
         assert_eq!(restored.tasks.len(), 1);
         assert_eq!(restored.tasks[0].title, "任务 source");
+    }
+
+    /// 图片以 BLOB 入库的意义就在这里：备份是整库复制，取证图片零改动地跟着走。
+    #[test]
+    fn a_backup_carries_completion_records_and_their_images() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.db");
+        let source = Database::open(&source_path).unwrap();
+        save_named_task(&source, "done");
+        source
+            .apply_progress(&ProgressEvent {
+                id: "progress-1".into(),
+                task_id: "task-done".into(),
+                from_progress: 0,
+                to_progress: 100,
+                occurred_at_utc: "2026-07-29T06:00:00Z".into(),
+            })
+            .unwrap();
+        source
+            .record_completion(
+                &CompletionRecord {
+                    id: "completion-1".into(),
+                    task_id: "task-done".into(),
+                    progress_event_id: "progress-1".into(),
+                    completed_at_utc: "2026-07-29T06:00:00Z".into(),
+                    progress_before: 0,
+                    fit: Some("fit".into()),
+                    note: "截图留证".into(),
+                    tags: vec!["专注".into()],
+                    reverted_at_utc: None,
+                },
+                &[CompletionImage {
+                    id: "image-1".into(),
+                    sort_order: 0,
+                    mime: "image/webp".into(),
+                    width: 1600,
+                    height: 900,
+                    size_bytes: 8,
+                    data_base64: STANDARD.encode(b"evidence".to_vec()),
+                    thumb_base64: STANDARD.encode(b"thumb".to_vec()),
+                }],
+            )
+            .unwrap();
+
+        let backup = BackupService::new(&source_path, dir.path().join("source-backups"))
+            .create_daily(NaiveDate::from_ymd_opt(2026, 7, 29).unwrap())
+            .unwrap();
+        let clean_path = dir.path().join("clean.db");
+        Database::open(&clean_path).unwrap();
+        BackupService::new(&clean_path, dir.path().join("clean-backups"))
+            .restore(&backup.path, Local.with_ymd_and_hms(2026, 7, 29, 18, 30, 0).unwrap())
+            .unwrap();
+
+        let restored = Database::open(&clean_path).unwrap();
+        let snapshot = restored.snapshot().unwrap();
+        assert_eq!(snapshot.completion_records.len(), 1);
+        assert_eq!(snapshot.completion_records[0].image_count, 1);
+        assert_eq!(snapshot.completion_records[0].record.note, "截图留证");
+        let images = restored.completion_images("completion-1").unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(STANDARD.decode(&images[0].data_base64).unwrap(), b"evidence");
+        assert_eq!(STANDARD.decode(&images[0].thumb_base64).unwrap(), b"thumb");
+    }
+
+    #[test]
+    fn restore_rejects_a_v8_backup_that_is_missing_completion_records() {
+        let dir = tempdir().unwrap();
+        let live_path = dir.path().join("live.db");
+        let live = Database::open(&live_path).unwrap();
+        save_named_task(&live, "live");
+
+        let fake_v8_path = dir.path().join("fake-v8.db");
+        let fake = Connection::open(&fake_v8_path).unwrap();
+        fake.execute_batch(
+            "CREATE TABLE schema_version (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);\
+             INSERT INTO schema_version VALUES (1, 8);\
+             CREATE TABLE projects (id TEXT PRIMARY KEY);\
+             CREATE TABLE tasks (id TEXT PRIMARY KEY);\
+             CREATE TABLE execution_sessions (id TEXT PRIMARY KEY);\
+             CREATE TABLE execution_records (id TEXT PRIMARY KEY);\
+             CREATE TABLE progress_events (id TEXT PRIMARY KEY);\
+             CREATE TABLE project_milestones (id TEXT PRIMARY KEY);\
+             CREATE TABLE milestone_outcomes (id TEXT PRIMARY KEY);",
+        )
+        .unwrap();
+        drop(fake);
+
+        let service = BackupService::new(&live_path, dir.path().join("backups"));
+        assert!(
+            service
+                .restore(
+                    &fake_v8_path,
+                    Local.with_ymd_and_hms(2026, 9, 1, 17, 0, 0).unwrap(),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            Database::open(&live_path)
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .tasks[0]
+                .title,
+            "任务 live"
+        );
     }
 
     #[test]

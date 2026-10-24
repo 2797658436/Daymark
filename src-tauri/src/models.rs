@@ -125,3 +125,45 @@ pub struct HabitOccurrence {
     pub status: String,
     pub session_id: Option<String>,
 }
+
+/// 一次「进度到 100」的主观记录。
+///
+/// 它只**引用**进度事件（`progress_event_id`），不改写进度事实；`created_at_utc`
+/// 与 `updated_at_utc` 由写入方生成，因此不进入序列化边界。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRecord {
+    pub id: String,
+    pub task_id: String,
+    pub progress_event_id: String,
+    pub completed_at_utc: String,
+    pub progress_before: u8,
+    pub fit: Option<String>,
+    pub note: String,
+    pub tags: Vec<String>,
+    pub reverted_at_utc: Option<String>,
+}
+
+/// 快照里的记录：文本字段加一个 join 出来的图片张数，**不含图片字节**。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRecordSummary {
+    #[serde(flatten)]
+    pub record: CompletionRecord,
+    pub image_count: i64,
+}
+
+/// 完成记录的取证图片。字节以 base64 跨过命令边界，入库为 BLOB；
+/// 由 `record_completion`／`update_completion` 整体替换。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionImage {
+    pub id: String,
+    pub sort_order: i64,
+    pub mime: String,
+    pub width: i64,
+    pub height: i64,
+    pub size_bytes: i64,
+    pub data_base64: String,
+    pub thumb_base64: String,
+}

@@ -184,6 +184,104 @@ function reviewWorkspace() {
 const preference = (overrides = {}) => ({ motion: "full", scale: 100, ...overrides });
 
 /**
+ * 完成记录样本（规格 0007 §9 末段：浅／深色各截完成气泡、今日完成行、回顾感受卡）。
+ *
+ * 一张一周的样本同时服务三个界面：今日页（「今日完成」三行：已记录／未填写／撤回后回到活动池）、
+ * 回顾周视图（「完成感受」三档 + 常见标签 + 口径行）与任务明细（记录行 + 缩略图 + 只读放大）。
+ */
+function completionWorkspace() {
+  const item = (id, title, progress, status, sortOrder, patch = {}) => ({
+    id, projectId: null, title, progress, status, deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60,
+    priority: "normal", sortOrder, kind: "task", ...patch,
+  });
+  const completedToday = (id, title, sortOrder, before, time) => [
+    item(id, title, 100, "completed", sortOrder),
+    { id: `ce-${id}`, taskId: id, fromProgress: before, toProgress: 100, occurredAtUtc: anchorAt(ANCHOR_DAY, time) },
+  ];
+  const [alpha, alphaEvent] = completedToday("c-alpha", "写阶段总结", 0, 75, "09:10");
+  const [beta, betaEvent] = completedToday("c-beta", "整理用户反馈", 1, 60, "10:20");
+  // 撤回后的真实状态：任务回到 40%、留在活动池里，记录仍然带内容躺在明细里。
+  const undone = item("c-open", "撤回过一次的那项", 40, "active", 2);
+  return workspace({
+    tasks: [
+      alpha, beta, undone,
+      // 完成了但一个字都没记：今日完成那一行要说「未填写完成记录」。
+      item("c-blank", "还没记录的一项", 100, "completed", 3),
+      // 进度停在 75%、今天有截止：它就是气泡的那一个锚点（任务池那一行 / 今日页临期卡的进度条）。
+      item("c-draft", "还在推进的任务", 75, "active", 4, { deadlineLocal: ANCHOR_DAY }),
+      // 上周完成的两项：让「完成感受」的三档都有量。
+      item("c-early", "搭好导入脚本", 100, "completed", 5),
+      item("c-later", "复核导出格式", 100, "completed", 6),
+    ],
+    progressEvents: [
+      alphaEvent, betaEvent,
+      { id: "ce-open", taskId: "c-open", fromProgress: 40, toProgress: 100, occurredAtUtc: anchorAt(ANCHOR_DAY, "11:05") },
+      // 撤回写的是**新的**回退事件，上一条 40→100 一个字都不改。
+      { id: "ce-open-back", taskId: "c-open", fromProgress: 100, toProgress: 40, occurredAtUtc: anchorAt(ANCHOR_DAY, "11:30") },
+      { id: "ce-blank", taskId: "c-blank", fromProgress: 80, toProgress: 100, occurredAtUtc: anchorAt(ANCHOR_DAY, "11:40") },
+      { id: "ce-early", taskId: "c-early", fromProgress: 0, toProgress: 100, occurredAtUtc: anchorAt("2026-08-03", "14:00") },
+      { id: "ce-later", taskId: "c-later", fromProgress: 55, toProgress: 100, occurredAtUtc: anchorAt("2026-08-06", "09:30") },
+    ],
+    completionRecords: [
+      { id: "cr-1", taskId: "c-alpha", progressEventId: "ce-c-alpha", completedAtUtc: anchorAt(ANCHOR_DAY, "09:10"), progressBefore: 75, fit: "light", note: "一次写完，中途没有分心。下次先把材料收齐再开始。", tags: ["专注", "顺利"], revertedAtUtc: null, imageCount: 2 },
+      { id: "cr-2", taskId: "c-beta", progressEventId: "ce-c-beta", completedAtUtc: anchorAt(ANCHOR_DAY, "10:20"), progressBefore: 60, fit: "hard", note: "被两次打断，剩下的部分拖到明天。", tags: ["被打断", "疲惫"], revertedAtUtc: null, imageCount: 1 },
+      // 已撤回：内容一个字不删，明细里只读，但不进感受聚合。
+      { id: "cr-3", taskId: "c-open", progressEventId: "ce-open", completedAtUtc: anchorAt(ANCHOR_DAY, "11:05"), progressBefore: 40, fit: "light", note: "撤回过一次，内容还在。", tags: ["想继续"], revertedAtUtc: anchorAt(ANCHOR_DAY, "11:30"), imageCount: 0 },
+      { id: "cr-4", taskId: "c-early", progressEventId: "ce-early", completedAtUtc: anchorAt("2026-08-03", "14:00"), progressBefore: 0, fit: "fit", note: "", tags: ["有收获"], revertedAtUtc: null, imageCount: 0 },
+      { id: "cr-5", taskId: "c-later", progressEventId: "ce-later", completedAtUtc: anchorAt("2026-08-06", "09:30"), progressBefore: 55, fit: "hard", note: "格式对不上，重来了一遍。", tags: ["卡住", "比预计难"], revertedAtUtc: null, imageCount: 0 },
+    ],
+  });
+}
+
+/** 打开气泡（规格 §3.1 的两个入口：任务池那一行 / 今日页临期卡的进度条）。 */
+async function openCompletionBubble(page, { via = "pool", title = "还在推进的任务" } = {}) {
+  if (via === "pool") {
+    await page.getByRole("button", { name: `调整进度 ${title}，当前 75%` }).click();
+    await page.getByRole("button", { name: `标记 ${title} 已完成` }).click();
+  } else {
+    const slider = page.getByRole("slider", { name: `${title} 完成度` });
+    await slider.fill("100");
+    // 拖动结束才提交：程序化 fill 不发 keyup，补一次按键走真实提交分支。
+    await slider.press("ArrowRight");
+  }
+  await page.locator(".completion-panel").waitFor();
+}
+
+/**
+ * 明细与放大层要真的把图片画出来，所以在场景里现画一张 PNG 再打开明细。
+ *
+ * 不在夹具里塞一段来历不明的 base64：1×1 的纯色图在只读放大层里就只有 1 个像素，
+ * 截图看不出「装得下就原尺寸、装不下等比缩」这条规则到底成不成立。
+ * 字节放在同源的第二个键里（快照只有 `imageCount`），应用按需读取，所以 act 里写也来得及。
+ */
+async function seedCompletionImages(page) {
+  await page.evaluate(() => {
+    const draw = (width, height) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#f5d8c2";
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = "#d2693b";
+      context.fillRect(width / 8, height / 8, (width * 3) / 4, (height * 3) / 4);
+      context.fillStyle = "#24231f";
+      context.fillRect(width / 3, height / 3, width / 3, height / 3);
+      return canvas.toDataURL("image/png").split(",")[1];
+    };
+    const image = (recordId, index, width) => {
+      const height = Math.round((width * 9) / 16);
+      const data = draw(width, height);
+      return { id: `${recordId}-image-${index}`, sortOrder: index, mime: "image/png", width, height, sizeBytes: Math.round(data.length * 0.75), dataBase64: data, thumbBase64: draw(160, 90) };
+    };
+    localStorage.setItem("daymark.phase1.completionImages", JSON.stringify({
+      "cr-1": [image("cr-1", 0, 900), image("cr-1", 1, 640)],
+      "cr-2": [image("cr-2", 0, 800)],
+    }));
+  });
+}
+
+/**
  * 日历页样本（P4-11 加）：同一周里同时有截止旗帜、项目截止、里程碑菱形、已排时段、
  * 已结束记录与时间块，好让三种视图的截图都能看出真实信息密度。
  *
@@ -650,6 +748,89 @@ function scenarios(port) {
         await frameTodayPill(page);
       },
     })))),
+
+    // 规格 0007 §9：完成记录三类界面 × 浅／深色，外加 960×640 + 200% 那一组。
+    // 气泡一律拍两张：全页看它与锚点行的关系，近景看控件本身（三档、瓦片、动作条）。
+    ...["light", "dark"].flatMap((appearance) => [
+      {
+        name: `completion-bubble-${appearance}`,
+        crop: ".completion-panel",
+        seed: {
+          port, clock, preferences: preference({ lastPage: "today", appearance }), workspace: completionWorkspace(),
+        },
+        // 从任务池那一行开：气泡锚在它旁边，那行在气泡期间留在原地显示完成态。
+        act: async (page) => openCompletionBubble(page),
+      },
+      {
+        name: `completion-today-rows-${appearance}`,
+        crop: ".today-completed",
+        seed: {
+          port, clock, viewport: { width: 1200, height: 900 }, preferences: preference({ lastPage: "today", appearance }), workspace: completionWorkspace(),
+        },
+        act: async (page) => {
+          await page.getByText(/今日完成 \d+ 项/).click();
+          await page.locator(".today-completed-row").first().waitFor();
+        },
+      },
+      {
+        name: `completion-review-${appearance}`,
+        crop: ".review-feeling",
+        seed: { port, clock, preferences: preference({ lastPage: "review", appearance }), workspace: completionWorkspace() },
+        act: async (page) => {
+          await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
+          // 感受卡在最后一节：不滚进视野就截图，拍到的只是它上面那一段明细。
+          await page.locator(".review-feeling").scrollIntoViewIfNeeded();
+        },
+      },
+      // 960×640 + 200%：最窄视口配上最大根字号，检查气泡不裁字、动作条仍在窗口内。
+      // 入口换成今日页临期卡的进度条 —— 960 宽时任务池是覆盖面板，压住的就是这块。
+      {
+        name: `completion-bubble-960-200-${appearance}`,
+        crop: ".completion-panel",
+        seed: {
+          port, clock, viewport: { width: 960, height: 640 },
+          preferences: preference({ lastPage: "today", appearance, scale: 200 }),
+          workspace: completionWorkspace(),
+        },
+        act: async (page) => openCompletionBubble(page, { via: "today", title: "还在推进的任务" }),
+      },
+      // 今日完成那一行是「标题 + 事实」两段都带省略的：200% 下先挤掉谁，只有这里看得见。
+      {
+        name: `completion-today-rows-960-200-${appearance}`,
+        crop: ".today-completed",
+        seed: {
+          port, clock, viewport: { width: 960, height: 640 },
+          preferences: preference({ lastPage: "today", appearance, scale: 200 }), workspace: completionWorkspace(),
+        },
+        act: async (page) => {
+          await page.getByText(/今日完成 \d+ 项/).click();
+          await page.locator(".today-completed-row").first().waitFor();
+        },
+      },
+    ]),
+    // 选中态单独一张：三档各带图标，选中还要再加尾部对勾 —— 要看清「图标 ≠ 选中」。
+    {
+      name: "completion-bubble-selected",
+      crop: ".completion-fits",
+      seed: { port, clock, preferences: preference({ lastPage: "today", appearance: "light" }), workspace: completionWorkspace() },
+      act: async (page) => {
+        await openCompletionBubble(page);
+        await page.locator(".completion-panel").getByRole("button", { name: "合适" }).click();
+      },
+    },
+    // 明细里的记录行与只读放大层：各补一张浅色近景（这两块不随主题改结构）。
+    ...[
+      { name: "completion-review-detail", crop: ".review-detail", act: async (page) => { await page.getByRole("button", { name: "查看任务「写阶段总结」的明细" }).click(); await page.locator(".review-completion-thumb").first().waitFor(); } },
+      { name: "completion-image-viewer", crop: ".review-image-viewer", act: async (page) => { await page.getByRole("button", { name: "查看任务「写阶段总结」的明细" }).click(); await page.getByRole("button", { name: "放大查看第 1 张完成图片" }).click(); await page.locator(".review-image-viewer").waitFor(); } },
+    ].map((scene) => ({
+      ...scene,
+      seed: { port, clock, preferences: preference({ lastPage: "review", appearance: "light" }), workspace: completionWorkspace() },
+      act: async (page) => {
+        await page.getByRole("heading", { name: "8月3日 — 8月9日", level: 1 }).waitFor();
+        await seedCompletionImages(page);
+        await scene.act(page);
+      },
+    })),
   ];
 }
 

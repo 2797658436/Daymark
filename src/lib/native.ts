@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
+import { checkCompletion } from "./completion";
+
 export interface Project { id: string; title: string; deadlineLocal: string | null }
 interface ProjectMilestoneBase { id: string; projectId: string; title: string; targetLocalDate: string; sortOrder: number }
 export type ProjectMilestone =
@@ -92,6 +94,36 @@ export interface MilestoneOutcome {
   resultText: string;
   frozenAtUtc: string;
 }
+export type CompletionFit = "light" | "fit" | "hard";
+/**
+ * 一次「进度到 100」的主观记录。
+ *
+ * 它只**引用**进度事件（`progressEventId`），不新建也不改写进度事实；`progressAfter`
+ * 恒为 100，因此不出现在模型里。图片字节不在快照内，只有 `imageCount`（见
+ * `CompletionRecordSummary`），取图走 `getCompletionImages` 按需请求。
+ */
+export interface CompletionRecord {
+  id: string;
+  taskId: string;
+  progressEventId: string;
+  completedAtUtc: string;
+  progressBefore: number;
+  fit: CompletionFit | null;
+  note: string;
+  tags: string[];
+  revertedAtUtc: string | null;
+}
+export interface CompletionRecordSummary extends CompletionRecord { imageCount: number }
+export interface CompletionImage {
+  id: string;
+  sortOrder: number;
+  mime: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  dataBase64: string;
+  thumbBase64: string;
+}
 export interface WorkspaceSnapshot {
   projects: Project[];
   projectMilestones: ProjectMilestone[];
@@ -104,6 +136,7 @@ export interface WorkspaceSnapshot {
   recurringHabits: RecurringHabit[];
   habitOccurrences: HabitOccurrence[];
   rescuePromptedSessionIds: string[];
+  completionRecords: CompletionRecordSummary[];
 }
 
 export interface DataCounts {
@@ -155,6 +188,10 @@ export interface NativeApi {
   startExecution(record: ExecutionRecord): Promise<WorkspaceSnapshot>;
   finishExecution(recordId: string, actualEndUtc: string, note: string, progressEvent: ProgressEvent): Promise<WorkspaceSnapshot>;
   applyProgress(event: ProgressEvent): Promise<WorkspaceSnapshot>;
+  recordCompletion(record: CompletionRecord, images: CompletionImage[]): Promise<WorkspaceSnapshot>;
+  updateCompletion(record: CompletionRecord, images: CompletionImage[]): Promise<WorkspaceSnapshot>;
+  revertCompletion(recordId: string, event: ProgressEvent): Promise<WorkspaceSnapshot>;
+  getCompletionImages(recordId: string): Promise<CompletionImage[]>;
   showReminder(title: string, body: string, sessionId?: string): Promise<void>;
   /** 开机自启动是系统级状态（Windows 注册表），不是偏好；浏览器预览用 localStorage 模拟。 */
   isAutostartEnabled(): Promise<boolean>;
@@ -168,7 +205,7 @@ export interface NativeApi {
 }
 
 export const EMPTY_WORKSPACE: WorkspaceSnapshot = {
-  projects: [], projectMilestones: [], milestoneOutcomes: [], tasks: [], executionSessions: [], executionRecords: [], progressEvents: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+  projects: [], projectMilestones: [], milestoneOutcomes: [], tasks: [], executionSessions: [], executionRecords: [], progressEvents: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [], completionRecords: [],
 };
 
 class TauriNativeApi implements NativeApi {
@@ -201,6 +238,10 @@ class TauriNativeApi implements NativeApi {
     return invoke<WorkspaceSnapshot>("finish_execution", { recordId, actualEndUtc, note, progressEvent });
   }
   applyProgress(event: ProgressEvent) { return invoke<WorkspaceSnapshot>("apply_progress", { event }); }
+  recordCompletion(record: CompletionRecord, images: CompletionImage[]) { return invoke<WorkspaceSnapshot>("record_completion", { record, images }); }
+  updateCompletion(record: CompletionRecord, images: CompletionImage[]) { return invoke<WorkspaceSnapshot>("update_completion", { record, images }); }
+  revertCompletion(recordId: string, event: ProgressEvent) { return invoke<WorkspaceSnapshot>("revert_completion", { recordId, event }); }
+  getCompletionImages(recordId: string) { return invoke<CompletionImage[]>("get_completion_images", { recordId }); }
   showReminder(title: string, body: string, sessionId?: string) { return invoke<void>("show_reminder", { title, body, sessionId }); }
   isAutostartEnabled() { return isAutostartEnabled(); }
   async setAutostartEnabled(enabled: boolean) { if (enabled) await enableAutostart(); else await disableAutostart(); }
@@ -221,11 +262,21 @@ class TauriNativeApi implements NativeApi {
 }
 
 const PREVIEW_WORKSPACE_KEY = "daymark.phase1.workspace";
+/** 图片字节不进工作区快照：浏览器预览把它放在同源的第二个键里，按需读取。 */
+const PREVIEW_COMPLETION_IMAGES_KEY = "daymark.phase1.completionImages";
 /** 浏览器预览没有系统注册表：用 localStorage 模拟「开机自启动」开关，E2E 才能走完整路径。 */
 const PREVIEW_AUTOSTART_KEY = "daymark.preview.autostart";
 
 class BrowserPreviewApi implements NativeApi {
   private backups: BackupInfo[] = [];
+  private readImages(): Record<string, CompletionImage[]> {
+    try {
+      return JSON.parse(localStorage.getItem(PREVIEW_COMPLETION_IMAGES_KEY) ?? "{}") as Record<string, CompletionImage[]>;
+    } catch { return {}; }
+  }
+  private writeImages(next: Record<string, CompletionImage[]>) {
+    localStorage.setItem(PREVIEW_COMPLETION_IMAGES_KEY, JSON.stringify(next));
+  }
   private read(): WorkspaceSnapshot {
     const raw = localStorage.getItem(PREVIEW_WORKSPACE_KEY);
     if (!raw) return structuredClone(EMPTY_WORKSPACE);
@@ -241,6 +292,7 @@ class BrowserPreviewApi implements NativeApi {
         recurringHabits: parsed.recurringHabits ?? [],
         habitOccurrences: parsed.habitOccurrences ?? [],
         rescuePromptedSessionIds: parsed.rescuePromptedSessionIds ?? [],
+        completionRecords: (parsed.completionRecords ?? []).map((record) => ({ ...record, imageCount: record.imageCount ?? 0, tags: record.tags ?? [] })),
       } as WorkspaceSnapshot;
       const next = freezeExpiredPreviewOutcomes(normalized, currentLocalDate());
       if (next !== normalized) localStorage.setItem(PREVIEW_WORKSPACE_KEY, JSON.stringify(next));
@@ -403,6 +455,48 @@ class BrowserPreviewApi implements NativeApi {
     const tasks = state.tasks.map((item) => item.id === task.id ? { ...item, progress: event.toProgress, status: event.toProgress === 100 ? "completed" as const : item.status === "completed" ? "active" as const : item.status } : item);
     return this.write({ ...state, tasks, progressEvents: [...state.progressEvents, event] });
   }
+  recordCompletion(record: CompletionRecord, images: CompletionImage[]) {
+    const state = this.read();
+    const error = checkCompletion(record, images) ?? validatePreviewCompletion(state, record)
+      ?? (state.completionRecords.some((item) => item.progressEventId === record.progressEventId) ? "这次完成已经记录过了" : null);
+    if (error) return Promise.reject(new Error(error));
+    const next = this.write({ ...state, completionRecords: [...state.completionRecords, { ...record, note: record.note.trim(), tags: [...new Set(record.tags)], imageCount: images.length }] });
+    this.writeImages({ ...this.readImages(), [record.id]: images });
+    return next;
+  }
+  updateCompletion(record: CompletionRecord, images: CompletionImage[]) {
+    const state = this.read();
+    const existing = state.completionRecords.find((item) => item.id === record.id);
+    if (!existing) return Promise.reject(new Error("找不到这条完成记录"));
+    if (existing.revertedAtUtc) return Promise.reject(new Error("已撤回的完成记录只保留历史，不能修改"));
+    if (existing.taskId !== record.taskId || existing.progressEventId !== record.progressEventId || existing.completedAtUtc !== record.completedAtUtc || existing.progressBefore !== record.progressBefore) {
+      return Promise.reject(new Error("完成记录引用的进度事实不能改写"));
+    }
+    const error = checkCompletion(record, images);
+    if (error) return Promise.reject(new Error(error));
+    const next = this.write({ ...state, completionRecords: state.completionRecords.map((item) => item.id === record.id ? { ...record, note: record.note.trim(), tags: [...new Set(record.tags)], imageCount: images.length } : item) });
+    // 图片集整体替换：被换掉的旧字节一起消失，不留孤儿行。
+    const stored = this.readImages();
+    delete stored[record.id];
+    this.writeImages({ ...stored, [record.id]: images });
+    return next;
+  }
+  revertCompletion(recordId: string, event: ProgressEvent) {
+    const state = this.read();
+    const record = state.completionRecords.find((item) => item.id === recordId);
+    if (!record) return Promise.reject(new Error("找不到这条完成记录"));
+    if (record.revertedAtUtc) return Promise.reject(new Error("这条完成记录已经撤回"));
+    if (event.taskId !== record.taskId) return Promise.reject(new Error("回退事件必须属于这条记录的任务"));
+    if (event.fromProgress !== 100 || event.toProgress !== record.progressBefore) return Promise.reject(new Error(`回退事件必须从 100 回到 ${record.progressBefore}%`));
+    const task = state.tasks.find((item) => item.id === record.taskId);
+    if (!task || task.progress !== 100) return Promise.reject(new Error("任务进度已经变化，请先刷新后重试"));
+    const tasks = state.tasks.map((item) => item.id === task.id ? { ...item, progress: event.toProgress, status: "active" as const } : item);
+    // 记录与图片保留：撤回的是「完成」这个事实，不是用户记下的内容。
+    return this.write({ ...state, tasks, progressEvents: [...state.progressEvents, event], completionRecords: state.completionRecords.map((item) => item.id === recordId ? { ...item, revertedAtUtc: new Date().toISOString() } : item) });
+  }
+  getCompletionImages(recordId: string) {
+    return Promise.resolve((this.readImages()[recordId] ?? []).map((image, index) => ({ ...image, sortOrder: index })));
+  }
   async showReminder(title: string, body: string, _sessionId?: string) {
     if (!("Notification" in window)) return;
     if (Notification.permission === "default") await Notification.requestPermission();
@@ -416,7 +510,7 @@ class BrowserPreviewApi implements NativeApi {
   async getDataOverview(): Promise<DataOverview> {
     const state = this.read();
     return {
-      schemaVersion: 7, databasePath: "浏览器预览使用 localStorage", backupDirectory: "仅桌面版写入磁盘", backupError: null,
+      schemaVersion: 8, databasePath: "浏览器预览使用 localStorage", backupDirectory: "仅桌面版写入磁盘", backupError: null,
       counts: { projects: state.projects.length, tasks: state.tasks.length, executionSessions: state.executionSessions.length, executionRecords: state.executionRecords.length, progressEvents: state.progressEvents.length, timeBlocks: state.timeBlocks.length },
       backups: this.backups,
     };
@@ -479,6 +573,21 @@ function previewMilestoneResult(state: WorkspaceSnapshot, milestone: ProjectMile
   const total = tasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 60), 0);
   const weighted = tasks.reduce((sum, task) => sum + task.progress * (task.estimatedMinutes ?? 60), 0);
   return `进度 ${total ? Math.round(weighted / total) : 0}/${milestone.targetProgress}%`;
+}
+
+/** 完成记录只能引用真实的「到 100」进度事实，与 Rust 的 `verify_completion_event` 同语义。 */
+function validatePreviewCompletion(state: WorkspaceSnapshot, record: CompletionRecord) {
+  const event = state.progressEvents.find((item) => item.id === record.progressEventId);
+  if (!event) return "找不到这次完成对应的进度事件";
+  if (event.toProgress !== 100) return "完成记录只能引用进度到达 100 的事件";
+  if (event.taskId !== record.taskId) return "完成记录必须引用同一任务的进度事件";
+  if (event.fromProgress !== record.progressBefore) return "完成前的进度与进度事件不一致";
+  if (event.occurredAtUtc !== record.completedAtUtc) return "完成时间必须与对应的进度事件一致";
+  const task = state.tasks.find((item) => item.id === record.taskId);
+  if (!task) return "找不到这条完成记录的任务";
+  if (task.kind === "habit") return "重复习惯的发生项不记录完成反馈";
+  if (task.progress !== 100) return "任务当前完成度不是 100，无法记录这次完成";
+  return null;
 }
 
 function validatePreviewMilestone(state: WorkspaceSnapshot, milestone: ProjectMilestone) {

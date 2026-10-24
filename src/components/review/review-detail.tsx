@@ -1,9 +1,11 @@
 import { FolderKanban, Pencil, Sparkles, X } from "lucide-react";
-import { Children, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Children, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
-import { CARRYOVER_REASON_LABEL, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, type ReviewResult, type ReviewTaskDetail } from "../../lib/review";
-import type { ExecutionRecord, ExecutionSession, Task } from "../../lib/native";
+import { FloatingPanel } from "../ui/floating-panel";
+import { COMPLETION_FIT_LABEL, completionImageSrc, completionThumbSrc } from "../../lib/completion";
+import { CARRYOVER_REASON_LABEL, formatPercentPoints, formatRecordedMs, formatTaskProgressRange, type ReviewCompletionSummary, type ReviewResult, type ReviewTaskDetail } from "../../lib/review";
+import type { CompletionImage, ExecutionRecord, ExecutionSession, Task } from "../../lib/native";
 import type { WorkspaceIndex } from "../../lib/workspaceSelectors";
 
 /**
@@ -43,6 +45,10 @@ export interface ReviewDetailProps {
   onProjectId: (projectId: string | null) => void;
   /** 从某一天的明细继续下钻到任务。 */
   onOpenTask: (taskId: string, trigger: HTMLElement) => void;
+  /** 完成记录的缩略图按需取字节（快照不带图片），放大前才请求。 */
+  onLoadCompletionImages: (recordId: string) => Promise<CompletionImage[]>;
+  /** 打开完成记录气泡编辑一条未撤回的记录。 */
+  onEditCompletion: (completion: ReviewCompletionSummary, anchor: HTMLElement) => void;
 }
 
 const SESSION_STATUS_LABEL: Record<ExecutionSession["status"], string> = {
@@ -59,7 +65,9 @@ export function reviewDetailLabel(selection: ReviewSelection, index: WorkspaceIn
   return `项目「${index.projectsById.get(selection.id)?.title ?? "来源不可用"}」的明细`;
 }
 
-export function ReviewDetail({ index, review, selection, projectId, onClose, onEditTask, onArrangeTask, onOpenProject, onProjectId, onOpenTask }: ReviewDetailProps) {
+export function ReviewDetail({ index, review, selection, projectId, onClose, onEditTask, onArrangeTask, onOpenProject, onProjectId, onOpenTask, onLoadCompletionImages, onEditCompletion }: ReviewDetailProps) {
+  // 完成图片的只读放大：回顾页内的第二层动作气泡，Esc／点外关掉它，不提供另存为（§6）。
+  const [zoomed, setZoomed] = useState<{ image: CompletionImage; label: string; anchor: DOMRect } | null>(null);
   const task = selection.kind === "task" ? index.tasksById.get(selection.id) : undefined;
   const project = selection.kind === "project" ? index.projectsById.get(selection.id) : undefined;
   const heading = selection.kind === "date" ? `${formatDayLabel(selection.id)} 明细` : selection.kind === "task" ? task?.title ?? "来源不可用" : project?.title ?? "来源不可用";
@@ -103,9 +111,9 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
     </header>
 
     <div ref={bodyRef} className={moreBelow ? "review-detail-body is-scrollable" : "review-detail-body"}>
-      {selection.kind === "date" && <DateDetail review={review} index={index} date={selection.id} onOpenTask={onOpenTask} />}
+      {selection.kind === "date" && <DateDetail review={review} index={index} date={selection.id} onOpenTask={onOpenTask} onLoadCompletionImages={onLoadCompletionImages} onEditCompletion={onEditCompletion} onZoomImage={(image, label, anchor) => setZoomed({ image, label, anchor })} />}
       {selection.kind === "task" && (task
-        ? <TaskDetail index={index} detail={review.tasks.find((item) => item.taskId === selection.id)} task={task} onOpenProject={onOpenProject} />
+        ? <TaskDetail index={index} detail={review.tasks.find((item) => item.taskId === selection.id)} task={task} onOpenProject={onOpenProject} onLoadCompletionImages={onLoadCompletionImages} onEditCompletion={onEditCompletion} onZoomImage={(image, label, anchor) => setZoomed({ image, label, anchor })} />
         : <p className="review-notice" role="status">来源不可用：这个任务已经不在工作区里。它在当前周期内的事实也不再出现在明细中，页面其余部分仍然成立。</p>)}
       {selection.kind === "project" && (project
         ? <ProjectDetail review={review} index={index} projectId={project.id} onOpenTask={onOpenTask} />
@@ -113,10 +121,20 @@ export function ReviewDetail({ index, review, selection, projectId, onClose, onE
     </div>
 
     {actions && <footer className="review-detail-foot">{actions}</footer>}
+
+    {zoomed && <FloatingPanel kind="action" className="review-image-viewer" label={`放大查看完成图片：${zoomed.label}`} anchor={zoomed.anchor} closeOnOutsideClick onClose={() => setZoomed(null)}>
+      <img src={completionImageSrc(zoomed.image)} alt={`完成图片 ${zoomed.label}（${zoomed.image.width}×${zoomed.image.height}）`} />
+      <p className="review-image-viewer-meta">{zoomed.label} · {zoomed.image.width}×{zoomed.image.height} · 只读查看</p>
+    </FloatingPanel>}
   </div>;
 }
 
-function DateDetail({ review, index, date, onOpenTask }: { review: ReviewResult; index: WorkspaceIndex; date: string; onOpenTask: (taskId: string, trigger: HTMLElement) => void }) {
+function DateDetail({ review, index, date, onOpenTask, onLoadCompletionImages, onEditCompletion, onZoomImage }: {
+  review: ReviewResult; index: WorkspaceIndex; date: string; onOpenTask: (taskId: string, trigger: HTMLElement) => void;
+  onLoadCompletionImages: (recordId: string) => Promise<CompletionImage[]>;
+  onEditCompletion: (completion: ReviewCompletionSummary, anchor: HTMLElement) => void;
+  onZoomImage: (image: CompletionImage, label: string, anchor: DOMRect) => void;
+}) {
   const day = review.days.find((item) => item.date === date);
   if (!day) return <p className="review-notice" role="status">该日期不在当前周期内：查询已经改变，这一天的汇总不再成立。</p>;
   /** 任务还在工作区里时可继续下钻；已经不在时显示「来源不可用」而不是造一个空链接。 */
@@ -154,16 +172,25 @@ function DateDetail({ review, index, date, onOpenTask }: { review: ReviewResult;
           <span className="review-detail-row-note">{record.note ? record.note : "没有留下备注"}</span>
         </li>)}
       </Block>
+      {/* 完成记录没有就整节不渲染（沿用「没话说就不渲染」），不写「这天没记录」占位句。 */}
+      <Block title="完成记录" hideWhenEmpty empty="">
+        {day.completions.map((completion) => <CompletionRow key={completion.id} completion={completion}
+          title={<TaskName taskId={completion.taskId} />} clock={formatClock(completion.completedAtUtc)}
+          onLoadImages={onLoadCompletionImages} onZoomImage={onZoomImage} onEdit={onEditCompletion} />)}
+      </Block>
       {day.runningCount > 0 && <p className="review-detail-note">这一天还有 {day.runningCount} 条进行中的执行：它们没有结束时间，不计入已记录投入。</p>}
     </section>
   </>;
 }
 
-function TaskDetail({ index, detail, task, onOpenProject }: {
+function TaskDetail({ index, detail, task, onOpenProject, onLoadCompletionImages, onEditCompletion, onZoomImage }: {
   index: WorkspaceIndex;
   detail: ReviewTaskDetail | undefined;
   task: Task;
   onOpenProject: (projectId: string, milestoneId: string | null) => void;
+  onLoadCompletionImages: (recordId: string) => Promise<CompletionImage[]>;
+  onEditCompletion: (completion: ReviewCompletionSummary, anchor: HTMLElement) => void;
+  onZoomImage: (image: CompletionImage, label: string, anchor: DOMRect) => void;
 }) {
   /** 只留非零的计数：三个 0 说的是同一件事，不值得各占一个胶囊。 */
   const executionCounts = detail ? [detail.pendingReviewCount, detail.missedCount, detail.skippedCount].filter((value) => value > 0) : [];
@@ -223,7 +250,70 @@ function TaskDetail({ index, detail, task, onOpenProject }: {
         </li>)}
       </Block>}
     </section>}
+
+    {/* 完成记录卡：含已撤回的记录（可查看、整体只读），未撤回的才给「编辑」。 */}
+    {detail && detail.completions.length > 0 && <section className="review-detail-card" aria-label="完成记录">
+      <Block title="完成记录" hideWhenEmpty empty="">
+        {detail.completions.map((completion) => <CompletionRow key={completion.id} completion={completion}
+          title={null} clock={formatDateTime(completion.completedAtUtc)}
+          onLoadImages={onLoadCompletionImages} onZoomImage={onZoomImage} onEdit={onEditCompletion} />)}
+      </Block>
+    </section>}
   </>;
+}
+
+/**
+ * 回顾里的一条完成记录（规格 0007 §6）：时间 · 任务 · 适应程度 · 标签 · 小结摘录 · 缩略图。
+ *
+ * 已撤回的记录整体只读：保留内容、不显示编辑，也说明它为什么不在感受聚合里。
+ */
+function CompletionRow({ completion, title, clock, onLoadImages, onZoomImage, onEdit }: {
+  completion: ReviewCompletionSummary;
+  /** 日明细里任务名是可下钻的按钮；任务明细里任务就是标题，不再重复一遍。 */
+  title: ReactNode;
+  clock: string;
+  onLoadImages: (recordId: string) => Promise<CompletionImage[]>;
+  onZoomImage: (image: CompletionImage, label: string, anchor: DOMRect) => void;
+  onEdit: (completion: ReviewCompletionSummary, anchor: HTMLElement) => void;
+}) {
+  const reverted = Boolean(completion.revertedAtUtc);
+  return <li className={reverted ? "review-completion is-reverted" : "review-completion"}>
+    <div className="review-completion-head">
+      <time>{clock}</time>
+      {title}
+      {completion.fit && <span className="review-completion-fit">{COMPLETION_FIT_LABEL[completion.fit]}</span>}
+      {reverted && <span className="review-completion-reverted">已撤回</span>}
+      {!reverted && <Button variant="quiet" aria-label={`编辑 ${completion.title} 的完成记录`} onClick={(event) => onEdit(completion, event.currentTarget)}><Pencil size={13} />编辑</Button>}
+    </div>
+    {completion.tags.length > 0 && <p className="review-completion-tags">{completion.tags.join("、")}</p>}
+    {completion.note && <p className="review-completion-note" title={completion.note}>{completion.note}</p>}
+    {completion.imageCount > 0 && <CompletionThumbs recordId={completion.id} count={completion.imageCount} label={completion.title} onLoadImages={onLoadImages} onZoomImage={onZoomImage} />}
+  </li>;
+}
+
+/** 缩略图按需取字节：快照不带图片，打开明细时才请求这一条记录的图片。 */
+function CompletionThumbs({ recordId, count, label, onLoadImages, onZoomImage }: {
+  recordId: string; count: number; label: string;
+  onLoadImages: (recordId: string) => Promise<CompletionImage[]>;
+  onZoomImage: (image: CompletionImage, label: string, anchor: DOMRect) => void;
+}) {
+  const [images, setImages] = useState<CompletionImage[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    onLoadImages(recordId)
+      .then((value) => { if (alive) setImages(value); })
+      .catch(() => { if (alive) setImages([]); });
+    return () => { alive = false; };
+  }, [onLoadImages, recordId]);
+  if (!images) return <p className="review-completion-images is-loading" role="status">正在读取 {count} 张图片…</p>;
+  if (images.length === 0) return <p className="review-completion-images review-muted">图片不可用</p>;
+  return <div className="review-completion-images">
+    {images.map((image, position) => <button type="button" key={image.id} className="review-completion-thumb"
+      aria-label={`放大查看第 ${position + 1} 张完成图片`}
+      onClick={(event) => onZoomImage(image, `${label} 第 ${position + 1} 张`, event.currentTarget.getBoundingClientRect())}>
+      <img src={completionThumbSrc(image)} alt="" width={68} height={68} />
+    </button>)}
+  </div>;
 }
 
 function ProjectDetail({ review, index, projectId, onOpenTask }: {

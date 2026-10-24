@@ -329,6 +329,23 @@ describe("settings persistence", () => {
   });
 
   /**
+   * 规格 0007 §8：`completionRecordPrompt` 默认开（首次升级就弹气泡），
+   * 关掉之后只剩「不自动弹」，事后补写入口不受影响。老设置里缺这个字段时
+   * 必须回退成 true —— 布尔位一旦被 `Boolean(undefined)` 变成 false，升级等于静默关掉功能。
+   */
+  it("defaults the completion record prompt on and keeps an explicit false", async () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    expect(repository.normalize(undefined)).toMatchObject({ completionRecordPrompt: true });
+    expect(repository.normalize({ completionRecordPrompt: false })).toMatchObject({ completionRecordPrompt: false });
+    for (const value of ["false", 0, null, undefined, ""]) {
+      expect(repository.normalize({ completionRecordPrompt: value })).toMatchObject({ completionRecordPrompt: true });
+    }
+    const backend = new MemoryBackend();
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, completionRecordPrompt: false });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ completionRecordPrompt: false });
+  });
+
+  /**
    * 阶段 4 P4-06 / 规格 §6.2：`PageId` 的合法值有三处来源 —— 类型联合、`lastPage` 的
    * 规范化白名单、`App.tsx` 的导航表。类型与白名单同源于 `PAGE_IDS`，这里逐项证明
    * 白名单真的接受每一个合法页面：只改类型不改白名单会让运行期静默回退到默认页。

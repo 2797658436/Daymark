@@ -1,7 +1,8 @@
-import type { ExecutionRecord, ExecutionSession, HabitOccurrence, ProgressEvent, TaskStatus, WorkspaceSnapshot } from "./native";
+import type { CompletionFit, CompletionRecordSummary, ExecutionRecord, ExecutionSession, HabitOccurrence, ProgressEvent, TaskStatus, WorkspaceSnapshot } from "./native";
 import { addLocalDays, isLocalDate, localDateOf } from "./deadlines";
 import { sessionMinutes } from "./calendarPlacement";
 import { createWorkspaceIndex, isPendingReviewIn, milestoneReached, milestoneSummary, projectProgress, projectTasksOf, type WorkspaceIndex } from "./workspaceSelectors";
+import { COMPLETION_TAGS } from "./completion";
 
 /**
  * 日／周／月回顾引擎（阶段 4 P4-07 建立，P4-08 补下钻明细；规格 §7 / M11）。
@@ -65,6 +66,42 @@ export interface ReviewDaySummary {
    * 按交集毫秒切分，两者不会互相矛盾。进行中的记录不在这里（单列，不计入投入）。
    */
   records: ExecutionRecord[];
+  /**
+   * 该日的完成记录（规格 0007 §6）：按完成时间与稳定 ID 排序，含已撤回。
+   *
+   * 与 `events`／`records` 同一性质——同一批事实的另一种投影，只为下钻呈现，
+   * 不参与任何统计；页面因此不必自己按日期过滤一遍。
+   */
+  completions: ReviewCompletionSummary[];
+}
+
+/**
+ * 一条完成记录在回顾里的只读投影（规格 0007 §6）。
+ *
+ * 就是快照里的那条记录加上任务标题：`fit`／`tags`／`note`／`imageCount` 全部来自用户
+ * 写下的事实，回顾不加工也不推断；`revertedAtUtc` 有值即「已撤回」，仍留在明细里。
+ */
+export interface ReviewCompletionSummary extends CompletionRecordSummary {
+  /** 任务标题；任务已不在工作区时为「来源不可用」，不造一个名字。 */
+  title: string;
+}
+
+/**
+ * 周／月的「完成感受」聚合：**只统计未撤回**的记录（规格 §6 的口径行）。
+ *
+ * 已撤回的记录留在明细与 `revertedCount` 里，但不进分布与标签，也就不会把一次
+ * 用户自己否认的完成算进感受。分布零值档仍给出 0 计数，不画条。
+ */
+export interface ReviewFeelingSummary {
+  fitCounts: Record<CompletionFit, number>;
+  /** 按选择次数取前 3；同一次数按词表顺序稳定排列。 */
+  topTags: { tag: string; count: number }[];
+  /** 周期内的完成记录总数（含已撤回）。 */
+  recordCount: number;
+  /** 参与感受聚合的条数（未撤回）。 */
+  countedCount: number;
+  /** 已撤回、因此不计入感受的条数。 */
+  revertedCount: number;
 }
 
 export interface ReviewProgressSummary {
@@ -176,6 +213,8 @@ export interface ReviewTaskDetail {
   recordedMs: number;
   /** 周期内该任务的已结束记录（按开始时间与稳定 ID 排序）。 */
   records: ExecutionRecord[];
+  /** 周期内该任务的完成记录（含已撤回，按完成时间与稳定 ID 排序）。 */
+  completions: ReviewCompletionSummary[];
   /** 周期内该任务的进行中记录（没有 `actualEndUtc`）；不计入 `recordedMs`。 */
   runningRecords: ExecutionRecord[];
   /** 周期内第一条事件的 `fromProgress`；无事件为 `null`（不从当前值反推历史）。 */
@@ -219,6 +258,10 @@ export interface ReviewResult {
   /** 待续任务 ID（按任务去重）；只提供查看或安排，不复制任务。 */
   carryoverTaskIds: string[];
   tasks: ReviewTaskDetail[];
+  /** 周期内全部完成记录（含已撤回），按完成时间与稳定 ID 排序。 */
+  completions: ReviewCompletionSummary[];
+  /** 「完成感受」聚合：分布与标签只算未撤回的记录。 */
+  feeling: ReviewFeelingSummary;
   /** 周期内到期的里程碑快照（冻结结果优先）。 */
   milestones: ReviewMilestoneSummary[];
   /** 口径说明，页面原样展示，不自行编造。 */
@@ -293,7 +336,7 @@ function buildRange(
   const dates: string[] = [];
   for (let date = startDate; date <= endDate; date = addLocalDays(date, 1)) dates.push(date);
   const dayIndex = new Map(dates.map((date, position) => [date, position]));
-  const days: ReviewDaySummary[] = dates.map((date) => ({ date, progressDelta: 0, recordedMs: 0, recordedMinutes: 0, pendingReviewCount: 0, notAdvancedCount: 0, skippedCount: 0, runningCount: 0, events: [], records: [] }));
+  const days: ReviewDaySummary[] = dates.map((date) => ({ date, progressDelta: 0, recordedMs: 0, recordedMinutes: 0, pendingReviewCount: 0, notAdvancedCount: 0, skippedCount: 0, runningCount: 0, events: [], records: [], completions: [] }));
 
   const periodStartMs = localDayStartMs(startDate);
   const periodEndMs = localDayStartMs(addLocalDays(endDate, 1));
@@ -389,6 +432,38 @@ function buildRange(
   for (const session of [...skippedSessions, ...cancelledSessions]) days[dayIndex.get(session.localDate)!].skippedCount += 1;
   for (const occurrence of skippedOccurrences) days[dayIndex.get(occurrence.localDate)!].skippedCount += 1;
 
+  // 完成记录（规格 0007 §6）：第四类事实的只读投影。周期口径用 `completedAtUtc`
+  // ——用户点完成的那一刻；已撤回的记录照样进明细，只是不进感受聚合。
+  // 「曾完成任务数」仍以上面的进度事件为准，不受这里有没有记录、是否撤回影响。
+  const periodCompletions = index.workspace.completionRecords
+    .filter((record) => taskIds.has(record.taskId))
+    .map((record) => ({ record, ms: Date.parse(record.completedAtUtc) }))
+    .filter((entry) => Number.isFinite(entry.ms) && dayIndex.has(localDateOf(new Date(entry.ms))))
+    .sort((left, right) => left.ms - right.ms || compareIds(left.record.id, right.record.id))
+    .map(({ record }): ReviewCompletionSummary => ({
+      ...record,
+      title: index.tasksById.get(record.taskId)?.title ?? "来源不可用",
+    }));
+  for (const completion of periodCompletions) {
+    days[dayIndex.get(localDateOf(new Date(completion.completedAtUtc)))!].completions.push(completion);
+  }
+  const fitCounts: Record<CompletionFit, number> = { light: 0, fit: 0, hard: 0 };
+  const tagCounts = new Map<string, number>();
+  let feelingCounted = 0;
+  let feelingReverted = 0;
+  for (const completion of periodCompletions) {
+    if (completion.revertedAtUtc) { feelingReverted += 1; continue; }
+    feelingCounted += 1;
+    if (completion.fit) fitCounts[completion.fit] += 1;
+    for (const tag of completion.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
+  // 次数相同按词表顺序排，避免同样三次的标签每次渲染换个位置。
+  const topTags = [...tagCounts.entries()]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => right.count - left.count || COMPLETION_TAGS.indexOf(left.tag as (typeof COMPLETION_TAGS)[number]) - COMPLETION_TAGS.indexOf(right.tag as (typeof COMPLETION_TAGS)[number]))
+    .slice(0, 3);
+  const feeling: ReviewFeelingSummary = { fitCounts, topTags, recordCount: periodCompletions.length, countedCount: feelingCounted, revertedCount: feelingReverted };
+
   // 待续：当前 active，且周期内有未完成推进、待回顾、未推进／跳过／取消安排的事实。
   const pendingReviewIds = new Set(pendingReview.map((session) => session.id));
   const incompleteAdvanceTaskIds = new Set(periodEvents.filter((event) => event.toProgress < 100).map((event) => event.taskId));
@@ -419,6 +494,7 @@ function buildRange(
   const droppedByTask = groupByTask([...skippedSessions, ...cancelledSessions], (session) => session.taskId);
   const occurrencesByTask = groupByTask(skippedOccurrences, (occurrence) => habitTaskIds.get(occurrence.habitId)!);
   const runningByTaskRecords = groupByTask(runningRecords, (record) => record.taskId);
+  const completionsByTask = groupByTask(periodCompletions, (completion) => completion.taskId);
   for (const sessions of sessionsByTask.values()) sessions.sort(compareSessions);
   for (const records of runningByTaskRecords.values()) records.sort(compareRecords);
 
@@ -428,6 +504,7 @@ function buildRange(
     const sessions = sessionsByTask.get(task.id) ?? [];
     const occurrences = occurrencesByTask.get(task.id) ?? [];
     const records = recordsByTask.get(task.id) ?? [];
+    const completions = completionsByTask.get(task.id) ?? [];
     const runningOfTask = runningByTaskRecords.get(task.id) ?? [];
     const recordedMsOfTask = recordedMsByTask.get(task.id) ?? 0;
     if (events.length === 0 && sessions.length === 0 && occurrences.length === 0 && recordedMsOfTask === 0 && runningOfTask.length === 0) continue;
@@ -447,6 +524,7 @@ function buildRange(
       sessions,
       recordedMs: recordedMsOfTask,
       records,
+      completions,
       runningRecords: runningOfTask,
       startProgress: events.length > 0 ? events[0].fromProgress : null,
       endProgress: events.length > 0 ? events[events.length - 1].toProgress : null,
@@ -496,6 +574,7 @@ function buildRange(
   if (overlapping) notes.push("存在并行的执行记录，实际投入为「执行记录累计」，不等于唯一墙钟时间。");
   if (ambiguousOrder) notes.push("同一时刻存在多条进度事件，先后无法证明；明细按发生时间与稳定 ID 排序。");
   if (sessionCount > 0 && unrecorded) notes.push("本周期有计划但没有任何实际记录，显示「未记录」，不视为 0% 执行率。");
+  if (feeling.revertedCount > 0) notes.push(`有 ${feeling.revertedCount} 条完成记录被撤回，未计入感受聚合。`);
 
   return {
     period,
@@ -511,6 +590,8 @@ function buildRange(
     notAdvanced: { missedSessions, skippedSessions, cancelledSessions, skippedOccurrences, count: missedSessions.length + skippedSessions.length + cancelledSessions.length + skippedOccurrences.length },
     carryoverTaskIds,
     tasks,
+    completions: periodCompletions,
+    feeling,
     milestones,
     notes,
   };

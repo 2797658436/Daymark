@@ -7,7 +7,7 @@ import { ReviewPage, type ReviewSelection } from "./review-page";
 import { OverlayHostProvider } from "../ui/overlay-host";
 import { createWorkspaceIndex } from "../../lib/workspaceSelectors";
 import { DEFAULT_SETTINGS, type AppSettings } from "../../lib/settings";
-import { EMPTY_WORKSPACE, type ExecutionRecord, type ExecutionSession, type ProgressEvent, type Task, type WorkspaceSnapshot } from "../../lib/native";
+import { EMPTY_WORKSPACE, type CompletionImage, type ExecutionRecord, type ExecutionSession, type ProgressEvent, type Task, type WorkspaceSnapshot } from "../../lib/native";
 
 /**
  * 阶段 4 P4-08 / AC13：周期页面的顺序、图表等价数据、下钻键盘路径与「回到汇总保留查询与滚动」。
@@ -88,6 +88,7 @@ function renderPage(options: HarnessOptions = {}) {
   const handlers = {
     onPreferences: vi.fn(), onProjectId: vi.fn(), onSelection: vi.fn(),
     onGoToday: vi.fn(), onEditTask: vi.fn(), onArrangeTask: vi.fn(), onOpenProject: vi.fn(),
+    onLoadCompletionImages: vi.fn(async () => [] as CompletionImage[]), onEditCompletion: vi.fn(),
   };
   const index = createWorkspaceIndex(options.workspace ?? fixture());
   const container = document.createElement("div");
@@ -104,7 +105,8 @@ function renderPage(options: HarnessOptions = {}) {
       projectId={projectId} onProjectId={(id) => { handlers.onProjectId(id); setProjectId(id); }}
       selection={selection} onSelection={(next) => { handlers.onSelection(next); setSelection(next); }}
       scrollRef={scrollRef} scrollTop={scrollTop} onGoToday={handlers.onGoToday}
-      onEditTask={handlers.onEditTask} onArrangeTask={handlers.onArrangeTask} onOpenProject={handlers.onOpenProject} />;
+      onEditTask={handlers.onEditTask} onArrangeTask={handlers.onArrangeTask} onOpenProject={handlers.onOpenProject}
+      onLoadCompletionImages={handlers.onLoadCompletionImages} onEditCompletion={handlers.onEditCompletion} />;
   }
   // 明细是浮层：Esc 的顶层裁决与焦点归还都归宿主，测试必须和 App 一样包一层。
   render(<OverlayHostProvider><Harness /></OverlayHostProvider>, { container });

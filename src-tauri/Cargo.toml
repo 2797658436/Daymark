@@ -26,6 +26,7 @@ tauri-build = { version = "2", features = [] }
 indexmap = { version = "1.9", features = ["std"] }
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -9,11 +9,25 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 
 use crate::models::{
-    ExecutionRecord, ExecutionSession, HabitOccurrence, MilestoneOutcome, ProgressEvent, Project,
-    ProjectMilestone, RecurringHabit, Task, TimeBlock,
+    CompletionImage, CompletionRecord, CompletionRecordSummary, ExecutionRecord, ExecutionSession,
+    HabitOccurrence, MilestoneOutcome, ProgressEvent, Project, ProjectMilestone, RecurringHabit,
+    Task, TimeBlock,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+
+/// 感受标签的唯一词表：写入校验、`tags` 去重与前端胶囊都以此为准。
+pub const COMPLETION_TAGS: [&str; 8] = [
+    "专注", "顺利", "有收获", "比预计难", "被打断", "疲惫", "卡住", "想继续",
+];
+
+/// 完成小结的字数上限（按字符数，不按字节）。
+const COMPLETION_NOTE_LIMIT: usize = 280;
+/// 单条完成记录最多三张图片。
+const COMPLETION_IMAGE_LIMIT: usize = 3;
+/// 压缩后单张图片的字节上限（2 MiB）。
+const COMPLETION_IMAGE_BYTES_LIMIT: i64 = 2 * 1024 * 1024;
+const COMPLETION_IMAGE_MIME_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
 
 #[derive(Debug)]
 pub struct Database {
@@ -34,6 +48,7 @@ pub struct WorkspaceSnapshot {
     pub recurring_habits: Vec<RecurringHabit>,
     pub habit_occurrences: Vec<HabitOccurrence>,
     pub rescue_prompted_session_ids: Vec<String>,
+    pub completion_records: Vec<CompletionRecordSummary>,
 }
 
 impl Database {
@@ -71,6 +86,7 @@ impl Database {
             recurring_habits: query_recurring_habits(&connection)?,
             habit_occurrences: query_habit_occurrences(&connection)?,
             rescue_prompted_session_ids: query_rescue_prompted_session_ids(&connection)?,
+            completion_records: query_completion_records(&connection)?,
         })
     }
 
@@ -569,6 +585,157 @@ impl Database {
         transaction.commit().map_err(database_error)
     }
 
+    /// 为一次「进度到 100」写入完成记录与图片，全部落在同一个事务里。
+    ///
+    /// 记录只**引用**进度事件：既不新建进度事实，也不改写已有事实。
+    pub fn record_completion(
+        &self,
+        record: &CompletionRecord,
+        images: &[CompletionImage],
+    ) -> Result<(), String> {
+        let stored = validate_completion_write(record, images)?;
+        let mut connection = open_connection(&self.path)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        verify_completion_event(&transaction, record)?;
+        let already_recorded: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM completion_records WHERE progress_event_id = ?1)",
+                [&record.progress_event_id],
+                |row| row.get(0),
+            )
+            .map_err(database_error)?;
+        if already_recorded {
+            return Err("这次完成已经记录过了".into());
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "INSERT INTO completion_records (id, task_id, progress_event_id, completed_at_utc, progress_before, progress_after, fit, note, tags, reverted_at_utc, created_at_utc, updated_at_utc) VALUES (?1, ?2, ?3, ?4, ?5, 100, ?6, ?7, ?8, NULL, ?9, ?9)",
+            params![
+                record.id,
+                record.task_id,
+                record.progress_event_id,
+                record.completed_at_utc,
+                stored.progress_before,
+                record.fit,
+                stored.note,
+                stored.tags_json,
+                now,
+            ],
+        ).map_err(database_error)?;
+        insert_completion_images(&transaction, &record.id, &stored.images, &now)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// 修改一条未撤回的完成记录；图片集按**整体替换**落库，不留孤儿行。
+    pub fn update_completion(
+        &self,
+        record: &CompletionRecord,
+        images: &[CompletionImage],
+    ) -> Result<(), String> {
+        let stored = validate_completion_write(record, images)?;
+        let mut connection = open_connection(&self.path)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let existing = read_completion_record(&transaction, &record.id)?;
+        if existing.reverted_at_utc.is_some() {
+            return Err("已撤回的完成记录只保留历史，不能修改".into());
+        }
+        // 完成时间、任务与它引用的进度事件是这条记录的身份，不是可编辑字段。
+        if existing.task_id != record.task_id
+            || existing.progress_event_id != record.progress_event_id
+            || existing.completed_at_utc != record.completed_at_utc
+            || existing.progress_before != record.progress_before
+        {
+            return Err("完成记录引用的进度事实不能改写".into());
+        }
+        verify_completion_event(&transaction, record)?;
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE completion_records SET fit = ?1, note = ?2, tags = ?3, updated_at_utc = ?4 WHERE id = ?5 AND reverted_at_utc IS NULL",
+            params![record.fit, stored.note, stored.tags_json, now, record.id],
+        ).map_err(database_error)?;
+        transaction
+            .execute("DELETE FROM completion_images WHERE completion_id = ?1", [&record.id])
+            .map_err(database_error)?;
+        insert_completion_images(&transaction, &record.id, &stored.images, &now)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// 撤回完成：原子地写一次回退进度事件并把记录标记为已撤回。
+    ///
+    /// 文字、标签与图片全部保留 —— 撤回的是「完成」这个事实，不是用户记下的内容。
+    pub fn revert_completion(&self, record_id: &str, event: &ProgressEvent) -> Result<(), String> {
+        let mut connection = open_connection(&self.path)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let record = read_completion_record(&transaction, record_id)?;
+        if record.reverted_at_utc.is_some() {
+            return Err("这条完成记录已经撤回".into());
+        }
+        if event.task_id != record.task_id {
+            return Err("回退事件必须属于这条记录的任务".into());
+        }
+        if event.from_progress != 100 || event.to_progress != record.progress_before {
+            return Err(format!(
+                "回退事件必须从 100 回到 {}%",
+                record.progress_before
+            ));
+        }
+        let current_progress: i64 = transaction
+            .query_row(
+                "SELECT progress FROM tasks WHERE id = ?1",
+                [&record.task_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| "找不到这条完成记录的任务".to_string())?;
+        if current_progress != 100 {
+            return Err("任务进度已经变化，请先刷新后重试".into());
+        }
+        parse_utc_fact("进度发生时间", &event.occurred_at_utc)?;
+        insert_progress_event(&transaction, event)?;
+        let changed = update_task_progress(&transaction, event)?;
+        if changed != 1 {
+            return Err("任务当前完成度与进度事件起点不一致".into());
+        }
+        transaction.execute(
+            "UPDATE completion_records SET reverted_at_utc = ?1, updated_at_utc = ?1 WHERE id = ?2 AND reverted_at_utc IS NULL",
+            params![Utc::now().to_rfc3339(), record_id],
+        ).map_err(database_error)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// 按需取某条记录的图片字节；快照不带图片，列表只读 `imageCount`。
+    pub fn completion_images(&self, record_id: &str) -> Result<Vec<CompletionImage>, String> {
+        use base64::Engine as _;
+        let connection = open_connection(&self.path)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, sort_order, mime, width, height, size_bytes, data, thumb FROM completion_images WHERE completion_id = ?1 ORDER BY sort_order, id",
+            )
+            .map_err(database_error)?;
+        let rows = statement
+            .query_map([record_id], |row| {
+                Ok(CompletionImage {
+                    id: row.get(0)?,
+                    sort_order: row.get(1)?,
+                    mime: row.get(2)?,
+                    width: row.get(3)?,
+                    height: row.get(4)?,
+                    size_bytes: row.get(5)?,
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(row.get::<_, Vec<u8>>(6)?),
+                    thumb_base64: base64::engine::general_purpose::STANDARD.encode(row.get::<_, Vec<u8>>(7)?),
+                })
+            })
+            .map_err(database_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(database_error)?;
+        Ok(rows)
+    }
+
     pub fn create_time_block(&self, block: &TimeBlock) -> Result<(), String> {
         validate_title("时间块", &block.title)?;
         validate_local_interval(
@@ -668,6 +835,10 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
         (
             7_i64,
             include_str!("../migrations/007_milestone_outcomes.sql"),
+        ),
+        (
+            8_i64,
+            include_str!("../migrations/008_completion_records.sql"),
         ),
     ];
     for (target_version, sql) in migrations {
@@ -843,6 +1014,212 @@ fn validate_recurring_habit(habit: &RecurringHabit) -> Result<(), String> {
             .map_err(|_| "习惯固定开始时间必须使用 HH:MM 格式")?;
     }
     Ok(())
+}
+
+/// 校验通过、可以落库的完成记录内容；`note` 已去首尾空白，图片字节已解码。
+struct ValidatedCompletionWrite {
+    progress_before: i64,
+    note: String,
+    tags_json: String,
+    images: Vec<StoredCompletionImage>,
+}
+
+struct StoredCompletionImage {
+    id: String,
+    sort_order: i64,
+    mime: String,
+    width: i64,
+    height: i64,
+    size_bytes: i64,
+    data: Vec<u8>,
+    thumb: Vec<u8>,
+}
+
+fn validate_completion_write(
+    record: &CompletionRecord,
+    images: &[CompletionImage],
+) -> Result<ValidatedCompletionWrite, String> {
+    if record.id.trim().is_empty() {
+        return Err("完成记录缺少标识".into());
+    }
+    parse_utc_fact("完成时间", &record.completed_at_utc)?;
+    if record.progress_before > 99 {
+        return Err("完成前的进度必须小于 100".into());
+    }
+    if let Some(fit) = record.fit.as_deref() {
+        if !matches!(fit, "light" | "fit" | "hard") {
+            return Err("适应程度只能是轻松、合适或吃力".into());
+        }
+    }
+    let note = record.note.trim();
+    if note.chars().count() > COMPLETION_NOTE_LIMIT {
+        return Err(format!("完成小结不能超过 {COMPLETION_NOTE_LIMIT} 字").into());
+    }
+    let mut tags: Vec<&str> = Vec::with_capacity(record.tags.len());
+    for tag in &record.tags {
+        if !COMPLETION_TAGS.contains(&tag.as_str()) {
+            return Err("感受标签只能出自默认词表".into());
+        }
+        if !tags.contains(&tag.as_str()) {
+            tags.push(tag.as_str());
+        }
+    }
+    if tags.len() > COMPLETION_TAGS.len() {
+        return Err("感受标签最多选择 8 个".into());
+    }
+    if images.len() > COMPLETION_IMAGE_LIMIT {
+        return Err(format!("完成图片最多 {} 张", COMPLETION_IMAGE_LIMIT).into());
+    }
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let mut stored_images = Vec::with_capacity(images.len());
+    for (index, image) in images.iter().enumerate() {
+        if image.id.trim().is_empty() {
+            return Err("完成图片缺少标识".into());
+        }
+        if !COMPLETION_IMAGE_MIME_TYPES.contains(&image.mime.as_str()) {
+            return Err("完成图片只能是 PNG、JPEG 或 WebP".into());
+        }
+        if image.width <= 0 || image.height <= 0 {
+            return Err("完成图片必须记录有效尺寸".into());
+        }
+        let data = STANDARD
+            .decode(image.data_base64.as_bytes())
+            .map_err(|_| "完成图片的数据无法解码".to_string())?;
+        let thumb = STANDARD
+            .decode(image.thumb_base64.as_bytes())
+            .map_err(|_| "完成图片的缩略图无法解码".to_string())?;
+        if data.is_empty() || thumb.is_empty() {
+            return Err("完成图片内容为空".into());
+        }
+        if data.len() as i64 > COMPLETION_IMAGE_BYTES_LIMIT {
+            return Err("单张完成图片压缩后不能超过 2 MB".into());
+        }
+        // 张数与排序由数组本身决定：整体替换时不留空洞，也不会出现重复位次。
+        stored_images.push(StoredCompletionImage {
+            id: image.id.clone(),
+            sort_order: index as i64,
+            mime: image.mime.clone(),
+            width: image.width,
+            height: image.height,
+            size_bytes: data.len() as i64,
+            data,
+            thumb,
+        });
+    }
+    let tags_json = serde_json::to_string(&tags)
+        .map_err(|error| format!("无法保存感受标签：{error}"))?;
+    Ok(ValidatedCompletionWrite {
+        progress_before: i64::from(record.progress_before),
+        note: note.to_owned(),
+        tags_json,
+        images: stored_images,
+    })
+}
+
+/// 完成记录引用的进度事实：事件必须真实存在、到 100、属于这个任务，且任务现在仍是 100。
+fn verify_completion_event(
+    transaction: &Transaction<'_>,
+    record: &CompletionRecord,
+) -> Result<(), String> {
+    let event: (String, i64, i64, String) = transaction
+        .query_row(
+            "SELECT task_id, from_progress, to_progress, occurred_at_utc FROM progress_events WHERE id = ?1",
+            [&record.progress_event_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|_| "找不到这次完成对应的进度事件".to_string())?;
+    if event.2 != 100 {
+        return Err("完成记录只能引用进度到达 100 的事件".into());
+    }
+    if event.0 != record.task_id {
+        return Err("完成记录必须引用同一任务的进度事件".into());
+    }
+    if event.1 != i64::from(record.progress_before) {
+        return Err("完成前的进度与进度事件不一致".into());
+    }
+    if event.3 != record.completed_at_utc {
+        return Err("完成时间必须与对应的进度事件一致".into());
+    }
+    let task: (String, i64) = transaction
+        .query_row(
+            "SELECT kind, progress FROM tasks WHERE id = ?1",
+            [&record.task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| "找不到这条完成记录的任务".to_string())?;
+    if task.0 == "habit" {
+        return Err("重复习惯的发生项不记录完成反馈".into());
+    }
+    if task.1 != 100 {
+        return Err("任务当前完成度不是 100，无法记录这次完成".into());
+    }
+    Ok(())
+}
+
+fn read_completion_record(
+    transaction: &Transaction<'_>,
+    record_id: &str,
+) -> Result<CompletionRecord, String> {
+    let row = transaction
+        .query_row(
+            "SELECT id, task_id, progress_event_id, completed_at_utc, progress_before, fit, note, tags, reverted_at_utc FROM completion_records WHERE id = ?1",
+            [record_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )
+        .map_err(|_| "找不到这条完成记录".to_string())?;
+    Ok(CompletionRecord {
+        id: row.0,
+        task_id: row.1,
+        progress_event_id: row.2,
+        completed_at_utc: row.3,
+        progress_before: row.4 as u8,
+        fit: row.5,
+        note: row.6,
+        tags: parse_completion_tags(&row.7)?,
+        reverted_at_utc: row.8,
+    })
+}
+
+fn insert_completion_images(
+    transaction: &Transaction<'_>,
+    record_id: &str,
+    images: &[StoredCompletionImage],
+    now: &str,
+) -> Result<(), String> {
+    for image in images {
+        transaction.execute(
+            "INSERT INTO completion_images (id, completion_id, sort_order, mime, width, height, size_bytes, data, thumb, created_at_utc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                image.id,
+                record_id,
+                image.sort_order,
+                image.mime,
+                image.width,
+                image.height,
+                image.size_bytes,
+                image.data,
+                image.thumb,
+                now,
+            ],
+        ).map_err(database_error)?;
+    }
+    Ok(())
+}
+
+fn parse_completion_tags(raw: &str) -> Result<Vec<String>, String> {
+    serde_json::from_str(raw).map_err(|error| format!("无法读取感受标签：{error}"))
 }
 
 fn insert_progress_event(
@@ -1211,6 +1588,48 @@ fn query_rescue_prompted_session_ids(connection: &Connection) -> Result<Vec<Stri
         "SELECT session_id FROM rescue_prompts ORDER BY session_id",
         |row| row.get(0),
     )
+}
+
+/// 快照里的完成记录：文本字段加 join 出来的张数，**不取图片字节**。
+fn query_completion_records(connection: &Connection) -> Result<Vec<CompletionRecordSummary>, String> {
+    let rows = query_rows(
+        connection,
+        "SELECT id, task_id, progress_event_id, completed_at_utc, progress_before, fit, note, tags, reverted_at_utc, \
+         (SELECT COUNT(*) FROM completion_images WHERE completion_id = completion_records.id) \
+         FROM completion_records ORDER BY completed_at_utc, id",
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, i64>(9)?,
+            ))
+        },
+    )?;
+    rows.into_iter()
+        .map(|(id, task_id, progress_event_id, completed_at_utc, progress_before, fit, note, tags, reverted_at_utc, image_count)| {
+            Ok(CompletionRecordSummary {
+                image_count,
+                record: CompletionRecord {
+                    id,
+                    task_id,
+                    progress_event_id,
+                    completed_at_utc,
+                    progress_before: progress_before as u8,
+                    fit,
+                    note,
+                    tags: parse_completion_tags(&tags)?,
+                    reverted_at_utc,
+                },
+            })
+        })
+        .collect()
 }
 
 fn query_rows<T, F>(connection: &Connection, sql: &str, mapper: F) -> Result<Vec<T>, String>
@@ -2172,5 +2591,375 @@ mod tests {
             snapshot.habit_occurrences.is_empty(),
             "no occurrence may survive a failed draft"
         );
+    }
+
+    /// 把任务从 `from_progress` 推到 100，返回那次进度事件；完成记录只能引用它。
+    fn complete_task(database: &Database, task_id: &str, from_progress: u8, event_id: &str) {
+        database
+            .apply_progress(&ProgressEvent {
+                id: event_id.into(),
+                task_id: task_id.into(),
+                from_progress,
+                to_progress: 100,
+                occurred_at_utc: "2026-08-03T06:00:00Z".into(),
+            })
+            .unwrap();
+    }
+
+    fn completion_record(event_id: &str) -> CompletionRecord {
+        CompletionRecord {
+            id: "completion-1".into(),
+            task_id: "task-1".into(),
+            progress_event_id: event_id.into(),
+            completed_at_utc: "2026-08-03T06:00:00Z".into(),
+            progress_before: 75,
+            fit: Some("fit".into()),
+            note: "  先跑测试再整理笔记  ".into(),
+            tags: vec!["专注".into(), "有收获".into(), "专注".into()],
+            reverted_at_utc: None,
+        }
+    }
+
+    fn completion_image(index: usize, bytes: Vec<u8>) -> CompletionImage {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        CompletionImage {
+            id: format!("image-{index}"),
+            sort_order: index as i64,
+            mime: "image/webp".into(),
+            width: 1600,
+            height: 900,
+            size_bytes: bytes.len() as i64,
+            data_base64: STANDARD.encode(&bytes),
+            thumb_base64: STANDARD.encode(format!("thumb-{index}")),
+        }
+    }
+
+    #[test]
+    fn v7_upgrade_adds_empty_completion_tables_without_losing_facts() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("daymark.db");
+        let connection = Connection::open(&path).unwrap();
+        for migration in [
+            include_str!("../migrations/001_initial.sql"),
+            include_str!("../migrations/002_time_blocks.sql"),
+            include_str!("../migrations/003_cross_day_local_dates.sql"),
+            include_str!("../migrations/004_phase1_actions.sql"),
+            include_str!("../migrations/005_phase2_candidate.sql"),
+            include_str!("../migrations/006_project_constraints.sql"),
+            include_str!("../migrations/007_milestone_outcomes.sql"),
+        ] {
+            connection.execute_batch(migration).unwrap();
+        }
+        connection.execute(
+            "INSERT INTO tasks (id, title, progress, status, created_at_utc, updated_at_utc) VALUES ('task-legacy', '旧任务', 100, 'completed', ?1, ?1)",
+            ["2026-08-01T00:00:00Z"],
+        ).unwrap();
+        connection.execute(
+            "INSERT INTO progress_events (id, task_id, from_progress, to_progress, occurred_at_utc) VALUES ('progress-legacy', 'task-legacy', 75, 100, '2026-08-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        drop(connection);
+
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+        let snapshot = database.snapshot().unwrap();
+        assert!(snapshot.completion_records.is_empty());
+        // 旧事实一个不动：既不丢，也不给旧完成补一条凭空记录。
+        assert_eq!(snapshot.tasks[0].title, "旧任务");
+        assert_eq!(snapshot.progress_events.len(), 1);
+    }
+
+    #[test]
+    fn a_completion_record_and_its_images_round_trip() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut task = task("task-1", None);
+        task.progress = 75;
+        database.create_task(&task).unwrap();
+        complete_task(&database, "task-1", 75, "progress-1");
+
+        database
+            .record_completion(&completion_record("progress-1"), &[
+                completion_image(0, b"first".to_vec()),
+                completion_image(1, b"second".to_vec()),
+            ])
+            .unwrap();
+
+        let snapshot = database.snapshot().unwrap();
+        assert_eq!(snapshot.completion_records.len(), 1);
+        let record = &snapshot.completion_records[0];
+        assert_eq!(record.record.fit.as_deref(), Some("fit"));
+        // 小结去首尾空白后落库；标签按词表去重。
+        assert_eq!(record.record.note, "先跑测试再整理笔记");
+        assert_eq!(record.record.tags, vec!["专注".to_string(), "有收获".to_string()]);
+        assert_eq!(record.record.progress_before, 75);
+        assert_eq!(record.image_count, 2);
+        assert!(record.record.reverted_at_utc.is_none());
+
+        let images = database.completion_images("completion-1").unwrap();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].sort_order, 0);
+        assert_eq!(images[1].mime, "image/webp");
+        assert_eq!(images[1].size_bytes, 6);
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        assert_eq!(STANDARD.decode(&images[0].data_base64).unwrap(), b"first");
+        assert_eq!(STANDARD.decode(&images[1].thumb_base64).unwrap(), b"thumb-1");
+    }
+
+    #[test]
+    fn a_completion_record_rejects_invalid_feedback_and_unsupported_facts() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut subject = task("task-1", None);
+        subject.progress = 75;
+        database.create_task(&subject).unwrap();
+        complete_task(&database, "task-1", 75, "progress-1");
+        // 到 45 的事件不是完成事实，不能挂完成记录。
+        database.create_task(&task("task-2", None)).unwrap();
+        database
+            .apply_progress(&ProgressEvent {
+                id: "progress-half".into(),
+                task_id: "task-2".into(),
+                from_progress: 20,
+                to_progress: 45,
+                occurred_at_utc: "2026-08-03T07:00:00Z".into(),
+            })
+            .unwrap();
+
+        let mut bad_fit = completion_record("progress-1");
+        bad_fit.fit = Some("amazing".into());
+        assert!(database.record_completion(&bad_fit, &[]).unwrap_err().contains("适应程度"));
+
+        let mut long_note = completion_record("progress-1");
+        long_note.note = "字".repeat(281);
+        assert!(database.record_completion(&long_note, &[]).unwrap_err().contains("280"));
+
+        let mut bad_tag = completion_record("progress-1");
+        bad_tag.tags = vec!["摸鱼".into()];
+        assert!(database.record_completion(&bad_tag, &[]).unwrap_err().contains("词表"));
+
+        let mut too_many_tags = completion_record("progress-1");
+        too_many_tags.tags = (0..9).map(|index| format!("标签{index}")).collect();
+        assert!(database.record_completion(&too_many_tags, &[]).unwrap_err().contains("词表"));
+
+        assert!(database
+            .record_completion(&completion_record("progress-1"), &(0..4).map(|index| completion_image(index, b"x".to_vec())).collect::<Vec<_>>())
+            .unwrap_err()
+            .contains("最多"));
+
+        let oversized = completion_image(0, vec![7u8; 2 * 1024 * 1024 + 1]);
+        assert!(database
+            .record_completion(&completion_record("progress-1"), &[oversized])
+            .unwrap_err()
+            .contains("2 MB"));
+
+        let mut wrong_mime = completion_record("progress-1");
+        wrong_mime.fit = None;
+        let mut gif = completion_image(0, b"x".to_vec());
+        gif.mime = "image/gif".into();
+        assert!(database.record_completion(&wrong_mime, &[gif]).unwrap_err().contains("WebP"));
+
+        // 引用不存在的事件、未到 100 的事件、以及改时间都不允许落库。
+        assert!(database.record_completion(&completion_record("progress-ghost"), &[]).unwrap_err().contains("进度事件"));
+        let mut partial = completion_record("progress-half");
+        partial.progress_event_id = "progress-half".into();
+        partial.completed_at_utc = "2026-08-03T07:00:00Z".into();
+        assert!(database.record_completion(&partial, &[]).unwrap_err().contains("100"));
+        let mut shifted_time = completion_record("progress-1");
+        shifted_time.completed_at_utc = "2026-08-03T09:00:00Z".into();
+        assert!(database.record_completion(&shifted_time, &[]).unwrap_err().contains("一致"));
+
+        assert!(database.snapshot().unwrap().completion_records.is_empty());
+        assert_eq!(database.completion_images("completion-1").unwrap().len(), 0);
+
+        // 重复提交同一个完成事件：明确错误，供前端转成编辑态。
+        database.record_completion(&completion_record("progress-1"), &[completion_image(0, b"x".to_vec())]).unwrap();
+        let mut second = completion_record("progress-1");
+        second.id = "completion-2".into();
+        assert!(database.record_completion(&second, &[]).unwrap_err().contains("已经记录过了"));
+        assert_eq!(database.snapshot().unwrap().completion_records.len(), 1);
+    }
+
+    #[test]
+    fn habit_backing_tasks_do_not_get_completion_records() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut backing = task("habit-task-1", None);
+        backing.kind = "habit".into();
+        backing.title = "拉伸".into();
+        backing.progress = 75;
+        database
+            .create_recurring_habit(&RecurringHabit {
+                id: "habit-1".into(),
+                task_id: backing.id.clone(),
+                title: "拉伸".into(),
+                pattern: "daily".into(),
+                weekdays: vec![],
+                start_date: "2026-08-01".into(),
+                session_minutes: 20,
+                preferred_start_local: None,
+                status: "active".into(),
+            }, &backing)
+            .unwrap();
+        complete_task(&database, "habit-task-1", 75, "progress-habit");
+        let record = CompletionRecord {
+            id: "completion-habit".into(),
+            task_id: "habit-task-1".into(),
+            progress_event_id: "progress-habit".into(),
+            completed_at_utc: "2026-08-03T06:00:00Z".into(),
+            progress_before: 75,
+            fit: None,
+            note: String::new(),
+            tags: vec![],
+            reverted_at_utc: None,
+        };
+        assert!(database.record_completion(&record, &[]).unwrap_err().contains("习惯"));
+        assert!(database.snapshot().unwrap().completion_records.is_empty());
+    }
+
+    #[test]
+    fn updating_a_completion_replaces_its_images_without_orphans() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut task = task("task-1", None);
+        task.progress = 75;
+        database.create_task(&task).unwrap();
+        complete_task(&database, "task-1", 75, "progress-1");
+        database
+            .record_completion(&completion_record("progress-1"), &[
+                completion_image(0, b"first".to_vec()),
+                completion_image(1, b"second".to_vec()),
+            ])
+            .unwrap();
+
+        let mut edited = completion_record("progress-1");
+        edited.fit = Some("hard".into());
+        edited.note = "被打断了两次".into();
+        edited.tags = vec!["被打断".into()];
+        database.update_completion(&edited, &[completion_image(0, b"only".to_vec())]).unwrap();
+
+        let snapshot = database.snapshot().unwrap();
+        assert_eq!(snapshot.completion_records[0].image_count, 1);
+        assert_eq!(snapshot.completion_records[0].record.fit.as_deref(), Some("hard"));
+        assert_eq!(snapshot.completion_records[0].record.note, "被打断了两次");
+        let images = database.completion_images("completion-1").unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].id, "image-0");
+
+        // 记录引用的进度事实不可改写。
+        let mut rewritten = edited.clone();
+        rewritten.progress_event_id = "progress-half".into();
+        assert!(database.update_completion(&rewritten, &[]).unwrap_err().contains("不能改写"));
+        // 不存在的记录不能更新。
+        let mut ghost = edited.clone();
+        ghost.id = "completion-ghost".into();
+        assert!(database.update_completion(&ghost, &[]).unwrap_err().contains("找不到"));
+    }
+
+    #[test]
+    fn reverting_a_completion_rolls_back_progress_and_keeps_the_record() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut task = task("task-1", None);
+        task.progress = 75;
+        database.create_task(&task).unwrap();
+        complete_task(&database, "task-1", 75, "progress-1");
+        database
+            .record_completion(&completion_record("progress-1"), &[completion_image(0, b"first".to_vec())])
+            .unwrap();
+
+        database
+            .revert_completion("completion-1", &ProgressEvent {
+                id: "progress-revert".into(),
+                task_id: "task-1".into(),
+                from_progress: 100,
+                to_progress: 75,
+                occurred_at_utc: "2026-08-03T08:00:00Z".into(),
+            })
+            .unwrap();
+
+        let snapshot = database.snapshot().unwrap();
+        let reverted_task = &snapshot.tasks[0];
+        assert_eq!(reverted_task.progress, 75);
+        assert_eq!(reverted_task.status, "active");
+        assert_eq!(snapshot.progress_events.len(), 2);
+        // 撤回不动用户内容：文字、标签与图片都留在历史里。
+        assert_eq!(snapshot.completion_records.len(), 1);
+        let record = &snapshot.completion_records[0];
+        assert!(record.record.reverted_at_utc.is_some());
+        assert_eq!(record.image_count, 1);
+        assert_eq!(database.completion_images("completion-1").unwrap().len(), 1);
+
+        // 已撤回的记录不能再次撤回，也不能再编辑。
+        assert!(database
+            .revert_completion("completion-1", &ProgressEvent {
+                id: "progress-revert-again".into(),
+                task_id: "task-1".into(),
+                from_progress: 100,
+                to_progress: 75,
+                occurred_at_utc: "2026-08-03T09:00:00Z".into(),
+            })
+            .unwrap_err()
+            .contains("已经撤回"));
+        assert!(database.update_completion(&completion_record("progress-1"), &[]).unwrap_err().contains("不能修改"));
+    }
+
+    #[test]
+    fn a_revert_must_match_the_record_and_the_current_progress() {
+        let dir = tempdir().unwrap();
+        let database = Database::open(dir.path().join("daymark.db")).unwrap();
+        let mut task = task("task-1", None);
+        task.progress = 75;
+        database.create_task(&task).unwrap();
+        complete_task(&database, "task-1", 75, "progress-1");
+        database.record_completion(&completion_record("progress-1"), &[]).unwrap();
+
+        // 回退目标必须是记录里的完成前进度。
+        assert!(database
+            .revert_completion("completion-1", &ProgressEvent {
+                id: "progress-wrong".into(),
+                task_id: "task-1".into(),
+                from_progress: 100,
+                to_progress: 50,
+                occurred_at_utc: "2026-08-03T08:00:00Z".into(),
+            })
+            .unwrap_err()
+            .contains("回到 75%"));
+        // 别的任务不能借用这条记录撤回。
+        assert!(database
+            .revert_completion("completion-1", &ProgressEvent {
+                id: "progress-other-task".into(),
+                task_id: "task-2".into(),
+                from_progress: 100,
+                to_progress: 75,
+                occurred_at_utc: "2026-08-03T08:00:00Z".into(),
+            })
+            .unwrap_err()
+            .contains("属于这条记录"));
+
+        // 任务已被别的入口下调，撤回要求刷新。
+        database
+            .apply_progress(&ProgressEvent {
+                id: "progress-down".into(),
+                task_id: "task-1".into(),
+                from_progress: 100,
+                to_progress: 90,
+                occurred_at_utc: "2026-08-03T08:30:00Z".into(),
+            })
+            .unwrap();
+        assert!(database
+            .revert_completion("completion-1", &ProgressEvent {
+                id: "progress-revert".into(),
+                task_id: "task-1".into(),
+                from_progress: 100,
+                to_progress: 75,
+                occurred_at_utc: "2026-08-03T09:00:00Z".into(),
+            })
+            .unwrap_err()
+            .contains("已经变化"));
+        // 失败路径不写任何事件，也不标记记录。
+        let snapshot = database.snapshot().unwrap();
+        assert_eq!(snapshot.progress_events.len(), 2);
+        assert!(snapshot.completion_records[0].record.reverted_at_utc.is_none());
     }
 }

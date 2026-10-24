@@ -62,6 +62,11 @@ export interface AppSettings {
   minimumSessionMinutes: number;
   autoScheduleAssist: boolean;
   checkInEnabled: boolean;
+  /**
+   * 任务达到 100% 后是否自动弹出「完成记录」气泡。关闭只影响自动弹出：
+   * 完成事实照常写入，「今日完成」与回顾明细里的补写入口仍然可用（规格 0007 §8）。
+   */
+  completionRecordPrompt: boolean;
   /** 开始宽限期；合法区间见 `CHECK_IN_GRACE_MINUTES_RANGE`。 */
   checkInGraceMinutes: number;
   rescuePromptsEnabled: boolean;
@@ -97,6 +102,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   minimumSessionMinutes: 15,
   autoScheduleAssist: false,
   checkInEnabled: false,
+  completionRecordPrompt: true,
   checkInGraceMinutes: 5,
   rescuePromptsEnabled: true,
   remindersEnabled: false,
@@ -209,6 +215,7 @@ function normalizeSettings(value: unknown): AppSettings {
     minimumSessionMinutes: normalizeIntegerInRange(candidate.minimumSessionMinutes, MINIMUM_SESSION_MINUTES_RANGE, DEFAULT_SETTINGS.minimumSessionMinutes),
     autoScheduleAssist: typeof candidate.autoScheduleAssist === "boolean" ? candidate.autoScheduleAssist : DEFAULT_SETTINGS.autoScheduleAssist,
     checkInEnabled: typeof candidate.checkInEnabled === "boolean" ? candidate.checkInEnabled : DEFAULT_SETTINGS.checkInEnabled,
+    completionRecordPrompt: typeof candidate.completionRecordPrompt === "boolean" ? candidate.completionRecordPrompt : DEFAULT_SETTINGS.completionRecordPrompt,
     checkInGraceMinutes: normalizeIntegerInRange(candidate.checkInGraceMinutes, CHECK_IN_GRACE_MINUTES_RANGE, DEFAULT_SETTINGS.checkInGraceMinutes),
     rescuePromptsEnabled: typeof candidate.rescuePromptsEnabled === "boolean" ? candidate.rescuePromptsEnabled : DEFAULT_SETTINGS.rescuePromptsEnabled,
     remindersEnabled: typeof candidate.remindersEnabled === "boolean" ? candidate.remindersEnabled : DEFAULT_SETTINGS.remindersEnabled,

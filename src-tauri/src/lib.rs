@@ -13,8 +13,8 @@ use backup::{BackupInfo, BackupPreview, BackupService, RestoreOutcome};
 use chrono::Local;
 use database::{Database, WorkspaceSnapshot};
 use models::{
-    ExecutionRecord, ExecutionSession, HabitOccurrence, ProgressEvent, Project, ProjectMilestone,
-    RecurringHabit, Task, TimeBlock,
+    CompletionImage, CompletionRecord, ExecutionRecord, ExecutionSession, HabitOccurrence,
+    ProgressEvent, Project, ProjectMilestone, RecurringHabit, Task, TimeBlock,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -159,6 +159,54 @@ async fn get_workspace(state: tauri::State<'_, AppState>) -> Result<WorkspaceSna
     run_data_operation(state.inner().clone(), |state| {
         let database = state.database()?;
         snapshot_with_expired_outcomes(state, &database)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn record_completion(
+    record: CompletionRecord,
+    images: Vec<CompletionImage>,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    mutate_workspace(state.inner().clone(), move |database| {
+        database.record_completion(&record, &images)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn update_completion(
+    record: CompletionRecord,
+    images: Vec<CompletionImage>,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    mutate_workspace(state.inner().clone(), move |database| {
+        database.update_completion(&record, &images)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn revert_completion(
+    record_id: String,
+    event: ProgressEvent,
+    state: tauri::State<'_, AppState>,
+) -> Result<WorkspaceSnapshot, String> {
+    mutate_workspace(state.inner().clone(), move |database| {
+        database.revert_completion(&record_id, &event)
+    })
+    .await
+}
+
+/// 按需取图：快照不带图片字节，气泡与回顾缩略图单独请求这一条记录的图片。
+#[tauri::command]
+async fn get_completion_images(
+    record_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CompletionImage>, String> {
+    run_data_operation(state.inner().clone(), move |state| {
+        state.database()?.completion_images(&record_id)
     })
     .await
 }
@@ -758,6 +806,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_data_overview,
             get_workspace,
+            record_completion,
+            update_completion,
+            revert_completion,
+            get_completion_images,
             create_task,
             create_task_with_session,
             update_task,

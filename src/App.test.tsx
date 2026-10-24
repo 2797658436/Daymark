@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { readCalendarPositions, resetCalendarPositions } from "./hooks/useCalendarViewport";
-import { EMPTY_WORKSPACE, type BackupInfo, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
+import { EMPTY_WORKSPACE, type BackupInfo, type CompletionImage, type NativeApi, type WorkspaceSnapshot } from "./lib/native";
 import { DEFAULT_SETTINGS, PAGE_IDS, SettingsRepository, type AppSettings, type PageId, type SettingsBackend } from "./lib/settings";
 
 beforeEach(() => { Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: 1200 }); });
@@ -76,6 +76,14 @@ function createNativeApi(initial: WorkspaceSnapshot = structuredClone(EMPTY_WORK
       progressEvents: [...state.progressEvents, event],
     })),
     applyProgress: vi.fn((event) => write({ ...state, tasks: state.tasks.map((task) => task.id === event.taskId ? { ...task, progress: event.toProgress } : task), progressEvents: [...state.progressEvents, event] })),
+    recordCompletion: vi.fn((record, images) => write({ ...state, completionRecords: [...state.completionRecords, { ...record, imageCount: images.length }] })),
+    updateCompletion: vi.fn((record, images) => write({ ...state, completionRecords: state.completionRecords.map((item) => item.id === record.id ? { ...record, imageCount: images.length } : item) })),
+    revertCompletion: vi.fn((recordId, event) => write({ ...state,
+      tasks: state.tasks.map((task) => task.id === event.taskId ? { ...task, progress: event.toProgress, status: "active" as const } : task),
+      progressEvents: [...state.progressEvents, event],
+      completionRecords: state.completionRecords.map((item) => item.id === recordId ? { ...item, revertedAtUtc: "2026-08-05T12:00:00.000Z" } : item),
+    })),
+    getCompletionImages: vi.fn(async () => [] as CompletionImage[]),
     showReminder: vi.fn().mockResolvedValue(undefined),
     isAutostartEnabled: vi.fn().mockResolvedValue(false),
     setAutostartEnabled: vi.fn().mockResolvedValue(undefined),
@@ -2641,6 +2649,227 @@ describe("phase 4 P4-08 review periods and drill-down", () => {
       await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 });
       expect(screen.queryByText("仅统计项目：学习项目")).toBeNull();
       expect(document.querySelector(".review-detail")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * 规格 0007：完成记录（完成签到）。
+ *
+ * 这一组用例盯的是**触发口径**与**事实边界**：
+ * - 只有「正常的任务、从 <100 升到 100、提交成功」才弹气泡；习惯与关闭开关都不弹；
+ * - 记录只引用进度事件；撤回写一条回退事件，而不是改写上一条历史；
+ * - 事后入口（今日完成行、回顾明细）永远可用，与那个开关无关。
+ *
+ * 一律用假时钟钉在 2026-08-05 正午：「今日完成」「完成于 …」和提示胶囊都要跟「今天」比。
+ */
+describe("completion records", () => {
+  /** 注入的「现在」是本地墙钟 2026-08-05 12:00，夹具里的时刻同样按本地墙钟写。 */
+  const at = (hour: number, minute = 0) => new Date(2026, 7, 5, hour, minute).toISOString();
+
+  function taskFixture(patch: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
+    return {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "t-1", projectId: null, title: "写周报", progress: 75, status: "active", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0, kind: "task" }],
+      ...patch,
+    };
+  }
+
+  /** 任务池进度气泡 → 标记完成（最常用的 100% 入口）。 */
+  async function markComplete(user: ReturnType<typeof userEvent.setup>, title = "写周报") {
+    await user.click(await screen.findByRole("button", { name: `调整进度 ${title}，当前 75%` }));
+    await user.click(screen.getByRole("button", { name: `标记 ${title} 已完成` }));
+  }
+
+  /** 展开「今日完成」并取出那一行：它是补写／编辑的事后入口。 */
+  async function openTodayRow(user: ReturnType<typeof userEvent.setup>, title = "写周报") {
+    await user.click(await screen.findByText("今日完成 1 项"));
+    return within(document.querySelector<HTMLElement>(".today-completed-list")!).getByRole("button", { name: new RegExp(`^${title}`) });
+  }
+
+  const bubble = () => screen.findByRole("dialog", { name: "完成记录：写周报" });
+
+  it("asks for a completion record right after a normal task reaches 100%", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const native = createNativeApi(taskFixture());
+    try {
+      render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+      await markComplete(user);
+
+      const panel = await bubble();
+      expect(within(panel).getByRole("heading", { name: "已完成" })).toBeVisible();
+      // 事实行只说这次完成本身：进度跳变 + 时刻。任务名不重复，锚定行已经给了上下文。
+      expect(panel.querySelector(".completion-heading")?.textContent).toContain("75% → 100%");
+      expect(panel.querySelector(".completion-heading")?.textContent).toContain("今天 12:00");
+      // 适应程度不预选：三档都是未按下，用户可以一个都不选就保存。
+      for (const label of ["轻松", "合适", "吃力"]) {
+        expect(within(panel).getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+      }
+      const revert = within(panel).getByRole("button", { name: /^撤回完成/ });
+      expect(revert.textContent).toContain("回到 75%");
+      expect(within(panel).getByRole("button", { name: "保存记录" })).toBeVisible();
+      // 采集与查看分离：气泡里没有放大入口。
+      expect(within(panel).queryByRole("button", { name: /放大查看/ })).toBeNull();
+      // 此刻只写了进度事实，记录还没落库。
+      await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "t-1", toProgress: 100 })));
+      expect(native.recordCompletion).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still opens 补写 from the today row when the prompt is off, and saves the draft fields", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, completionRecordPrompt: false };
+    const native = createNativeApi(taskFixture());
+    try {
+      render(<App settings={new SettingsRepository(backend)} native={native} />);
+      await markComplete(user);
+      await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ toProgress: 100 })));
+      // 完成事实照常写入，事后入口不受开关影响。
+      const row = await openTodayRow(user);
+      expect(row.textContent).toContain("未填写完成记录");
+
+      await user.click(row);
+      const panel = await bubble();
+      expect(within(panel).getByRole("heading", { name: "已完成" })).toBeVisible();
+      await user.click(within(panel).getByRole("button", { name: "合适" }));
+      await user.click(within(panel).getByRole("button", { name: "感受标签" }));
+      await user.click(within(panel).getByRole("button", { name: "专注" }));
+      await user.type(within(panel).getByRole("textbox"), "一次写完，没有分心");
+      await user.click(within(panel).getByRole("button", { name: "保存记录" }));
+
+      await waitFor(() => expect(native.recordCompletion).toHaveBeenCalledTimes(1));
+      const [record, images] = vi.mocked(native.recordCompletion).mock.calls[0];
+      expect(record).toMatchObject({ taskId: "t-1", progressBefore: 75, fit: "fit", note: "一次写完，没有分心", tags: ["专注"], revertedAtUtc: null });
+      expect(record.progressEventId).toBeTypeOf("string");
+      // 完成时刻就是那次进度事件的时刻（本地今天），不是保存时刻。
+      expect(String(record.completedAtUtc).startsWith("2026-08-05")).toBe(true);
+      expect(images).toEqual([]);
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "完成记录：写周报" })).toBeNull());
+      // 今日完成行把记录内容摊开在事实位上，不再说「未填写」。
+      expect((await openTodayRow(user)).textContent).toContain("合适");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a 补写 entry behind when the draft is abandoned", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const native = createNativeApi(taskFixture());
+    try {
+      render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+      await markComplete(user);
+      const panel = await bubble();
+      // 带草稿时误点关闭不丢内容：先要一次明确的放弃。
+      await user.type(within(panel).getByRole("textbox"), "还没想好");
+      await user.click(within(panel).getByRole("button", { name: "关闭完成记录" }));
+      expect(within(panel).getByRole("group", { name: "放弃确认" })).toBeVisible();
+      await user.click(within(panel).getByRole("button", { name: "继续填写" }));
+      expect(within(panel).getByRole("textbox")).toHaveValue("还没想好");
+
+      await user.click(within(panel).getByRole("button", { name: "关闭完成记录" }));
+      await user.click(within(panel).getByRole("button", { name: "放弃" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "完成记录：写周报" })).toBeNull());
+      expect(native.recordCompletion).not.toHaveBeenCalled();
+      const toast = document.querySelector<HTMLElement>(".completion-toast");
+      expect(toast?.textContent).toContain("还没记录");
+      // 提示胶囊是活区，动作是里面那个真按钮：点它把同一个目标重新打开。
+      await user.click(within(toast!).getByRole("button", { name: "补写" }));
+      expect(await bubble()).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reverts the completion through a rollback event and keeps the record content", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const native = createNativeApi(taskFixture());
+    try {
+      render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+      await markComplete(user);
+      const panel = await bubble();
+      await user.type(within(panel).getByRole("textbox"), "先记下，回头再改");
+      await user.click(within(panel).getByRole("button", { name: "保存记录" }));
+      await waitFor(() => expect(native.recordCompletion).toHaveBeenCalledTimes(1));
+      const recordId = vi.mocked(native.recordCompletion).mock.calls[0][0].id as string;
+
+      // 事后从「今日完成」进编辑态：标题与保存按钮都换成「修改」。
+      await user.click(await openTodayRow(user));
+      const editor = await bubble();
+      expect(within(editor).getByRole("heading", { name: "编辑完成记录" })).toBeVisible();
+      expect(within(editor).getByRole("textbox")).toHaveValue("先记下，回头再改");
+      expect(within(editor).getByRole("button", { name: "保存修改" })).toBeVisible();
+
+      await user.click(within(editor).getByRole("button", { name: /^撤回完成/ }));
+      await waitFor(() => expect(native.revertCompletion).toHaveBeenCalledWith(recordId,
+        expect.objectContaining({ taskId: "t-1", fromProgress: 100, toProgress: 75 })));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "完成记录：写周报" })).toBeNull());
+      expect(document.querySelector(".completion-toast")?.textContent).toContain("已撤回完成，进度回到 75%");
+      // 内容不删：记录仍在快照里，只是带上撤回时刻。
+      await waitFor(async () => expect(await native.getWorkspace()).toMatchObject({
+        completionRecords: [{ id: recordId, note: "先记下，回头再改", revertedAtUtc: "2026-08-05T12:00:00.000Z" }],
+      }));
+      // 任务回到 75%，「今日完成」里那一行因此消失 —— 不冒充一次完成。
+      expect(screen.queryByText("今日完成 1 项")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists completion records in the review detail and zooms an image read-only", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "review" };
+    const image: CompletionImage = { id: "img-1", sortOrder: 0, mime: "image/webp", width: 1600, height: 900, sizeBytes: 20_480, dataBase64: "AAECAw==", thumbBase64: "AAECAw==" };
+    const native = createNativeApi(taskFixture({
+      tasks: [{ id: "t-1", projectId: null, title: "写周报", progress: 100, status: "completed", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0, kind: "task" }],
+      progressEvents: [{ id: "e-1", taskId: "t-1", fromProgress: 75, toProgress: 100, occurredAtUtc: at(9) }],
+      completionRecords: [{ id: "c-1", taskId: "t-1", progressEventId: "e-1", completedAtUtc: at(9), progressBefore: 75, fit: "light", note: "一小时写完", tags: ["专注"], revertedAtUtc: null, imageCount: 1 }],
+    }), { getCompletionImages: vi.fn(async () => [image]) });
+    try {
+      render(<App settings={new SettingsRepository(backend)} native={native} />);
+      await screen.findByRole("heading", { name: "8月3日 — 8月9日", level: 1 });
+      // 周视图的「完成感受」卡：三档分布 + 常见标签 + 口径行；它不取图片字节。
+      const feeling = document.querySelector<HTMLElement>(".review-feeling");
+      expect(feeling?.textContent).toContain("完成感受");
+      expect(feeling?.textContent).toContain("轻松");
+      expect(feeling?.textContent).toContain("1 条完成记录");
+      expect(native.getCompletionImages).not.toHaveBeenCalled();
+
+      await user.click(within(document.querySelector<HTMLElement>(".review-tasks")!).getByRole("button", { name: "查看任务「写周报」的明细" }));
+      const detail = document.querySelector<HTMLElement>(".review-detail")!;
+      expect(detail.textContent).toContain("一小时写完");
+      expect(detail.textContent).toContain("专注");
+      // 图片按需取字节：明细打开后才为这一条记录请求一次。
+      const thumb = await within(detail).findByRole("button", { name: "放大查看第 1 张完成图片" });
+      await waitFor(() => expect(native.getCompletionImages).toHaveBeenCalledWith("c-1"));
+
+      await user.click(thumb);
+      const viewer = await screen.findByRole("dialog", { name: "放大查看完成图片：写周报 第 1 张" });
+      expect(within(viewer).getByRole("img").getAttribute("src")).toContain("data:image/webp;base64,AAECAw==");
+      expect(viewer.textContent).toContain("只读查看");
+      // 只读：浮层里没有任何动作按钮（另存为／编辑都不给）。
+      expect(within(viewer).queryAllByRole("button")).toHaveLength(0);
+
+      // Esc 只关最顶层：放大层收起，明细气泡还在。
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "放大查看完成图片：写周报 第 1 张" })).toBeNull());
+      expect(document.querySelector(".review-detail")).not.toBeNull();
+      expect(native.revertCompletion).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

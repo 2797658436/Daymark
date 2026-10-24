@@ -319,10 +319,15 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .today-completed > summary svg:last-child { margin-left: auto; transition: transform .12s ease; }
 .today-completed[open] > summary svg:last-child { transform: rotate(180deg); }
 .today-completed-list { display: grid; }
-.today-completed-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--line-soft); color: var(--muted-strong); font-size: .78rem; }
+/* 一行是一个按钮（规格 0007 §5.2：点击 = 补写／编辑完成记录），所以自带
+   按钮重置：无边框、透明底、左对齐、整行可点。命中区由 min-height 44px 保证。 */
+.today-completed-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 2.75rem; padding: 8px; border: 0; border-top: 1px solid var(--line-soft); background: transparent; color: var(--muted-strong); font: inherit; font-size: .78rem; text-align: left; cursor: pointer; transition: background .12s ease; }
+.today-completed-row:hover, .today-completed-row:focus-visible { background: var(--panel-strong); }
+.today-completed-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .today-completed-row svg { flex: none; color: var(--success); }
 .today-completed-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
-.today-completed-row span { margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 事实行（完成于 · 适应程度 · 图片数）可收缩：960×640 下任务名再长也不能把它顶出气泡。 */
+.today-completed-row span { min-width: 0; margin-left: auto; flex: 0 1 auto; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .today-due { min-width: 0; }
 .today-due-list { display: grid; }
 .today-due-row { display: grid; gap: 4px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
@@ -1785,3 +1790,151 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .project-progress-panel h2 { margin: 0; font-size: .95rem; }
 .project-progress-panel p { margin: 0; font-size: .78rem; }
 .floating-panel .project-editor { margin: 0; padding: 0; border: 0; background: transparent; }
+
+/* ---------------------------------------------------------------------------
+   完成记录（规格 0007）。
+
+   三块界面共用一套口径：气泡（采集）、提示胶囊（离开后的去向）、回顾里的记录行与感受卡
+   （查看）。宽度沿用 `.floating-panel` 的 `min(23rem, 100vw − 24px)` —— 规格 §3.1 要的就是
+   这个值，不再另写一遍。
+
+   几条硬约束在下面逐条体现：
+   - 状态不靠颜色单独表达（`.is-selected` 同时改描边、底色并显示勾）；
+   - 去强调不整体降 `opacity`（只有 `.is-leaving` 那一处是**离场动画**，不是状态）；
+   - 命中区约 44px，紧凑控件用透明外扩补齐；
+   - 尺寸一律 rem：界面缩放改根字号，缩略图和命中区跟着一起长大。
+   --------------------------------------------------------------------------- */
+
+/* ① 采集气泡：固定头 + 可滚正文 + 贴底动作条，和明细气泡同一个骨架。 */
+.floating-panel.completion-panel { display: flex; flex-direction: column; max-height: min(78vh, 42rem); padding: 0; overflow: hidden; }
+/* 面板默认让 `header`／`h2` sticky 到 `top:-16px`（给 16px 内边距的表单用的）。
+   这里的头是 flex 列的第一段、正文自己滚，粘附偏移会把标题压进正文里。 */
+.completion-panel header, .completion-panel h2 { position: static; top: auto; }
+.completion-bubble { display: flex; flex-direction: column; min-height: 0; }
+.completion-head { display: flex; align-items: center; gap: 10px; padding: 12px 8px 12px 16px; border-bottom: 1px solid var(--line-soft); }
+/* 完成勾是装饰（aria-hidden），语义由「已完成」标题承担。 */
+.completion-mark { flex: none; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 999px; background: color-mix(in srgb, var(--success) 16%, var(--panel)); color: var(--success); }
+.completion-heading { display: grid; gap: 2px; min-width: 0; }
+.completion-heading h2 { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+/* 事实行（75% → 100% · 今天 14:32）单行省略：标题已经是上下文，不能被它挤成两行。 */
+.completion-heading p { margin: 0; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 面板里的图标按钮默认收到 40px（`.floating-panel .icon-action`）；关闭是这个气泡的第二主操作，保留 44px。 */
+.completion-close { flex: none; margin-left: auto; min-width: 2.75rem; min-height: 2.75rem; }
+.completion-body { display: grid; gap: 12px; align-content: start; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 12px 16px 16px; }
+.completion-field { display: grid; gap: 6px; min-width: 0; }
+/* 标签行同时装下右侧的计数与提示，允许换行：200% 缩放时它折成两行而不是被裁掉。 */
+.completion-field-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; color: var(--muted-strong); font-size: .75rem; font-weight: 600; }
+.completion-counter { margin-left: auto; color: var(--muted); font-weight: 400; font-size: .75rem; font-variant-numeric: tabular-nums; }
+
+/* 三档适应程度：可以全不选（规格 §3.1「不预选」），再点一次取消。 */
+.completion-fits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.completion-fit { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 2.75rem; padding: 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted-strong); font: inherit; font-size: .8rem; font-weight: 500; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.completion-fit:hover { border-color: var(--line-strong); background: var(--panel); color: var(--text); }
+.completion-fit:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* 选中同时改三件事：更深底、重描边、显示勾 —— 色盲与黑白打印下也读得出来。 */
+.completion-fit.is-selected { border-color: var(--accent-strong); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-strong); font-weight: 600; }
+.completion-fit svg { flex: none; }
+
+.completion-note-field textarea { width: 100%; min-height: 5rem; font-size: .8rem; line-height: 1.5; }
+.completion-note-field textarea::placeholder { color: var(--muted); }
+
+.completion-disclosure { display: inline-flex; align-items: center; gap: 6px; align-self: start; min-height: 2rem; padding: 0 4px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-strong); font: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; }
+.completion-disclosure:hover { background: var(--panel-strong); color: var(--text); }
+.completion-disclosure:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.completion-disclosure svg { transition: transform .12s ease; }
+.completion-disclosure[aria-expanded="true"] svg { transform: rotate(180deg); }
+.completion-tags { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+/* 药丸只有 32px 高：向外各扩 6px／4px 补到约 44px 命中区，横向 4px 仍小于 8px 间隙，相邻标签不会互相吃掉。 */
+.completion-tag { position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 2rem; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); font: inherit; font-size: .75rem; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.completion-tag::after { content: ""; position: absolute; inset: -6px -4px; }
+.completion-tag:hover { border-color: var(--line); background: var(--panel); color: var(--text); }
+.completion-tag:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.completion-tag.is-selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-strong); font-weight: 600; }
+
+/* 图片区：整块是投放目标，所以给一圈虚线；缩略图 68px（rem，随缩放放大）。 */
+.completion-images { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed color-mix(in srgb, var(--muted) 40%, var(--line)); border-radius: 12px; background: var(--panel-strong); }
+.completion-images-hint { margin-left: auto; color: var(--muted); font-weight: 400; font-size: .75rem; text-align: right; }
+.completion-thumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.completion-thumb { position: relative; flex: none; width: 4.25rem; height: 4.25rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.completion-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 9px; }
+/* 移除按钮：44px 见方的透明命中区，里面用 ::before 画 22px 的实心圆。
+   气泡里不放大图片（规格 §3.2），所以让它盖住缩略图右上角不会误伤别的操作。 */
+.completion-thumb-remove { position: absolute; top: 0; right: 0; display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.completion-thumb-remove::before { content: ""; position: absolute; inset: .6875rem; border-radius: 999px; background: var(--panel); box-shadow: var(--shadow-low), inset 0 0 0 1px var(--line); }
+.completion-thumb-remove svg { position: relative; z-index: 1; color: var(--muted-strong); }
+.completion-thumb-remove:hover::before { background: var(--accent-soft); }
+.completion-thumb-remove:hover svg { color: var(--accent-strong); }
+.completion-thumb-remove:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; border-radius: 999px; }
+.completion-existing { display: inline-flex; align-items: center; min-height: 2rem; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel); color: var(--muted-strong); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.completion-image-add { display: inline-grid; place-items: center; align-content: center; gap: 2px; min-width: 4.25rem; min-height: 4.25rem; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--muted) 45%, var(--line)); border-radius: 10px; background: transparent; color: var(--muted-strong); font: inherit; font-size: .75rem; cursor: pointer; transition: border-color .12s ease, background .12s ease, color .12s ease; }
+.completion-image-add:hover { border-color: var(--accent); background: var(--accent-softer); color: var(--accent-strong); }
+.completion-image-add:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.completion-image-error, .completion-error { margin: 0; color: var(--danger); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.completion-error { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+/* 带草稿时的放弃确认：留在正文末尾，不叠第二层浮层。 */
+.completion-discard { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--text); font-size: .78rem; }
+.completion-discard .button { min-height: 2.75rem; padding: .3rem .65rem; font-size: .75rem; }
+
+/* 动作条：撤回（可逆、保留内容）在左，保存是唯一主操作。 */
+.completion-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px 12px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+.completion-foot .button { margin-left: auto; }
+.completion-revert { display: inline-flex; align-items: center; gap: 6px; min-height: 2.75rem; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted-strong); font: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; transition: border-color .12s ease, color .12s ease; }
+.completion-revert small { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.completion-revert:hover:not(:disabled) { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); }
+.completion-revert:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.completion-revert:disabled { cursor: not-allowed; color: var(--muted); }
+
+/* ② 提示链：保存／跳过／撤回后落在页底，比撤销胶囊高一个身位，两者不叠。
+   容器是活区（`role="status"`），动作是里面那个真按钮；动作词用下划线而不是颜色区分
+   （深色胶囊上的橙色只有 2.7:1）。 */
+.completion-toast { position: fixed; z-index: 31; bottom: 4.5rem; left: 50%; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 24px); min-height: 2.75rem; padding: .5rem 1rem; border: 0; border-radius: 999px; background: var(--text); color: var(--panel); box-shadow: var(--shadow-float); font-size: .8rem; }
+.completion-toast svg { flex: none; }
+.completion-toast span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.completion-toast-action { flex: none; padding: .25rem .35rem; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.completion-toast-action:hover { background: color-mix(in srgb, var(--panel) 18%, transparent); }
+.completion-toast-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ③ 刚完成的那一行：气泡期间留在原分组，关闭后淡出 160ms 再离开活动池（规格 §3.4）。
+   这里整元素改 opacity 是**离场动画**，不是状态去强调，所以不违反禁用法。 */
+.task-card.pool-task-row.is-leaving { opacity: 0; transition: opacity .16s ease; }
+
+/* ④ 回顾里的一条完成记录（日明细与任务明细共用）。 */
+/* 记录行是一个块，不是「时间 / 内容 / 数值」三列 —— 把明细列表默认的三列网格收回单列。 */
+.review-detail .review-detail-list li.review-completion { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: start; padding: 8px 0; }
+.review-completion-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.review-completion-head > * { min-width: 0; }
+.review-completion-head time { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.review-completion-fit, .review-completion-reverted { flex: none; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted-strong); font-size: .75rem; }
+/* 已撤回：内容保留、整体只读。状态写在文字里，左边再加一道实线槽，不靠颜色也不降透明度。 */
+.review-completion-reverted { background: var(--panel-strong); font-weight: 600; }
+.review-completion.is-reverted { border-left: 2px solid var(--line-strong); padding-left: 10px; }
+.review-completion.is-reverted .review-completion-note, .review-completion.is-reverted .review-completion-tags { color: var(--muted); }
+.review-completion-head .button { margin-left: auto; }
+.review-completion-tags, .review-completion-note { margin: 0; font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
+.review-completion-tags { color: var(--muted-strong); }
+.review-completion-note { color: var(--muted); }
+.review-completion-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 0; color: var(--muted); font-size: .75rem; }
+/* 缩略图是放大入口：光标写 zoom-in，边框与阴影只给 hover／focus。 */
+.review-completion-thumb { flex: none; width: 4.25rem; height: 4.25rem; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); cursor: zoom-in; overflow: hidden; transition: border-color .12s ease, box-shadow .12s ease; }
+.review-completion-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.review-completion-thumb:hover { border-color: var(--accent); box-shadow: var(--ring-accent); }
+.review-completion-thumb:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ⑤ 只读放大浮层：图片装得下就原尺寸，装不下就等比缩；没有保存与编辑入口。 */
+.floating-panel.review-image-viewer { display: grid; gap: 8px; justify-items: center; align-content: center; width: min(48rem, calc(100vw - 24px)); padding: 12px; }
+.review-image-viewer img { display: block; max-width: 100%; max-height: min(72vh, 48rem); width: auto; height: auto; object-fit: contain; border-radius: 10px; background: var(--panel-strong); }
+.review-image-viewer-meta { margin: 0; color: var(--muted-strong); font-size: .75rem; text-align: center; overflow-wrap: anywhere; }
+
+/* ⑥ 周／月的「完成感受」卡：三档横条 + 常见标签 + 口径行。 */
+.review-feeling { display: grid; gap: 10px; align-content: start; }
+.review-feeling-fits { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.review-feeling-fit { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) 2rem; align-items: center; gap: 8px 10px; }
+.review-feeling-label { color: var(--muted-strong); font-size: .75rem; }
+/* 条形只表量级（aria-hidden）：读数在右边的计数里，零值档不画条但保留「0」。 */
+.review-feeling-bar { display: block; height: .5rem; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.review-feeling-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.review-feeling-count { justify-self: end; font-size: .78rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.review-feeling-fit.is-zero .review-feeling-count { color: var(--muted); font-weight: 500; }
+.review-feeling-tags { margin: 0; color: var(--muted-strong); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+/* 口径行说清「几条记录、其中几条已撤回不计数」——它是解释，不是数据，压到 --muted。 */
+.review-feeling-scope { margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }

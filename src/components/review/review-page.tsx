@@ -9,11 +9,12 @@ import { ReviewPeriodPicker } from "./review-period-picker";
 import { addLocalDays, addLocalMonths, localDateOf } from "../../lib/deadlines";
 import {
   REVIEW_BACK_LABEL, REVIEW_CURRENT_LABEL, REVIEW_PERIOD_LABEL, buildReviewFromIndex, formatPercentPoints, formatRecordedMs,
-  formatTaskProgressRange, type ReviewPeriod, type ReviewResult,
+  formatTaskProgressRange, type ReviewCompletionSummary, type ReviewPeriod, type ReviewResult,
 } from "../../lib/review";
-import type { Task } from "../../lib/native";
+import type { CompletionImage, Task } from "../../lib/native";
 import type { AppSettings } from "../../lib/settings";
 import type { WorkspaceIndex } from "../../lib/workspaceSelectors";
+import { COMPLETION_FITS, COMPLETION_FIT_LABEL } from "../../lib/completion";
 
 export type { ReviewSelection } from "./review-detail";
 
@@ -72,9 +73,13 @@ export interface ReviewPageProps {
   onEditTask: (task: Task, anchorElement: HTMLElement) => void;
   onArrangeTask: (task: Task) => void;
   onOpenProject: (projectId: string, milestoneId: string | null) => void;
+  /** 完成记录的缩略图按需取字节；回顾页自己不碰原生接口。 */
+  onLoadCompletionImages: (recordId: string) => Promise<CompletionImage[]>;
+  /** 打开完成记录气泡编辑一条未撤回的记录（锚定明细面板）。 */
+  onEditCompletion: (completion: ReviewCompletionSummary, anchor: HTMLElement) => void;
 }
 
-export function ReviewPage({ index, preferences, onPreferences, projectId, onProjectId, selection, onSelection, scrollRef, scrollTop, onGoToday, onEditTask, onArrangeTask, onOpenProject }: ReviewPageProps) {
+export function ReviewPage({ index, preferences, onPreferences, projectId, onProjectId, selection, onSelection, scrollRef, scrollTop, onGoToday, onEditTask, onArrangeTask, onOpenProject, onLoadCompletionImages, onEditCompletion }: ReviewPageProps) {
   const now = useCurrentTime();
   const today = localDateOf(now);
   const period = preferences.reviewPeriod;
@@ -216,6 +221,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
   // 顶部这张卡把单位换成「净进度」：一行放下「+10 净进度」，写「+10 百分点」再单起一行太长。
   // 数字仍由 formatPercentPoints 统一格式化（符号 + 四舍五入），这里只换单位词。
   const netDeltaValue = `${formatPercentPoints(review.progress.netDelta).replace(" 百分点", "")} 净进度`;
+  /** 感受分布的条长按**最大档**归一：三档各自的比例关系看得见，零值档不画条。 */
+  const feelingMax = Math.max(1, COMPLETION_FITS.reduce((max, fit) => Math.max(max, review.feeling.fitCounts[fit]), 0));
 
   const hasFacts = review.tasks.length > 0 || review.milestones.length > 0 || review.pendingReview.length > 0
     || review.notAdvanced.count > 0 || review.actual.runningRecords.length > 0;
@@ -562,6 +569,27 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
           </div>
           : <>{taskRows}{notAdvanced}</>}
       </section>
+
+      {/* ④ 完成感受：只聚合**未撤回**的完成记录（规格 0007 §6）。
+          没有未撤回记录就整张卡不出现；已撤回的条数只在口径行里说一次。 */}
+      {period !== "day" && review.feeling.countedCount > 0 && <section className="surface-card review-feeling" aria-labelledby="review-feeling-title">
+        <div className="section-heading"><h2 id="review-feeling-title">完成感受</h2><span>{review.feeling.countedCount} 条记录</span></div>
+        <ul className="review-feeling-fits">
+          {COMPLETION_FITS.map((fit) => {
+            const count = review.feeling.fitCounts[fit];
+            return <li key={fit} className={count === 0 ? "review-feeling-fit is-zero" : "review-feeling-fit"}>
+              <span className="review-feeling-label">{COMPLETION_FIT_LABEL[fit]}</span>
+              {/* 零值档不画条，但保留 0 的计数文字：看不见条不等于这项没被统计过。 */}
+              <span className="review-feeling-bar" aria-hidden="true">{count > 0 && <span style={{ width: `${Math.round((count / feelingMax) * 100)}%` }} />}</span>
+              <strong className="review-feeling-count">{count}</strong>
+            </li>;
+          })}
+        </ul>
+        {review.feeling.topTags.length > 0 && <p className="review-feeling-tags">常见标签：{review.feeling.topTags.map((entry) => `${entry.tag} ${entry.count}`).join(" · ")}</p>}
+        <p className="review-feeling-scope">{review.feeling.revertedCount > 0
+          ? `${review.feeling.recordCount} 条完成记录 · 其中 ${review.feeling.revertedCount} 条已撤回（不计入感受）`
+          : `${review.feeling.recordCount} 条完成记录`}</p>
+      </section>}
     </>}
 
     {/* 首屏两个浮层：里程碑的完整列表、待回顾的完整名单。用浮层而不是展开，
@@ -583,7 +611,8 @@ export function ReviewPage({ index, preferences, onPreferences, projectId, onPro
       style={detailMaxHeight ? { maxHeight: detailMaxHeight } : undefined} onClose={closeDetail}>
       <ReviewDetail index={index} review={review} selection={selection} projectId={projectId}
         onClose={closeDetail} onEditTask={onEditTask} onArrangeTask={onArrangeTask} onOpenProject={onOpenProject} onProjectId={onProjectId}
-        onOpenTask={(taskId, trigger) => openDetail({ kind: "task", id: taskId }, trigger)} />
+        onOpenTask={(taskId, trigger) => openDetail({ kind: "task", id: taskId }, trigger)}
+        onLoadCompletionImages={onLoadCompletionImages} onEditCompletion={onEditCompletion} />
     </FloatingPanel>}
   </section>;
 }

@@ -22,10 +22,12 @@ import { SelectField } from "./components/ui/select-field";
 import { WeekdayPicker } from "./components/ui/weekday-picker";
 import { TimeField } from "./components/ui/time-picker";
 import { SettingsChoice, SettingsRow, SettingsSection, SettingsToggleRow } from "./components/settings/settings-ui";
+import { CompletionBubble, type CompletionTarget } from "./components/completion/completion-bubble";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
 import { ProjectRail } from "./components/projects/project-rail";
 import { parseCourseText, type CourseTaskDraft } from "./lib/courseImport";
+import { COMPLETION_FIT_LABEL, isCompletionPromptTarget } from "./lib/completion";
 import { buildProjectRail } from "./lib/projectRail";
 import { extractBvid } from "./lib/bilibili";
 import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
@@ -37,7 +39,8 @@ import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./li
 import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
 import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel } from "./lib/calendarSummary";
 import {
-  createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type ExecutionRecord, type ExecutionSession,
+  createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type CompletionImage, type CompletionRecord, type CompletionRecordSummary,
+  type ExecutionRecord, type ExecutionSession,
   type HabitOccurrence, type NativeApi, type ProgressEvent, type Project, type ProjectMilestone, type RecurringHabit, type Task, type TimeBlock, type WorkspaceSnapshot,
 } from "./lib/native";
 import {
@@ -53,6 +56,16 @@ interface AppProps { settings?: SettingsRepository; native?: NativeApi }
 interface CalendarDropIntent { date: string; startMinute: number; taskId: string; sessionId: string; mode: CalendarDropMode; targetSessionId: string }
 /** 从截止事项页跳到项目页时要定位（或续排）的目标。 */
 interface ProjectFocusRequest { projectId: string; milestoneId: string | null; action: "locate" | "continue" }
+/**
+ * 完成气泡关闭后留在底部的一次性提示（规格 0007 §3.2 的提示链）。
+ * 每条都带自己的动作：保存后可以撤回、撤回后可以重新完成、跳过填写后可以补写。
+ */
+type CompletionNotice =
+  | { kind: "saved"; taskId: string; recordId: string }
+  | { kind: "reverted"; taskId: string; progress: number }
+  | { kind: "skipped"; target: CompletionTarget };
+/** 底部提示的停留时长；悬停或键盘聚焦时暂停，与撤销提示同一套规矩。 */
+const COMPLETION_TOAST_MS = 8_000;
 
 const pages: Array<{ id: PageId; label: string; icon: typeof Home }> = [
   { id: "today", label: "今日", icon: Home },
@@ -118,6 +131,15 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   // 任务编辑气泡的锚点：截止页与回顾页共用同一个气泡与编辑会话，不各造一份表单。
   const [taskEditorAnchor, setTaskEditorAnchor] = useState<{ taskId: string; anchorElement: HTMLElement | null } | null>(null);
   const [taskEditorBusy, setTaskEditorBusy] = useState(false);
+  // 完成记录气泡（规格 0007）：全应用同一时刻只允许一个，所以状态挂在应用壳上，
+  // 由 `updateProgress` 在提交成功后统一开启；各页面只负责交出自己的锚点。
+  const [completionTarget, setCompletionTarget] = useState<CompletionTarget | null>(null);
+  // 气泡期间刚完成的任务行要留在原分组里供锚定；关闭后先淡出再离开活动池。
+  const [leavingTaskId, setLeavingTaskId] = useState<string | null>(null);
+  const [completionNotice, setCompletionNotice] = useState<CompletionNotice | null>(null);
+  const completionToastTimer = useRef<number | null>(null);
+  const completionTargetRef = useRef<CompletionTarget | null>(null);
+  completionTargetRef.current = completionTarget;
   const [projectFocus, setProjectFocus] = useState<ProjectFocusRequest | null>(null);
   const mainRef = useRef<HTMLElement>(null);
   // 稳定索引在快照变更时重建一次（规格 §8）：列表渲染不再逐行扫描全量数组。
@@ -270,6 +292,16 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   }, [clearUndoToastTimer]);
   useEffect(() => clearUndoToastTimer, [clearUndoToastTimer]);
 
+  // 完成记录的底部提示与撤销提示同一套计时规矩：悬停或键盘聚焦时暂停，离开再继续。
+  const clearCompletionToast = useCallback(() => {
+    if (completionToastTimer.current !== null) { window.clearTimeout(completionToastTimer.current); completionToastTimer.current = null; }
+  }, []);
+  const dismissCompletionToastLater = useCallback(() => {
+    clearCompletionToast();
+    completionToastTimer.current = window.setTimeout(() => { completionToastTimer.current = null; setCompletionNotice(null); }, COMPLETION_TOAST_MS);
+  }, [clearCompletionToast]);
+  useEffect(() => clearCompletionToast, [clearCompletionToast]);
+
   const pushUndo = useCallback((operation: UndoOperation) => {
     setUndoStack((items) => [...items.slice(-9), operation]);
     setUndoToastOpen(true);
@@ -318,10 +350,79 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     return task;
   };
 
-  const updateProgress = async (task: Task, toProgress: number) => {
+  const updateProgress = async (task: Task, toProgress: number, anchor: HTMLElement | null = null) => {
     if (task.progress === toProgress) return;
+    const fromProgress = task.progress;
+    // 锚点矩形必须在提交**之前**量：提交会让这一行重排（任务池那行换成完成态），
+    // 之后再 `getBoundingClientRect()` 拿到的是脱离文档流的全 0 矩形，气泡会飞到窗口左上角。
+    const anchorRect = anchor?.getBoundingClientRect() ?? null;
     const event = progressEvent(task, toProgress);
     await commit(() => native.applyProgress(event));
+    // 触发条件与「是否真的弹」分开判：口径同 §3.1，开关只决定打扰与否。
+    if (!isCompletionPromptTarget(task, fromProgress, toProgress)) return;
+    if (!preferences.completionRecordPrompt) return;
+    openCompletion({
+      taskId: task.id,
+      progressEventId: event.id,
+      completedAtUtc: event.occurredAtUtc,
+      progressBefore: fromProgress,
+      record: null,
+      imageCount: 0,
+      anchorElement: anchor,
+      anchorRect,
+    });
+  };
+
+  /**
+   * 打开完成气泡。全应用同一时刻只有一个：气泡开着时另一个任务也到 100%，
+   * 后者不叠开，只留在「今日完成」里等补写（规格 §3.1）。
+   */
+  const openCompletion = (target: CompletionTarget) => {
+    if (completionTargetRef.current) return;
+    completionTargetRef.current = target;
+    clearCompletionToast();
+    setCompletionTarget(target);
+  };
+
+  /**
+   * 关闭气泡：任务行先以 160ms 淡出离开活动池，再留下底部提示。
+   * `notice` 为跳过填写时的「补写」入口；保存与撤回各自带自己的动作。
+   */
+  const closeCompletion = (notice?: CompletionNotice) => {
+    const target = completionTargetRef.current;
+    completionTargetRef.current = null;
+    setCompletionTarget(null);
+    if (!target) return;
+    setLeavingTaskId(target.taskId);
+    window.setTimeout(() => setLeavingTaskId((current) => (current === target.taskId ? null : current)), 160);
+    if (notice) { setCompletionNotice(notice); dismissCompletionToastLater(); }
+  };
+
+  const saveCompletion = async (target: CompletionTarget, record: CompletionRecord, images: CompletionImage[]) => {
+    await commit(() => (target.record ? native.updateCompletion(record, images) : native.recordCompletion(record, images)));
+  };
+
+  /** 事后入口：从「今日完成」的一行打开补写／编辑（规格 §3.3）。 */
+  const openCompletionForEvent = (task: Task, event: ProgressEvent, record: CompletionRecordSummary | null, anchor: HTMLElement | null) => {
+    openCompletion({ taskId: task.id, progressEventId: event.id, completedAtUtc: event.occurredAtUtc, progressBefore: event.fromProgress, record, imageCount: record?.imageCount ?? 0, anchorElement: anchor, anchorRect: anchor?.getBoundingClientRect() ?? null });
+  };
+
+  /** 回顾明细里的「编辑」：记录自带它引用的完成事实，不需要再回查进度事件。 */
+  const openCompletionForRecord = (record: CompletionRecordSummary, anchor: HTMLElement | null) => {
+    openCompletion({ taskId: record.taskId, progressEventId: record.progressEventId, completedAtUtc: record.completedAtUtc, progressBefore: record.progressBefore, record, imageCount: record.imageCount, anchorElement: anchor, anchorRect: anchor?.getBoundingClientRect() ?? null });
+  };
+
+  /**
+   * 撤回完成：原子地写一次回退进度事件并把记录标记为已撤回。
+   * 还没保存过的填写只回退进度 —— 没有记录可标记，也就没有内容要删。
+   */
+  const revertCompletion = async (target: CompletionTarget) => {
+    const event: ProgressEvent = {
+      id: crypto.randomUUID(), taskId: target.taskId, fromProgress: 100, toProgress: target.progressBefore,
+      occurredAtUtc: new Date().toISOString(),
+    };
+    await commit(() => (target.record ? native.revertCompletion(target.record.id, event) : native.applyProgress(event)));
+    closeCompletion({ kind: "reverted", taskId: target.taskId, progress: target.progressBefore });
   };
 
   const scheduleTask = async (task: Task, localDate: string, startLocal: string) => {
@@ -400,6 +501,14 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   if (loading) return <main className="loading-screen" aria-busy="true"><span className="spinner" aria-hidden="true" />正在恢复本地计划…</main>;
 
   const activeTasks = workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit");
+  /**
+   * 任务池的可见列表：气泡打开期间刚完成的那一行**保留在原分组里**供锚定，关闭后
+   * 再跟随淡出留 160ms。保留的是完整的排序过滤结果，所以位置与分组都不变。
+   */
+  const heldCompletionIds = new Set([completionTarget?.taskId, leavingTaskId].filter((id): id is string => Boolean(id)));
+  const poolTasks = heldCompletionIds.size === 0 ? activeTasks
+    : workspace.tasks.filter((task) => task.kind !== "habit" && (task.status === "active" || heldCompletionIds.has(task.id)));
+  const heldTasks = workspace.tasks.filter((task) => heldCompletionIds.has(task.id));
   const running = workspace.executionRecords.find((record) => !record.actualEndUtc) ?? null;
   const hasTaskPool = page === "today" || page === "calendar";
   const poolUsesOverlay = narrowWindow && !(page === "calendar" && preferences.calendarView === "day");
@@ -460,7 +569,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {loadError && <div className="error-banner" role="alert"><CircleAlert size={18} />读取失败：{loadError}<Button variant="secondary" onClick={() => void reload()}>重试</Button></div>}
         {undoStack.length > 0 && undoToastOpen && <button className="undo-toast" onClick={() => void undo()} onMouseEnter={clearUndoToastTimer} onMouseLeave={dismissUndoToastLater} onFocus={clearUndoToastTimer} onBlur={dismissUndoToastLater}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
-        {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} />}
+        {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} onRecordCompletion={openCompletionForEvent} />}
         {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
         {page === "deadlines" && <DeadlinesPage index={workspaceIndex} filter={deadlinesView.filter} onFilterChange={(filter) => setDeadlinesView((current) => ({ ...current, filter }))}
           focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
@@ -482,7 +591,9 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           onGoToday={() => updatePreferences({ lastPage: "today" })}
           onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })}
           onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
-          onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }} />}
+          onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
+          onLoadCompletionImages={(recordId) => native.getCompletionImages(recordId)}
+          onEditCompletion={openCompletionForRecord} />}
         {page === "data" && <DataPage native={native} />}
         {page === "appearance" && <SettingsPage preferences={preferences} onChange={updatePreferences} native={native} />}
         {hasTaskPool && !showTaskPool && <button className="task-pool-toggle" aria-label="打开任务池" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(true) : setTaskPoolOpen(true)}><Inbox size={18} /><span>任务池</span></button>}
@@ -496,7 +607,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
             onKeyDown={nudgePoolWidth} onPointerDown={startPoolResize} onPointerMove={movePoolResize} onPointerUp={endPoolResize} />
         </section>
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} />
-        <TaskPool index={workspaceIndex} tasks={activeTasks} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
+        <TaskPool index={workspaceIndex} tasks={poolTasks} heldTasks={heldTasks} leavingTaskId={leavingTaskId} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
           onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
         </>
       )}
@@ -504,9 +615,65 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
       {finishing && <FinishDialog record={finishing} task={workspace.tasks.find((task) => task.id === finishing.taskId)!}
         onClose={() => setFinishing(null)} onSubmit={async (progress, note, actualEndUtc) => {
           const task = workspace.tasks.find((item) => item.id === finishing.taskId)!;
-          await commit(() => native.finishExecution(finishing.id, actualEndUtc, note, progressEvent(task, progress)));
+          const fromProgress = task.progress;
+          const event = progressEvent(task, progress);
+          await commit(() => native.finishExecution(finishing.id, actualEndUtc, note, event));
           setFinishing(null);
+          // 模态对话框不能与气泡同帧叠开：先关掉对话框，再把气泡锚到今日页对应行（§3.1）。
+          if (!isCompletionPromptTarget(task, fromProgress, progress) || !preferences.completionRecordPrompt) return;
+          const card = document.querySelector<HTMLElement>(".now-card");
+          openCompletion({ taskId: task.id, progressEventId: event.id, completedAtUtc: event.occurredAtUtc, progressBefore: fromProgress, record: null, imageCount: 0, anchorElement: card, anchorRect: card?.getBoundingClientRect() ?? null });
         }} />}
+      {/* 完成记录气泡：任务池、项目、今日与日历都汇到这一个实例，同一时刻只开一个。 */}
+      {completionTarget && (() => {
+        const task = workspaceIndex.tasksById.get(completionTarget.taskId);
+        return task ? <CompletionBubble
+          task={task}
+          target={completionTarget}
+          onDismiss={(skipped) => closeCompletion(skipped ? { kind: "skipped", target: completionTarget } : undefined)}
+          onSave={(record, images) => saveCompletion(completionTarget, record, images)}
+          onSaved={(record) => closeCompletion({ kind: "saved", taskId: record.taskId, recordId: record.id })}
+          onRevert={() => revertCompletion(completionTarget)}
+          onOpenExisting={() => {
+            // 后端报告这次完成已有记录：把内容读回来转成编辑态，不弹错误横幅（§4.3）。
+            const existing = workspaceRef.current.completionRecords.find((item) => item.progressEventId === completionTarget.progressEventId) ?? null;
+            setCompletionTarget({ ...completionTarget, record: existing, imageCount: existing?.imageCount ?? 0 });
+          }}
+        /> : null;
+      })()}
+      {completionNotice && (() => {
+        const noticeTask = completionNotice.kind === "skipped"
+          ? workspaceIndex.tasksById.get(completionNotice.target.taskId) ?? null
+          : workspaceIndex.tasksById.get(completionNotice.taskId) ?? null;
+        const label = completionNotice.kind === "saved" ? "完成记录已保存"
+          : completionNotice.kind === "reverted" ? `已撤回完成，进度回到 ${completionNotice.progress}%`
+            : `${noticeTask?.title ?? "这项完成"}还没记录`;
+        // 容器是 `role="status"` 的活区（保存／撤回的结果要读出来），动作是里面那个真按钮。
+        // 把两者合成一个 `<button role="status">` 会同时踩中 axe 的两条：按钮不许改写成状态域，
+        // 而改写之后它的可访问名不再来自内容 —— 读屏就拿到一个没有名字的按钮。
+        return <div className="completion-toast" role="status"
+          onMouseEnter={clearCompletionToast} onMouseLeave={dismissCompletionToastLater} onFocus={clearCompletionToast} onBlur={dismissCompletionToastLater}>
+          {completionNotice.kind === "reverted" ? <RotateCcw size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
+          <span>{label}</span>
+          <button type="button" className="completion-toast-action" onClick={(event) => {
+            const anchor = event.currentTarget;
+            clearCompletionToast();
+            setCompletionNotice(null);
+            if (completionNotice.kind === "saved") {
+              const record = workspaceRef.current.completionRecords.find((item) => item.id === completionNotice.recordId);
+              if (record) void revertCompletion({ taskId: record.taskId, progressEventId: record.progressEventId, completedAtUtc: record.completedAtUtc, progressBefore: record.progressBefore, record, imageCount: record.imageCount, anchorElement: anchor, anchorRect: anchor.getBoundingClientRect() });
+              return;
+            }
+            if (completionNotice.kind === "reverted") {
+              if (noticeTask) void updateProgress(noticeTask, 100, anchor);
+              return;
+            }
+            openCompletion({ ...completionNotice.target, anchorElement: anchor, anchorRect: anchor.getBoundingClientRect() });
+          }}>
+            {completionNotice.kind === "saved" ? "撤回完成" : completionNotice.kind === "reverted" ? "重新完成" : "补写"}
+          </button>
+        </div>;
+      })()}
       {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
       {/* 截止页与回顾页共用的任务编辑气泡：复用与任务池完全相同的编辑会话，不复制表单。 */}
       {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
@@ -520,14 +687,15 @@ function PageHeader({ eyebrow, title, actions }: { eyebrow: string; title: strin
   return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div><div className="header-actions">{actions}</div></header>;
 }
 
-function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview }: {
+function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview, onRecordCompletion }: {
   /** 共享稳定索引；「待回顾」判断与任务查找都走同一处，不另写一份。 */
   index: WorkspaceIndex;
   workspace: WorkspaceSnapshot; preferences: AppSettings; running: ExecutionRecord | null;
   onStart: (session: ExecutionSession) => Promise<void>; onFinish: (record: ExecutionRecord) => void;
-  onProgress: (task: Task, value: number) => Promise<void>; onGoCalendar: (session?: ExecutionSession) => void;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onGoCalendar: (session?: ExecutionSession) => void;
   onSkipReview: (session: ExecutionSession) => Promise<void>;
   onDelay: (session: ExecutionSession) => Promise<void>; onSkip: (session: ExecutionSession) => Promise<void>;
+  onRecordCompletion: (task: Task, event: ProgressEvent, record: CompletionRecordSummary | null, anchor: HTMLElement) => void;
 }) {
   const now = useCurrentTime();
   const today = toLocalDate(now);
@@ -544,14 +712,19 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
   const missedIds = new Set(missed.map((session) => session.id));
   const todayEvents = workspace.progressEvents.filter((event) => toLocalDate(new Date(event.occurredAtUtc)) === today);
   const completedToday = (() => {
-    const seen = new Map<string, { task: Task; at: string }>();
+    // 每个任务只看**最新一次**「到 100」：撤回再完成时，站着的事实是后一次。
+    const latest = new Map<string, { task: Task; event: ProgressEvent }>();
     for (const event of todayEvents) {
       if (event.toProgress !== 100) continue;
       const task = index.tasksById.get(event.taskId);
-      const existing = seen.get(event.taskId);
-      if (task && (!existing || event.occurredAtUtc < existing.at)) seen.set(event.taskId, { task, at: event.occurredAtUtc });
+      // 已撤回的任务回到活动池，不在「今日完成」里冒充一次完成（规格 §3.3）。
+      if (!task || task.kind === "habit" || task.progress !== 100) continue;
+      const existing = latest.get(event.taskId);
+      if (!existing || event.occurredAtUtc > existing.event.occurredAtUtc) latest.set(event.taskId, { task, event });
     }
-    return [...seen.values()].sort((left, right) => right.at.localeCompare(left.at));
+    return [...latest.values()]
+      .map((entry) => ({ ...entry, record: workspace.completionRecords.find((record) => record.progressEventId === entry.event.id) ?? null }))
+      .sort((left, right) => right.event.occurredAtUtc.localeCompare(left.event.occurredAtUtc));
   })();
   const runningTask = running ? index.tasksById.get(running.taskId) ?? null : null;
   const runningSession = running?.sessionId ? index.sessionsById.get(running.sessionId) ?? null : null;
@@ -658,7 +831,11 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
         })}</ol> : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
         {completedToday.length > 0 && <details className="today-completed">
           <summary><Check size={15} aria-hidden="true" /><span>今日完成 {completedToday.length} 项</span><ChevronDown size={15} aria-hidden="true" /></summary>
-          <div className="today-completed-list">{completedToday.map(({ task, at }) => <div key={task.id} className="today-completed-row"><Check size={13} aria-hidden="true" /><strong title={task.title}>{task.title}</strong><span>完成于 {formatClock(at)}</span></div>)}</div>
+          <div className="today-completed-list">{completedToday.map(({ task, event: completionEvent, record }) => <button type="button" key={task.id} className="today-completed-row" onClick={(click) => onRecordCompletion(task, completionEvent, record, click.currentTarget)}>
+            <Check size={13} aria-hidden="true" />
+            <strong title={task.title}>{task.title}</strong>
+            <span>{completionRowLabel(completionEvent, record)}</span>
+          </button>)}</div>
         </details>}
       </section>
       {due.length > 0 && <aside className="surface-card today-due" aria-labelledby="today-due-title">
@@ -683,9 +860,9 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
  * `sessionsById`。此前这里对每一行都 `sessions.some/filter` 扫一遍 3,000 条时段
  * （1,000 任务 → 每次渲染约三百万次比较），是规格 §8 点名要消除的模式。
  */
-function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
-  index: WorkspaceIndex; tasks: Task[]; habits: RecurringHabit[]; occurrences: HabitOccurrence[]; autoScheduleAssist: boolean;
-  onCreate: (title: string) => Promise<Task>; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number) => Promise<void>;
+function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences, autoScheduleAssist, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
+  index: WorkspaceIndex; tasks: Task[]; heldTasks: Task[]; leavingTaskId: string | null; habits: RecurringHabit[]; occurrences: HabitOccurrence[]; autoScheduleAssist: boolean;
+  onCreate: (title: string) => Promise<Task>; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>;
   onCancelSession: (session: ExecutionSession) => Promise<void>; onClose: () => void; onAutoSchedule: () => void;
   onCreateHabit: (habit: Omit<RecurringHabit, "id" | "taskId" | "status">) => Promise<void>;
   onScheduleHabit: (habit: RecurringHabit, date: string) => Promise<void>; onSkipHabit: (habit: RecurringHabit, date: string) => Promise<void>;
@@ -759,7 +936,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
   const toggleProject = (key: string) => setOpenProject(activeProjectKey === key ? null : key);
   const selectedFilterLabel = filter === "unscheduled" ? "未安排" : filter === "scheduled" ? "已安排" : "全部";
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
-  const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} progressOpen={progressEdit?.taskId === task.id} onProgressEdit={(next, anchor) => setProgressEdit({ taskId: next.id, anchor })} onEdit={toggleEditor} />;
+  const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} completed={task.status === "completed"} leaving={leavingTaskId === task.id} progressOpen={progressEdit?.taskId === task.id} onProgressEdit={(next, anchor) => setProgressEdit({ taskId: next.id, anchor })} onEdit={toggleEditor} />;
   return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
     const id = event.dataTransfer.getData("application/x-daymark-session"); const session = index.sessionsById.get(id); if (session) void onCancelSession(session);
   }}>
@@ -835,7 +1012,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
     </FloatingPanel>}
 
     {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} closeOnOutsideClick onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); setHabitsOpen(true); }} onPhase={setHabitBusy} /></FloatingPanel>}
-    {progressEdit && progressTask && <FloatingPanel className="pool-progress-panel" label={`调整进度 ${progressTask.title}`} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)}><PoolProgressEditor task={progressTask} onCommit={onProgress} onClose={() => setProgressEdit(null)} /></FloatingPanel>}
+    {progressEdit && progressTask && <FloatingPanel className="pool-progress-panel" label={`调整进度 ${progressTask.title}`} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)}><PoolProgressEditor task={progressTask} anchor={progressEdit.anchor} onCommit={onProgress} onClose={() => setProgressEdit(null)} /></FloatingPanel>}
     {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setEditing(null)}><div className="task-editor-fields">
       <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={index.workspace.projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
@@ -848,8 +1025,11 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
  *
  * 项目优先的第二层：标题、一个最近的时间信号和完成度收在一行；百分比本身是入口，
  * 点开后弹出锚定气泡。整行保持 44px 命中区，拖动仍从行本身开始。
+ *
+ * `completed` 只出现在完成记录气泡打开期间：这一行留在原分组里当锚点，显示完成态；
+ * 气泡关闭后 `leaving` 让它淡出 160ms 再离开活动池（规格 0007 §3.1）。
  */
-function TaskPoolRow({ task, sessions, progressOpen, onProgressEdit, onEdit }: { task: Task; sessions: ExecutionSession[]; progressOpen: boolean; onProgressEdit: (task: Task, anchor: HTMLElement) => void; onEdit: (task: Task, anchor: HTMLElement) => void }) {
+function TaskPoolRow({ task, sessions, completed = false, leaving = false, progressOpen, onProgressEdit, onEdit }: { task: Task; sessions: ExecutionSession[]; completed?: boolean; leaving?: boolean; progressOpen: boolean; onProgressEdit: (task: Task, anchor: HTMLElement) => void; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const today = toLocalDate(new Date());
   const upcoming = sessions.filter(hasFutureSchedule).sort(compareSessions);
   const next = upcoming[0] ?? null;
@@ -866,25 +1046,30 @@ function TaskPoolRow({ task, sessions, progressOpen, onProgressEdit, onEdit }: {
     ? `截止：${formatShortDate(task.deadlineLocal)}${next ? ` · 下次：${formatShortDate(next.localDate)} ${next.startLocal}` : ""}`
     : next ? `下次安排：${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : "尚未安排";
   const hint = `拖动安排 · 完成度 ${task.progress}%${task.deadlineLocal ? ` · 截止 ${formatShortDate(task.deadlineLocal)}` : ""}${next ? ` · 下次 ${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : ""}`;
-  return <article className="task-card pool-task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
+  const className = ["task-card", "pool-task-row", completed ? "is-completed" : "", leaving ? "is-leaving" : ""].filter(Boolean).join(" ");
+  return <article className={className} tabIndex={0} draggable={!completed} title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
     <div className="pool-task-main">
-      <strong className="pool-task-title" title={task.title}>{task.title}</strong>
+      <span className="pool-task-title-row">
+        {completed && <span className="pool-task-check" aria-hidden="true"><Check size={13} /></span>}
+        <strong className="pool-task-title" title={task.title}>{task.title}</strong>
+      </span>
       <div className="pool-task-meta">
-        {when && <span className={urgentDeadline ? "pool-task-when is-due" : "pool-task-when"} title={whenTitle}>{when}</span>}
+        {/* 完成态不再重复一遍百分比：右侧那一格已经是 100%，勾 + 标题 + 一个数字就够。 */}
+        {!completed && when && <span className={urgentDeadline ? "pool-task-when is-due" : "pool-task-when"} title={whenTitle}>{when}</span>}
         <span className="pool-task-side">
           <button type="button" className="pool-task-progress" aria-haspopup="dialog" aria-expanded={progressOpen} aria-label={`调整进度 ${task.title}，当前 ${task.progress}%`} title="调整完成度" onClick={(event) => onProgressEdit(task, event.currentTarget)}>{task.progress}%</button>
         </span>
       </div>
     </div>
-    <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
+    {!completed && <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>}
   </article>;
 }
 
 /** 任务池的进度气泡：当前值和常用值同一行；滑块松手后写入，任务名只在无障碍名里出现。 */
-function PoolProgressEditor({ task, onCommit, onClose }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; onClose: () => void }) {
+function PoolProgressEditor({ task, anchor, onCommit, onClose }: { task: Task; anchor: HTMLElement | null; onCommit: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onClose: () => void }) {
   const [value, setValue] = useState(task.progress);
   useEffect(() => setValue(task.progress), [task.progress]);
-  const commit = (next: number) => { if (next !== task.progress) void onCommit(task, next); };
+  const commit = (next: number) => { if (next !== task.progress) void onCommit(task, next, anchor); };
   const choose = (next: number) => { setValue(next); commit(next); };
   return <div className="pool-progress-editor">
     <div className="pool-progress-head">
@@ -912,7 +1097,7 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
-  onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
 }) {
   const anchor = preferences.calendarAnchors[preferences.calendarView] ?? toLocalDate(new Date());
@@ -1065,7 +1250,7 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
-  onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
 }) {
   const axisRef = useRef<HTMLDivElement>(null); const pendingScrollOffset = useRef<number | null>(null); const shifting = useRef(false);
@@ -1121,7 +1306,7 @@ function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessio
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
-  onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void; onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
 }) {
   const [expandedGapKeys, setExpandedGapKeys] = useState<Set<string>>(() => new Set());
@@ -1233,7 +1418,7 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
   onPlace: (intent: CalendarDropIntent) => Promise<void>;
-  onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
   onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
   onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
@@ -1556,7 +1741,7 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
 function CalendarSession({ style, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
   style?: CSSProperties; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
   session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; /** 只传该时段自己的执行记录，避免每行扫描全量历史。 */ sessionRecords: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
-  onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
+  onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
   overlay?: ReactNode;
 }) {
@@ -1840,7 +2025,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
   workspace: WorkspaceSnapshot; index: WorkspaceIndex; onCreate: (project: Project, tasks: Task[]) => Promise<void>;
   onUpdateProject: (project: Project) => Promise<void>;
   onCreateMilestone: (milestone: ProjectMilestone) => Promise<void>; onUpdateMilestone: (milestone: ProjectMilestone) => Promise<void>; onDeleteMilestone: (milestone: ProjectMilestone) => Promise<void>;
-  onProgress: (task: Task, value: number) => Promise<void>; onFetchBilibili: (bvid: string) => Promise<BilibiliVideo>;
+  onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onFetchBilibili: (bvid: string) => Promise<BilibiliVideo>;
 }) {
   const today = toLocalDate(new Date());
   const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
@@ -2232,7 +2417,7 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
 
     {progressEdit && (() => {
       const task = index.tasksById.get(progressEdit.taskId);
-      return task ? <FloatingPanel kind="action" label={"调整进度 " + task.title} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)} className="project-progress-panel"><h2>调整进度</h2><p>{task.title}</p><ProgressControl task={task} showComplete onCommit={async (next, value) => { await onProgress(next, value); setProgressEdit(null); }} /></FloatingPanel> : null;
+      return task ? <FloatingPanel kind="action" label={"调整进度 " + task.title} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)} className="project-progress-panel"><h2>调整进度</h2><p>{task.title}</p><ProgressControl task={task} showComplete onCommit={async (next, value) => { setProgressEdit(null); await onProgress(next, value, progressEdit.anchor); }} /></FloatingPanel> : null;
     })()}
 
     {milestoneDelete && <FloatingPanel kind="confirm" label={"删除里程碑 " + milestoneDelete.milestone.title} anchorElement={milestoneDelete.anchor} closeOnOutsideClick onClose={() => setMilestoneDelete(null)} className="project-confirm-bubble">
@@ -2503,6 +2688,7 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
         <NumberField id="settings-grace" label="开始宽限期" suffix="分钟" min={CHECK_IN_GRACE_MIN} max={CHECK_IN_GRACE_MAX} step={1} presets={CHECK_IN_GRACE_MINUTES_PRESETS} disabled={!preferences.checkInEnabled} value={preferences.checkInGraceMinutes} onChange={(value) => { if (value !== null) onChange({ checkInGraceMinutes: value }); }} />
       </SettingsRow>
       <SettingsToggleRow label="错过后显示挽救提示" note={preferences.checkInEnabled ? "只出现一次，提供开始、延后、改期和跳过。" : "开启开始／结束记录后生效，当前保留你的偏好。"} checked={preferences.rescuePromptsEnabled} dependent muted={!preferences.checkInEnabled} modified={changed("rescuePromptsEnabled")} onReset={() => onChange({ rescuePromptsEnabled: DEFAULT_SETTINGS.rescuePromptsEnabled })} onChange={(checked) => onChange({ rescuePromptsEnabled: checked })} />
+      <SettingsToggleRow label="完成后询问记录" note="关闭后完成任务不再弹出记录气泡；仍可在「今日完成」和回顾明细里补写。" checked={preferences.completionRecordPrompt} modified={changed("completionRecordPrompt")} onReset={() => onChange({ completionRecordPrompt: DEFAULT_SETTINGS.completionRecordPrompt })} onChange={(checked) => onChange({ completionRecordPrompt: checked })} />
       <SettingsToggleRow label="执行提醒" note="提醒只定位到任务，不会自动开始。" checked={preferences.remindersEnabled} modified={changed("remindersEnabled")} onReset={() => onChange({ remindersEnabled: DEFAULT_SETTINGS.remindersEnabled })} onChange={(checked) => onChange({ remindersEnabled: checked })} />
       <SettingsRow label="提前分钟数" note="在执行时段开始前多久发出提醒。" htmlFor="settings-lead" dependent muted={!preferences.remindersEnabled} modified={changed("reminderLeadMinutes")} onReset={() => onChange({ reminderLeadMinutes: DEFAULT_SETTINGS.reminderLeadMinutes })}>
         <NumberField id="settings-lead" label="提前分钟数" suffix="分钟" min={0} max={120} step={5} disabled={!preferences.remindersEnabled} value={preferences.reminderLeadMinutes} onChange={(value) => { if (value !== null) onChange({ reminderLeadMinutes: value }); }} />
@@ -2580,11 +2766,12 @@ function ConfirmDialog({ id, children, busy, onClose, className, labelledBy }: {
 }
 
 /** 任务行内进度：悬浮或聚焦时出现把手，拖动实时预览，松手再写库。 */
-function InlineTaskProgress({ task, onCommit, onOpen }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; onOpen: (anchor: HTMLElement) => void }) {
+function InlineTaskProgress({ task, onCommit, onOpen }: { task: Task; onCommit: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onOpen: (anchor: HTMLElement) => void }) {
   const [value, setValue] = useState(task.progress);
+  const root = useRef<HTMLDivElement>(null);
   useEffect(() => setValue(task.progress), [task.progress]);
-  const commit = () => { if (value !== task.progress) void onCommit(task, value); };
-  return <div className="project-task-progress">
+  const commit = () => { if (value !== task.progress) void onCommit(task, value, root.current); };
+  return <div ref={root} className="project-task-progress">
     <span className="project-task-slider">
       <span className="project-task-track" aria-hidden="true">
         <span className="project-task-fill" style={{ width: value + "%" }} />
@@ -2598,11 +2785,13 @@ function InlineTaskProgress({ task, onCommit, onOpen }: { task: Task; onCommit: 
   </div>;
 }
 
-function ProgressControl({ task, onCommit, showComplete = false }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; showComplete?: boolean }) {
+function ProgressControl({ task, onCommit, showComplete = false }: { task: Task; onCommit: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; showComplete?: boolean }) {
   const [value, setValue] = useState(task.progress); useEffect(() => setValue(task.progress), [task.progress]);
-  const commit = () => { if (value !== task.progress) void onCommit(task, value); };
-  const markComplete = () => { setValue(100); if (task.progress !== 100) void onCommit(task, 100); };
-  return <div className={showComplete ? "progress-control has-complete" : "progress-control"}><RangeBar compact label={`${task.title} 完成度`} min={0} max={100} step={5} value={value} onChange={setValue} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
+  /** 锚点就是进度控件自己：完成气泡开在它旁边，而不是开在整张卡片中央。 */
+  const root = useRef<HTMLDivElement>(null);
+  const commit = () => { if (value !== task.progress) void onCommit(task, value, root.current); };
+  const markComplete = () => { setValue(100); if (task.progress !== 100) void onCommit(task, 100, root.current); };
+  return <div ref={root} className={showComplete ? "progress-control has-complete" : "progress-control"}><RangeBar compact label={`${task.title} 完成度`} min={0} max={100} step={5} value={value} onChange={setValue} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
 }
 
 function useCurrentTime() {
@@ -2707,6 +2896,18 @@ function formatMonth(date: string) { return new Intl.DateTimeFormat("zh-CN", { y
 function formatDateTimeLong(value: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 function formatClock(iso: string) { return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
 function taskTitle(workspace: WorkspaceSnapshot, taskId: string) { return workspace.tasks.find((task) => task.id === taskId)?.title ?? "未知任务"; }
+/**
+ * 「今日完成」一行的副行：完成时间在前，已记录的适应程度／张数跟在后面；
+ * 没记就直说「未填写完成记录」——它同时是补写入口的提示（规格 §3.3）。
+ */
+function completionRowLabel(event: ProgressEvent, record: CompletionRecordSummary | null) {
+  const at = `完成于 ${formatClock(event.occurredAtUtc)}`;
+  if (!record) return `${at} · 未填写完成记录`;
+  const parts = [at];
+  if (record.fit) parts.push(COMPLETION_FIT_LABEL[record.fit]);
+  if (record.imageCount > 0) parts.push(`${record.imageCount} 张图片`);
+  return parts.join(" · ");
+}
 function isEditable(target: EventTarget | null) { return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)); }
 function applyDisplayPreferences(settings: AppSettings, systemDark: boolean, systemReduced: boolean) { const root = document.documentElement; root.dataset.theme = settings.appearance === "system" ? (systemDark ? "dark" : "light") : settings.appearance; root.dataset.motion = settings.motion === "system" ? (systemReduced ? "reduce" : "full") : settings.motion; root.dataset.scale = settings.scale >= 150 ? "large" : "normal"; root.style.fontSize = `${settings.scale}%`; }
 function readError(error: unknown) { return error instanceof Error ? error.message : String(error); }
