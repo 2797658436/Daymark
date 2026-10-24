@@ -19,6 +19,10 @@ async function openImportMenu(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "导入" }));
 }
 
+async function openTaskPoolMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "任务池更多操作" }));
+}
+
 const tauriEventCallbacks = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, callback: (event: { payload: unknown }) => void) => {
@@ -1073,6 +1077,7 @@ describe("phase 1 manual alpha", () => {
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "准备候选版", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 45, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
     const user = userEvent.setup(); const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     expect(screen.getByRole("dialog", { name: "自动排程 Lite" })).toHaveTextContent("准备候选版");
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
@@ -1130,8 +1135,10 @@ describe("phase 1 manual alpha", () => {
   it("creates a daily habit and schedules today's independent occurrence", async () => {
     const user = userEvent.setup(); const native = createNativeApi();
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /新建重复习惯/ }));
-    await user.type(screen.getByRole("textbox", { name: "习惯名称" }), "拉伸");
+    const habitDialog = await screen.findByRole("dialog", { name: "新建重复习惯" });
+    await user.type(within(habitDialog).getByRole("textbox", { name: "习惯名称" }), "拉伸");
     await user.click(screen.getByRole("button", { name: "创建习惯" }));
     await waitFor(() => expect(native.createRecurringHabit).toHaveBeenCalledOnce());
     await user.click(await screen.findByRole("button", { name: "安排今天" }));
@@ -1684,6 +1691,7 @@ describe("phase 1 manual alpha", () => {
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     const dialog = await screen.findByRole("dialog", { name: "自动排程 Lite" });
     const item = await within(dialog).findByText("写大纲");
@@ -1711,6 +1719,7 @@ describe("phase 1 manual alpha", () => {
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     const dialog = await screen.findByRole("dialog", { name: "自动排程 Lite" });
     expect((await within(dialog).findByText("写大纲")).closest("label")).toHaveTextContent("当前 7 天暂时放不下");
@@ -1721,6 +1730,7 @@ describe("phase 1 manual alpha", () => {
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "准备候选版", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 45, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
     const user = userEvent.setup(); const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
     await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
@@ -1738,6 +1748,7 @@ describe("phase 1 manual alpha", () => {
       const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "准备候选版", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 45, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
       const native = createNativeApi(initial);
       render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+      await openTaskPoolMenu(user);
       await user.click(await screen.findByRole("button", { name: /自动排程/ }));
       await user.click(screen.getByRole("button", { name: "生成排程草案" }));
       await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
@@ -1906,6 +1917,7 @@ describe("phase 1 manual alpha", () => {
     };
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime }); const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
     expect(screen.getByRole("heading", { name: "确认排程草案" })).toBeVisible();
@@ -1916,29 +1928,98 @@ describe("phase 1 manual alpha", () => {
     vi.useRealTimers();
   });
 
-  it("collapses project groups in the task pool and reveals the next unfinished task", async () => {
+  it("keeps one project open at a time in the task pool", async () => {
     const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
-      projects: [{ id: "project-1", title: "四级英语单词", deadlineLocal: null }],
+      projects: [
+        { id: "project-1", title: "四级英语单词", deadlineLocal: null },
+        { id: "project-2", title: "写作练习", deadlineLocal: null },
+      ],
       tasks: [
         { id: "task-a", projectId: "project-1", title: "使用说明", progress: 100, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" },
         { id: "task-b", projectId: "project-1", title: "视频配套书籍在哪？", progress: 50, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 1, kind: "task" },
         { id: "task-c", projectId: "project-1", title: "Unit1 Lesson 1", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 2, kind: "task" },
+        { id: "task-d", projectId: "project-2", title: "每日一句", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 3, kind: "task" },
       ],
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
-    const header = await screen.findByRole("button", { name: /四级英语单词/ });
-    expect(header).toHaveAttribute("aria-expanded", "false");
-    // 默认折叠：只显示第一个未完成任务
+    const first = await screen.findByRole("button", { name: /四级英语单词/ });
+    const second = screen.getByRole("button", { name: /写作练习/ });
+    // 默认展开第一个小项目，其他项目只显示总览行。
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    expect(first).toHaveTextContent("3 项");
+    expect(second).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("视频配套书籍在哪？")).toBeVisible();
-    expect(screen.queryByText("Unit1 Lesson 1")).not.toBeInTheDocument();
-    expect(screen.queryByText("使用说明")).not.toBeInTheDocument();
-    // 点击展开：全部任务可见
+    expect(screen.getByText("使用说明")).toBeVisible();
+    expect(screen.getByText("Unit1 Lesson 1")).toBeVisible();
+    expect(screen.queryByText("每日一句")).not.toBeInTheDocument();
+    // 切换项目：前一个收起，新一个展开。
+    await user.click(second);
+    expect(second).toHaveAttribute("aria-expanded", "true");
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("视频配套书籍在哪？")).not.toBeInTheDocument();
+    expect(screen.getByText("每日一句")).toBeVisible();
+    // 再点一次回到项目总览。
+    await user.click(second);
+    expect(second).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("每日一句")).not.toBeInTheDocument();
+  });
+
+  it("keeps a large project folded until the user opens it", async () => {
+    const user = userEvent.setup();
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-big", title: "大项目", deadlineLocal: null }],
+      tasks: Array.from({ length: 7 }, (_, index) => ({
+        id: `big-${index}`, projectId: "project-big", title: `大项目任务 ${index + 1}`, progress: 0, status: "active" as const,
+        deadlineLocal: null, estimatedMinutes: null, sortOrder: index, kind: "task" as const,
+      })),
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    const header = await screen.findByRole("button", { name: /大项目/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("大项目任务 1")).not.toBeInTheDocument();
     await user.click(header);
     expect(header).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("Unit1 Lesson 1")).toBeVisible();
-    expect(screen.getByText("使用说明")).toBeVisible();
+    expect(screen.getByText("大项目任务 1")).toBeVisible();
+  });
+
+  it("updates task progress from the compact pool row", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-progress", projectId: null, title: "推进任务", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    const slider = await screen.findByRole("slider", { name: "推进任务 完成度" });
+    fireEvent.change(slider, { target: { value: "60" } });
+    fireEvent.keyUp(slider);
+    await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-progress", toProgress: 60 })));
+  });
+
+  it("filters the task pool from the overflow menu", async () => {
+    const user = userEvent.setup();
+    const tomorrow = isoDaysFromNow(1);
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-scheduled", projectId: null, title: "已排任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" },
+        { id: "task-open", projectId: null, title: "未排任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 1, kind: "task" },
+      ],
+      executionSessions: [{ id: "session-1", taskId: "task-scheduled", localDate: tomorrow, endLocalDate: tomorrow, startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    expect(await screen.findByText("已排任务")).toBeVisible();
+    expect(screen.getByText("未排任务")).toBeVisible();
+
+    await openTaskPoolMenu(user);
+    await user.click(within(screen.getByRole("group", { name: "任务池筛选" })).getByRole("button", { name: "未安排" }));
+    expect(screen.queryByRole("dialog", { name: "任务池操作" })).not.toBeInTheDocument();
+    expect(screen.queryByText("已排任务")).not.toBeInTheDocument();
+    expect(screen.getByText("未排任务")).toBeVisible();
+    expect(screen.getByText("只显示未安排")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "显示全部" }));
+    expect(screen.getByText("已排任务")).toBeVisible();
+    expect(screen.getByText("未排任务")).toBeVisible();
   });
 
   it("closes the task editor on an outside click without toggling the project group", async () => {
@@ -2067,6 +2148,7 @@ it("keeps a failed habit draft and prevents duplicate submission while saving", 
   let rejectSave!: (reason: Error) => void;
   const createRecurringHabit = vi.fn(() => new Promise<WorkspaceSnapshot>((_resolve, reject) => { rejectSave = reject; }));
   render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(structuredClone(EMPTY_WORKSPACE), { createRecurringHabit })} />);
+  await openTaskPoolMenu(user);
   await user.click(await screen.findByRole("button", { name: "新建重复习惯" }));
   const dialog = screen.getByRole("dialog", { name: "新建重复习惯" });
   await user.type(within(dialog).getByLabelText("习惯名称"), "每天阅读");

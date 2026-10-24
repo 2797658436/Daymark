@@ -306,6 +306,12 @@ async function measureSearch(page, queries, runs) {
 
 async function measurePopover(page, runs) {
   await page.getByRole("button", { name: "日历", exact: true }).click();
+  await page.waitForSelector("#task-pool");
+  // 项目优先后任务行只在展开的项目里渲染；大项目默认收起，先展开第一个再测编辑气泡。
+  if (await page.locator("#task-pool [data-editor-anchor]").count() === 0) {
+    const firstProject = page.locator("#task-pool .project-group-header").first();
+    if (await firstProject.count()) await firstProject.click();
+  }
   await page.waitForSelector("#task-pool [data-editor-anchor]");
   await page.evaluate(installPerfHelpers);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));

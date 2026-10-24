@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, MoreHorizontal, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -692,13 +692,28 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
 }) {
   const [title, setTitle] = useState("");
   const [filter, setFilter] = useState<"all" | "unscheduled" | "scheduled">("all");
-  const [attentionOpen, setAttentionOpen] = useState(true);
+  // 关注条默认只在 1–2 项时展开；更多时先只给一行摘要，避免把项目列表推出首屏。
+  // 用户手动展开／收起后以这次选择为准（null 表示还没手动动过）。
+  const [attentionOverride, setAttentionOverride] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [pendingHabitRect, setPendingHabitRect] = useState<DOMRect | null>(null);
+  // 项目默认只展开第一个小项目；手动选择后以这次选择为准（undefined = 还没手动动过）。
+  const [openProject, setOpenProject] = useState<string | null | undefined>(undefined);
+  const [habitsOpen, setHabitsOpen] = useState(false);
   // 提交态由 HabitEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
   const [habitBusy, setHabitBusy] = useState(false);
   const [habitAnchor, setHabitAnchor] = useState<DOMRect | null>(null);
+  // 菜单是 action 浮层；先让它卸载，再开习惯编辑器。两层在同一帧换位时，
+  // 新编辑器会被浮层宿主当成非栈顶，保留 pointer-events: none。
+  useEffect(() => {
+    if (!pendingHabitRect || menuAnchor) return;
+    setHabitAnchor(pendingHabitRect);
+    setPendingHabitRect(null);
+  }, [menuAnchor, pendingHabitRect]);
   const today = toLocalDate(useCurrentTime());
   const attention = tasks.filter((task) => task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
+  const attentionOpen = attentionOverride ?? attention.length <= 2;
   // 「需要关注」是 visible 的补集：用 Set 判归属，避免每行 `attention.includes()` 再扫一遍。
   const attentionIds = new Set(attention.map((task) => task.id));
   const visible = tasks.filter((task) => {
@@ -707,20 +722,6 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
     const scheduled = (index.sessionsByTaskId.get(task.id) ?? []).some(hasFutureSchedule);
     return scheduled ? filter === "scheduled" : filter === "unscheduled";
   });
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
-  const [collapsedByUser, setCollapsedByUser] = useState<Set<string>>(() => new Set());
-  const toggleProject = (key: string) => {
-    const isExpanded = expandedProjects.has(key);
-    if (isExpanded) {
-      // 展开 → 收起：完全折叠成一行（用户手动收起）
-      setExpandedProjects((current) => { const next = new Set(current); next.delete(key); return next; });
-      setCollapsedByUser((current) => { const next = new Set(current); next.add(key); return next; });
-    } else {
-      // 折叠 → 展开
-      setExpandedProjects((current) => { const next = new Set(current); next.add(key); return next; });
-      setCollapsedByUser((current) => { const next = new Set(current); next.delete(key); return next; });
-    }
-  };
   const [editing, setEditing] = useState<{ taskId: string; pos: { top: number; left: number } | null } | null>(null);
   /** 编辑任务气泡的提交态；由 TaskEditorFields 上报，用于在提交期间拦住 Esc 与外部点击。 */
   const [taskEditorBusy, setTaskEditorBusy] = useState(false);
@@ -743,62 +744,136 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
   }
   const assistCount = tasks.filter((task) => !(index.sessionsByTaskId.get(task.id) ?? []).some(hasFutureSchedule)).length
     + habits.filter((habit) => habitOccursOn(habit, today) && !occurrences.some((occurrence) => occurrence.habitId === habit.id && occurrence.localDate === today)).length;
+  const dueHabits = habits.filter((habit) => habitOccursOn(habit, today));
+  const ordinaryCount = tasks.length - attention.length;
+  // 只有一个「独立任务」组时不再套项目头，任务池就是一份平铺清单。
+  const flattenGroups = groups.length === 1 && groups[0].key === "__independent__";
+  // 默认打开第一个小项目；大项目保持收起，避免一次渲染几十上百行。用户手动点开后再全部展开。
+  const defaultProjectKey = !flattenGroups && groups[0] && groups[0].tasks.length <= 6 ? groups[0].key : null;
+  const activeProjectKey = openProject === undefined
+    ? defaultProjectKey
+    : openProject && groups.some((group) => group.key === openProject) ? openProject : null;
+  const toggleProject = (key: string) => setOpenProject(activeProjectKey === key ? null : key);
+  const selectedFilterLabel = filter === "unscheduled" ? "未安排" : filter === "scheduled" ? "已安排" : "全部";
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
+  const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} onProgress={onProgress} onEdit={toggleEditor} />;
   return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
     const id = event.dataTransfer.getData("application/x-daymark-session"); const session = index.sessionsById.get(id); if (session) void onCancelSession(session);
   }}>
-    <div className="pool-topbar">
-      <input aria-label="任务标题" placeholder="只写标题，Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void submit()} />
-      <Button variant="primary" aria-label="创建任务" disabled={!title.trim() || busy} onClick={() => void submit()}><Plus size={16} /></Button>
-      <button className="icon-action" aria-label="自动排程" title="自动排程" onClick={onAutoSchedule}><Sparkles size={17} /></button>
-      <button className="icon-action" data-habit-button aria-label="新建重复习惯" title="新建重复习惯" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setHabitAnchor((current) => current ? null : rect); }}><Repeat2 size={17} /></button>
+    <header className="pool-head">
+      <h2>任务池</h2>
+      <span className="pool-count">{tasks.length} 项</span>
+      <button type="button" className="icon-action pool-more" aria-label="任务池更多操作" aria-haspopup="dialog" aria-expanded={Boolean(menuAnchor)} title="更多操作" onClick={(event) => { event.stopPropagation(); const anchor = event.currentTarget; setMenuAnchor((current) => current ? null : anchor); }}><MoreHorizontal size={18} aria-hidden="true" /></button>
       <button className="icon-action task-pool-close" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
-    </div>
-    {autoScheduleAssist && assistCount > 0 && <button className="schedule-assist" onClick={onAutoSchedule}><Sparkles size={15} /><span><strong>{assistCount} 项还没有下一次安排</strong><small>可以生成未来 7 天草案，确认后才会应用</small></span></button>}
-    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); }} onPhase={setHabitBusy} /></FloatingPanel>}
-    {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOpen((event.currentTarget as HTMLDetailsElement).open)}><summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span>{attention.length} 项临期</span></summary><div className="task-list attention-list">{attention.map((task) => <TaskPoolCard key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} onProgress={onProgress} onEdit={toggleEditor} />)}</div></details>}
-    <div className="segmented compact" aria-label="任务池筛选">{(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}</div>
-    <div className="task-list project-groups">{groups.map(({ key, project, tasks: groupTasks }) => {
-      const isExpanded = expandedProjects.has(key);
-      const fullyCollapsed = !isExpanded && collapsedByUser.has(key);
-      const current = groupTasks.find((task) => task.progress < 100);
-      const shown = isExpanded ? groupTasks : fullyCollapsed ? [] : current ? [current] : [];
-      const done = groupTasks.filter((task) => task.progress === 100).length;
-      const avg = groupTasks.length ? Math.round(groupTasks.reduce((sum, task) => sum + task.progress, 0) / groupTasks.length) : 0;
-      return <section key={key} className="project-group">
-        <button className="project-group-header" aria-expanded={isExpanded} onClick={() => toggleProject(key)}>
-          <strong>{project?.title ?? "独立任务"}</strong>
-          <span>{groupTasks.length} 项 · 完成 {done} · 平均 {avg}%</span>
-          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
-        <div className={isExpanded ? "project-group-body expanded" : "project-group-body"}>
-          {!isExpanded && !fullyCollapsed && current && groupTasks.length > 1 && <p className="empty-inline">显示下一项 · 展开查看全部 {groupTasks.length} 项</p>}{shown.map((task) => <TaskPoolCard key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} onProgress={onProgress} onEdit={toggleEditor} />)}
-          {fullyCollapsed && <p className="empty-inline group-collapsed-hint">已收起，点击展开查看全部任务。</p>}
-          {!isExpanded && !fullyCollapsed && !current && <p className="empty-inline">该项目下所有任务都已完成。</p>}
-        </div>
-      </section>;
-    })}{visible.length === 0 && <p className="empty-inline">当前筛选没有任务。</p>}</div>
-    {habits.length > 0 && <section className="habit-list" aria-labelledby="habit-list-title"><div className="section-heading"><h3 id="habit-list-title">重复习惯</h3><span>今天</span></div>{habits.filter((habit) => habitOccursOn(habit, toLocalDate(new Date()))).map((habit) => { const date = toLocalDate(new Date()); const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === date); return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div><Button onClick={() => void onScheduleHabit(habit, date)}>安排今天</Button><Button onClick={() => void onSkipHabit(habit, date)}>跳过本次</Button></div>}</article>; })}</section>}
+    </header>
 
-    <p className="drop-hint">把日历时段拖回这里，可取消本次安排并保留任务。</p>
+    <form className="pool-compose" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+      <input aria-label="任务标题" placeholder="写一件事" title="写一件事，按 Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} />
+      <button type="submit" className="pool-add" aria-label="创建任务" disabled={!title.trim() || busy}><Plus size={16} /></button>
+    </form>
+
+    <div className="pool-scroll">
+      {filter !== "all" && <div className="pool-filter-note"><span>只显示{selectedFilterLabel}</span><button type="button" onClick={() => setFilter("all")}>显示全部</button></div>}
+
+      {attention.length > 0 && <details className="attention-pool" open={attentionOpen} onToggle={(event) => setAttentionOverride((event.currentTarget as HTMLDetailsElement).open)}>
+        <summary><CircleAlert size={15} aria-hidden="true" /><strong>需要关注</strong><span className="attention-count">{attention.length} 项临期</span><ChevronDown className="attention-chevron" size={14} aria-hidden="true" /></summary>
+        <div className="task-list attention-list">{attention.map(row)}</div>
+      </details>}
+
+      {groups.length > 0 && <div className={flattenGroups ? "task-list pool-project-list is-flat" : "task-list pool-project-list"}>
+        {flattenGroups ? groups[0].tasks.map(row) : groups.map(({ key, project, tasks: groupTasks }) => {
+          const isOpen = activeProjectKey === key;
+          const avg = groupTasks.length ? Math.round(groupTasks.reduce((sum, task) => sum + task.progress, 0) / groupTasks.length) : 0;
+          return <section key={key} className={isOpen ? "project-group is-open" : "project-group"}>
+            <button type="button" className="project-group-header" aria-expanded={isOpen} onClick={() => toggleProject(key)}>
+              <strong>{project?.title ?? "独立任务"}</strong>
+              <span className="project-group-meta">{groupTasks.length} 项</span>
+              <span className="project-group-pct" title="组内平均完成度">{avg}%</span>
+              {isOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+            </button>
+            <div className="project-group-meter" aria-hidden="true"><span style={{ width: `${avg}%` }} /></div>
+            {isOpen && <div className="project-group-body is-expanded">{groupTasks.map(row)}</div>}
+          </section>;
+        })}
+      </div>}
+
+      {visible.length === 0 && (tasks.length === 0
+        ? <div className="pool-empty"><span><Inbox size={20} aria-hidden="true" /></span><strong>任务池是空的</strong><p>在上方写下一件事，按 Enter 就会出现在这里。</p></div>
+        : ordinaryCount === 0
+          ? <p className="empty-inline">其余任务都在上方「需要关注」里。</p>
+          : <div className="pool-empty"><span><ListFilter size={20} aria-hidden="true" /></span><strong>当前筛选没有任务</strong><p>切回「全部」即可看到其余 {ordinaryCount} 项。</p><Button onClick={() => setFilter("all")}>清除筛选</Button></div>)}
+    </div>
+
+    {habits.length > 0 && <details className="pool-habits" open={habitsOpen} onToggle={(event) => setHabitsOpen(event.currentTarget.open)}>
+      <summary><Repeat2 size={15} aria-hidden="true" /><strong>重复习惯</strong><span className="pool-habits-meta">{dueHabits.length > 0 ? `今天 ${dueHabits.length}` : "今天无"}</span><ChevronDown className="pool-habits-chevron" size={14} aria-hidden="true" /></summary>
+      <div className="habit-list">
+        {dueHabits.length === 0 && <p className="pool-habits-empty">今天没有要执行的习惯。</p>}
+        {dueHabits.map((habit) => {
+          const occurrence = occurrences.find((item) => item.habitId === habit.id && item.localDate === today);
+          return <article key={habit.id}><div><strong>{habit.title}</strong><span>{habit.pattern === "daily" ? "每天" : habit.pattern === "weekdays" ? "工作日" : "每周选日"} · {habit.sessionMinutes} 分钟</span></div>{occurrence ? <span className="muted-chip">{occurrence.status === "scheduled" ? "已安排" : occurrence.status === "skipped" ? "本次已跳过" : "已完成"}</span> : <div className="habit-actions"><Button onClick={() => void onScheduleHabit(habit, today)}>安排今天</Button><Button variant="quiet" onClick={() => void onSkipHabit(habit, today)}>跳过本次</Button></div>}</article>;
+        })}
+      </div>
+    </details>}
+
+    {menuAnchor && <FloatingPanel kind="action" label="任务池操作" anchorElement={menuAnchor} closeOnOutsideClick onClose={() => setMenuAnchor(null)} className="pool-menu">
+      <button type="button" className="pool-menu-item" aria-label="自动排程" onClick={() => { setMenuAnchor(null); onAutoSchedule(); }}>
+        <Sparkles size={16} aria-hidden="true" /><span><strong>自动排程</strong><small>{autoScheduleAssist && assistCount > 0 ? `${assistCount} 项未安排` : "生成未来 7 天草案"}</small></span>
+      </button>
+      <button type="button" className="pool-menu-item" aria-label="新建重复习惯" onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setMenuAnchor(null); setPendingHabitRect(rect); }}>
+        <Repeat2 size={16} aria-hidden="true" /><span><strong>新建习惯</strong><small>每天、工作日或每周选日</small></span>
+      </button>
+      <div className="pool-menu-sep" aria-hidden="true" />
+      <div className="pool-menu-filter" role="group" aria-label="任务池筛选">
+        <span>显示</span>
+        <div className="segmented compact">
+          {(["all", "unscheduled", "scheduled"] as const).map((value) => <button key={value} type="button" className={filter === value ? "active" : ""} aria-pressed={filter === value} onClick={() => { setFilter(value); setMenuAnchor(null); }}>{value === "all" ? "全部" : value === "unscheduled" ? "未安排" : "已安排"}</button>)}
+        </div>
+      </div>
+    </FloatingPanel>}
+
+    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); setHabitsOpen(true); }} onPhase={setHabitBusy} /></FloatingPanel>}
     {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setEditing(null)}><div className="task-editor-fields">
       <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={index.workspace.projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
   </aside>;
 }
 
-/** 单张任务卡；`sessions` 已经是**该任务自己的**时段（来自 `WorkspaceIndex.sessionsByTaskId`），不再自行过滤全量。 */
-function TaskPoolCard({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
+/**
+ * 单行任务；`sessions` 已经是**该任务自己的**时段（来自 `WorkspaceIndex.sessionsByTaskId`），
+ * 不再自行过滤全量。
+ *
+ * 项目优先的第二层：标题、一个最近的时间信号和完成度收在一行，只有指针进入完成度
+ * 或键盘聚焦时才展开滑块。整行保持 44px 命中区，拖动仍从行本身开始。
+ */
+function TaskPoolRow({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
+  const today = toLocalDate(new Date());
   const upcoming = sessions.filter(hasFutureSchedule).sort(compareSessions);
-  const hint = upcoming.length ? `拖动安排 · 下次：${formatShortDate(upcoming[0].localDate)} ${upcoming[0].startLocal} · 共 ${upcoming.length} 次` : "拖动安排";
-  return <article className="task-card task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
-    <strong className="task-row-title">{task.title}</strong>
-    {task.deadlineLocal && <span className="deadline-chip">{deadlineLabel(toLocalDate(new Date()), task.deadlineLocal)}</span>}
-    <span className="task-row-side">
-      <span className="task-row-progress" aria-hidden="true"><span className="mini-track"><span style={{ width: `${task.progress}%` }} /></span><b>{task.progress}%</b></span>
-      <span className="task-row-slider"><ProgressControl task={task} onCommit={onProgress} /></span>
-    </span>
-    <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
+  const next = upcoming[0] ?? null;
+  const deadlineDays = task.deadlineLocal ? daysBetween(today, task.deadlineLocal) : null;
+  const urgentDeadline = deadlineDays !== null && deadlineDays <= 7;
+  const when = task.deadlineLocal && urgentDeadline
+    ? deadlineLabel(today, task.deadlineLocal)
+    : next
+      ? `${scheduleDayLabel(today, next.localDate)} ${next.startLocal}`
+      : task.deadlineLocal
+        ? deadlineLabel(today, task.deadlineLocal)
+        : null;
+  const whenTitle = task.deadlineLocal
+    ? `截止：${formatShortDate(task.deadlineLocal)}${next ? ` · 下次：${formatShortDate(next.localDate)} ${next.startLocal}` : ""}`
+    : next ? `下次安排：${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : "尚未安排";
+  const hint = `拖动安排 · 完成度 ${task.progress}%${task.deadlineLocal ? ` · 截止 ${formatShortDate(task.deadlineLocal)}` : ""}${next ? ` · 下次 ${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : ""}`;
+  return <article className="task-card pool-task-row" tabIndex={0} draggable title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
+    <div className="pool-task-main">
+      <strong className="pool-task-title" title={task.title}>{task.title}</strong>
+      <div className="pool-task-meta">
+        {when && <span className={urgentDeadline ? "pool-task-when is-due" : "pool-task-when"} title={whenTitle}>{when}</span>}
+        <span className="pool-task-side" title={`完成度 ${task.progress}%`}>
+          <span className="pool-task-progress" aria-hidden="true">{task.progress}%</span>
+          <span className="pool-task-slider"><ProgressControl task={task} onCommit={onProgress} /></span>
+        </span>
+      </div>
+    </div>
+    <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
   </article>;
 }
 
@@ -2596,6 +2671,7 @@ function deadlineLabel(today: string, deadline: string) { const days = daysBetwe
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(new Date(`${date}T12:00:00`)); }
 function formatLongDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00`)); }
 function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
+function scheduleDayLabel(today: string, date: string) { const offset = daysBetween(today, date); return offset === 0 ? "今天" : offset === 1 ? "明天" : formatShortDate(date); }
 function formatRecentAdvanceDate(date: string, today: string) {
   const sameYear = date.slice(0, 4) === today.slice(0, 4);
   return new Intl.DateTimeFormat("zh-CN", sameYear ? { month: "long", day: "numeric" } : { year: "numeric", month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`));
