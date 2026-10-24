@@ -732,6 +732,9 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
     const width = 250;
     setEditing({ taskId: task.id, pos: { top: Math.min(rect.bottom + 6, window.innerHeight - 320), left: Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width)) } });
   };
+  // 百分比是进度的唯一入口：锚定气泡里完成调整，行内不再藏悬停滑块。
+  const [progressEdit, setProgressEdit] = useState<{ taskId: string; anchor: HTMLElement } | null>(null);
+  const progressTask = progressEdit ? tasks.find((task) => task.id === progressEdit.taskId) ?? null : null;
   const groups: { key: string; project: Project | null; tasks: Task[] }[] = [];
   {
     const byProject = new Map<string, Task[]>();
@@ -756,7 +759,7 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
   const toggleProject = (key: string) => setOpenProject(activeProjectKey === key ? null : key);
   const selectedFilterLabel = filter === "unscheduled" ? "未安排" : filter === "scheduled" ? "已安排" : "全部";
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
-  const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} onProgress={onProgress} onEdit={toggleEditor} />;
+  const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} progressOpen={progressEdit?.taskId === task.id} onProgressEdit={(next, anchor) => setProgressEdit({ taskId: next.id, anchor })} onEdit={toggleEditor} />;
   return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
     const id = event.dataTransfer.getData("application/x-daymark-session"); const session = index.sessionsById.get(id); if (session) void onCancelSession(session);
   }}>
@@ -831,7 +834,8 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
       </div>
     </FloatingPanel>}
 
-    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); setHabitsOpen(true); }} onPhase={setHabitBusy} /></FloatingPanel>}
+    {habitAnchor && <FloatingPanel label="新建重复习惯" anchor={habitAnchor} busy={habitBusy} closeOnOutsideClick onClose={() => setHabitAnchor(null)}><HabitEditor onCancel={() => setHabitAnchor(null)} onCreate={async (habit) => { await onCreateHabit(habit); setHabitAnchor(null); setHabitsOpen(true); }} onPhase={setHabitBusy} /></FloatingPanel>}
+    {progressEdit && progressTask && <FloatingPanel className="pool-progress-panel" label={`调整进度 ${progressTask.title}`} anchorElement={progressEdit.anchor} closeOnOutsideClick onClose={() => setProgressEdit(null)}><PoolProgressEditor task={progressTask} onCommit={onProgress} onClose={() => setProgressEdit(null)} /></FloatingPanel>}
     {editing && editingTask && <FloatingPanel key={editingTask.id} className="task-editor-panel" label={`编辑任务 ${editingTask.title}`} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setEditing(null)}><div className="task-editor-fields">
       <h2>编辑任务</h2><TaskEditorFields task={editingTask} projects={index.workspace.projects} onUpdate={async (next) => { await onUpdate(next); setEditing(null); }} onCancel={() => setEditing(null)} onPhase={setTaskEditorBusy} />
     </div></FloatingPanel>}
@@ -842,10 +846,10 @@ function TaskPool({ index, tasks, habits, occurrences, autoScheduleAssist, onCre
  * 单行任务；`sessions` 已经是**该任务自己的**时段（来自 `WorkspaceIndex.sessionsByTaskId`），
  * 不再自行过滤全量。
  *
- * 项目优先的第二层：标题、一个最近的时间信号和完成度收在一行，只有指针进入完成度
- * 或键盘聚焦时才展开滑块。整行保持 44px 命中区，拖动仍从行本身开始。
+ * 项目优先的第二层：标题、一个最近的时间信号和完成度收在一行；百分比本身是入口，
+ * 点开后弹出锚定气泡。整行保持 44px 命中区，拖动仍从行本身开始。
  */
-function TaskPoolRow({ task, sessions, onProgress, onEdit }: { task: Task; sessions: ExecutionSession[]; onProgress: (task: Task, value: number) => Promise<void>; onEdit: (task: Task, anchor: HTMLElement) => void }) {
+function TaskPoolRow({ task, sessions, progressOpen, onProgressEdit, onEdit }: { task: Task; sessions: ExecutionSession[]; progressOpen: boolean; onProgressEdit: (task: Task, anchor: HTMLElement) => void; onEdit: (task: Task, anchor: HTMLElement) => void }) {
   const today = toLocalDate(new Date());
   const upcoming = sessions.filter(hasFutureSchedule).sort(compareSessions);
   const next = upcoming[0] ?? null;
@@ -867,14 +871,37 @@ function TaskPoolRow({ task, sessions, onProgress, onEdit }: { task: Task; sessi
       <strong className="pool-task-title" title={task.title}>{task.title}</strong>
       <div className="pool-task-meta">
         {when && <span className={urgentDeadline ? "pool-task-when is-due" : "pool-task-when"} title={whenTitle}>{when}</span>}
-        <span className="pool-task-side" title={`完成度 ${task.progress}%`}>
-          <span className="pool-task-progress" aria-hidden="true">{task.progress}%</span>
-          <span className="pool-task-slider"><ProgressControl task={task} onCommit={onProgress} /></span>
+        <span className="pool-task-side">
+          <button type="button" className="pool-task-progress" aria-haspopup="dialog" aria-expanded={progressOpen} aria-label={`调整进度 ${task.title}，当前 ${task.progress}%`} title="调整完成度" onClick={(event) => onProgressEdit(task, event.currentTarget)}>{task.progress}%</button>
         </span>
       </div>
     </div>
     <button data-editor-anchor={task.id} type="button" className="icon-action task-editor-button pool-task-edit" aria-label={`编辑任务 ${task.title}`} onClick={(event) => onEdit(task, event.currentTarget)}><Pencil size={13} /></button>
   </article>;
+}
+
+/** 任务池的进度气泡：当前值和常用值同一行；滑块松手后写入，任务名只在无障碍名里出现。 */
+function PoolProgressEditor({ task, onCommit, onClose }: { task: Task; onCommit: (task: Task, value: number) => Promise<void>; onClose: () => void }) {
+  const [value, setValue] = useState(task.progress);
+  useEffect(() => setValue(task.progress), [task.progress]);
+  const commit = (next: number) => { if (next !== task.progress) void onCommit(task, next); };
+  const choose = (next: number) => { setValue(next); commit(next); };
+  return <div className="pool-progress-editor">
+    <div className="pool-progress-head">
+      <strong className="pool-progress-title">调整进度</strong>
+      <button type="button" className="pool-progress-close" aria-label="关闭进度编辑" onClick={onClose}><X size={14} /></button>
+    </div>
+    <div className="pool-progress-main">
+      <strong className="pool-progress-value">{value}%</strong>
+      <div className="pool-progress-choices">
+        <div className="pool-progress-presets" role="group" aria-label="常用进度">
+          {[0, 25, 50, 75].map((preset) => <button key={preset} type="button" className={value === preset ? "is-active" : ""} aria-pressed={value === preset} onClick={() => choose(preset)}>{preset}%</button>)}
+        </div>
+        <button type="button" className="pool-progress-complete" aria-label={`标记 ${task.title} 已完成`} disabled={value === 100} onClick={() => { setValue(100); commit(100); onClose(); }}>完成</button>
+      </div>
+    </div>
+    <RangeBar compact initialFocus label={`${task.title} 完成度`} min={0} max={100} step={5} value={value} onChange={setValue} onPointerUp={() => commit(value)} onKeyUp={() => commit(value)} />
+  </div>;
 }
 
 function CalendarPage({ workspace, index, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
@@ -1710,12 +1737,12 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
     onPhaseChange: (phase) => onPhase?.(phase === "submitting"),
   });
   const { draft, patchDraft, busy, error } = session;
-  return <form aria-busy={busy} className="habit-form habit-popover" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
+  return <form aria-busy={busy} className="habit-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <label>习惯名称<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} /></label>
     <label>重复规则<SelectField value={draft.pattern} onChange={(value) => patchDraft({ pattern: value as RecurringHabit["pattern"] })} options={[{ value: "daily", label: "每天" }, { value: "weekdays", label: "工作日" }, { value: "weekly", label: "每周选择" }]} /></label>
-    {draft.pattern === "weekly" && <fieldset><legend>选择星期</legend><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></fieldset>}
+    {draft.pattern === "weekly" && <div className="habit-field" role="group" aria-label="选择星期"><span className="editor-field-label" aria-hidden="true">选择星期</span><WeekdayPicker value={draft.weekdays} onChange={(weekdays) => patchDraft({ weekdays })} /></div>}
     <label>单次投入<NumberField label="单次投入" suffix="分钟" min={5} max={240} step={5} presets={[15, 30, 45, 60, 90]} value={draft.sessionMinutes} onChange={(value) => { if (value !== null) patchDraft({ sessionMinutes: value }); }} /></label>
-    <label>固定开始（可选）<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
+    <label>固定开始<input type="time" value={draft.preferredStartLocal} onChange={(event) => patchDraft({ preferredStartLocal: event.target.value })} /></label>
     <div className="form-actions"><Button disabled={busy} onClick={session.cancel}>取消</Button><Button type="submit" variant="primary" disabled={busy || !session.canSave}>{busy ? "正在创建…" : "创建习惯"}</Button></div>
     {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
   </form>;

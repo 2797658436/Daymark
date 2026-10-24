@@ -13,6 +13,8 @@ interface RangeBarProps {
   id?: string;
   /** 没有外层 `<label>` 时用它提供可访问名。 */
   label?: string;
+  /** 浮层打开时优先聚焦滑块，而不是把首次回车交给旁边的按钮。 */
+  initialFocus?: boolean;
   min: number;
   max: number;
   step: number;
@@ -36,7 +38,7 @@ interface RangeBarProps {
   className?: string;
 }
 
-export function RangeBar({ id, label, min, max, step, value, onChange, onPointerUp, onKeyUp, compact, dots, ariaValueText, commitOnRelease, formatValue, className }: RangeBarProps) {
+export function RangeBar({ id, label, initialFocus, min, max, step, value, onChange, onPointerUp, onKeyUp, compact, dots, ariaValueText, commitOnRelease, formatValue, className }: RangeBarProps) {
   const [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? value;
   const span = max - min;
@@ -76,6 +78,7 @@ export function RangeBar({ id, label, min, max, step, value, onChange, onPointer
         className="range-input"
         type="range"
         id={id}
+        data-autofocus={initialFocus ? "true" : undefined}
         aria-label={label}
         aria-valuetext={formatValue ? formatValue(shown) : ariaValueText}
         min={min}

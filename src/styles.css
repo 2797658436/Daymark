@@ -417,7 +417,7 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .attention-pool .task-list { padding: 0 0 3px; gap: 0; }
 .attention-pool .pool-task-row { padding-left: 4px; }
 
-/* 任务行：标题、一个最近的时间信号和完成度收在同一行；悬停完成度才展开滑块。 */
+/* 任务行：标题、一个最近的时间信号和完成度收在同一行；点百分比打开进度气泡。 */
 .task-card { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .task-card.pool-task-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 2.75rem; align-items: center; min-height: 2.75rem; padding: 0 0 0 4px; border-bottom: 1px solid var(--line-soft); cursor: grab; transition: background .12s ease; }
 .task-card.pool-task-row:last-child { border-bottom-color: transparent; }
@@ -429,14 +429,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .pool-task-when { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
 .pool-task-when.is-due { color: var(--danger); font-weight: 600; }
 .pool-task-side { display: flex; align-items: center; justify-content: flex-end; flex: none; width: 2.75rem; height: 2.75rem; margin-left: auto; }
-.pool-task-progress { color: var(--muted); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.pool-task-slider { position: absolute; z-index: 1; top: 50%; right: 2.75rem; display: flex; align-items: center; width: min(8rem, 55%); height: 2.75rem; padding: 0 4px; border-radius: 8px; background: var(--panel-strong); box-shadow: 0 0 0 1px var(--line-soft); visibility: hidden; transform: translateY(-50%); }
-.pool-task-slider .progress-control { width: 100%; grid-template-columns: minmax(0, 1fr) 2.25rem; gap: 6px; }
-.pool-task-slider input[type="range"] { min-width: 0; width: 100%; }
-/* 指针进入完成度那一格才替换成滑块：整行悬停就出现的话，从标题中部开始拖动会误触进度。
-   键盘仍从整行进入，聚焦后滑块现形，Tab 才能落到范围输入上。 */
-.pool-task-side:hover .pool-task-slider, .pool-task-slider:hover,
-.task-card.pool-task-row:focus-within .pool-task-slider { visibility: visible; }
+/* 百分比按钮占满 44px 格：点击是明确动作，不再依赖悬停命中。 */
+.pool-task-progress { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: background .12s ease, color .12s ease, box-shadow .12s ease; }
+.pool-task-progress:hover, .pool-task-progress[aria-expanded="true"] { background: var(--panel); color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--line-soft); }
+.pool-task-progress:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .pool-task-edit { min-width: 2.75rem; min-height: 2.75rem; border-color: transparent; background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease, border-color .12s ease; }
 .task-card.pool-task-row:hover .pool-task-edit, .task-card.pool-task-row:focus-within .pool-task-edit { opacity: 1; border-color: var(--line-soft); background: var(--panel); color: var(--text); }
 @media (hover: none) { .pool-task-edit { opacity: 1; } }
@@ -446,9 +442,26 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
   .pool-task-main { flex-wrap: wrap; gap: 1px 8px; padding-block: 5px; }
   .pool-task-title { flex-basis: 100%; }
   .pool-task-meta { flex: 1 1 100%; margin-left: 0; justify-content: flex-start; }
-  .pool-task-slider { width: min(11rem, 68%); }
 }
 .deadline-chip { flex: none; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); border-radius: 999px; padding: 3px 7px; font-size: .7rem; font-weight: 600; white-space: nowrap; }
+
+/* 进度气泡：当前值与四个常用值同一行，去掉任务名与说明行。 */
+.floating-panel.pool-progress-panel { width: min(21rem, calc(100vw - 24px)); }
+.pool-progress-editor { display: grid; gap: 10px; }
+.pool-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pool-progress-title { font-size: .95rem; font-weight: 500; letter-spacing: -.01em; }
+.pool-progress-complete { flex: none; }
+.pool-progress-complete:disabled { color: var(--muted); cursor: not-allowed; }
+.pool-progress-close { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
+.pool-progress-close:hover { background: var(--panel-strong); color: var(--text); }
+.pool-progress-close:focus-visible, .pool-progress-complete:focus-visible, .pool-progress-presets button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.pool-progress-main { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.pool-progress-value { flex: none; min-width: 3rem; font-size: 1.4rem; line-height: 1.1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.pool-progress-choices { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.pool-progress-presets { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.pool-progress-presets button, .pool-progress-complete { min-height: 2rem; padding: 0 .55rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .72rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pool-progress-presets button:hover, .pool-progress-complete:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
+.pool-progress-presets button.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
 
 /* 项目行：一行项目名 + 项数 + 平均进度 + 细轨；同一时间只展开一个项目。 */
 .pool-project-list { gap: 6px; }
@@ -917,8 +930,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .rescue-main { min-width: 0; }
 .rescue-actions { width: min(100%, 19rem); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .rescue-actions .button { min-height: 2.75rem; padding-inline: .75rem; }
-.habit-form { display: grid; gap: 9px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); }.habit-form label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }.habit-form fieldset { border: 0; padding: 0; margin: 0; }.habit-form legend { margin-bottom: 5px; color: var(--muted); font-size: .75rem; }
-.habit-popover { position: fixed; z-index: 200; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-float); }
+/* 新建习惯：跟任务编辑同一节奏，左标签右控件；星期选择也走同一套网格。 */
+.habit-form { display: grid; gap: 12px; }
+.habit-form > label, .habit-form > .habit-field { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .76rem; }
+.habit-form > label > input, .habit-form > label > .select-shell { width: 100%; min-width: 0; }
+.habit-form .select-shell { --select-text-start: .6rem; --select-text-end: 1.7rem; }
+.habit-form .weekday-picker { width: 100%; }
 .session-edit-fields > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 6px; border-bottom: 1px dashed var(--line-soft); }
 .session-edit-fields > header strong { min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
 .session-edit-fields .session-edit-popover-label { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--muted); font-size: .7rem; }
@@ -1528,7 +1545,7 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .page-header { flex-wrap: wrap; }
 .project-tasks > div { border-radius: 0; border-bottom: 1px solid var(--line); }
 .floating-panel .icon-action { min-width: 40px; min-height: 40px; }
-.floating-panel .habit-popover, .floating-panel .blank-action-bubble { position: static; width: auto; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; box-shadow: none; }
+.floating-panel .blank-action-bubble { position: static; width: auto; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; box-shadow: none; }
 .task-editor-fields form, .session-edit-fields { display: grid; gap: 12px; }
 /* 任务编辑：左侧标题、右侧控件，两列之间留出间距；标题本身也往里缩一点。 */
 .task-editor-fields form > label, .task-editor-fields form > .editor-field { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: center; gap: 12px; padding-left: 4px; color: var(--muted); font-size: .76rem; }

@@ -127,7 +127,8 @@ export function OverlayHostProvider({ children }: { children: ReactNode }) {
     if (grew && top) {
       requestAnimationFrame(() => {
         const container = document.getElementById(top.id);
-        const auto = container?.querySelector<HTMLElement>("[autofocus]") ?? container?.querySelector<HTMLElement>("button, input, textarea, select");
+        // `data-autofocus` 是显式指定主控件；它优先于文档顺序里的第一个按钮。
+        const auto = container?.querySelector<HTMLElement>("[data-autofocus]") ?? container?.querySelector<HTMLElement>("[autofocus]") ?? container?.querySelector<HTMLElement>("button, input, textarea, select");
         auto?.focus({ preventScroll: true });
       });
       return;

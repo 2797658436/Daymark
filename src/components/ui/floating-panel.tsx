@@ -149,7 +149,9 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
   }, []);
 
   useLayoutEffect(() => {
-    ref.current!.querySelector<HTMLElement>("input, select, textarea, button")?.focus({ preventScroll: true });
+    const panel = ref.current!;
+    // 主控件可以显式接管初始焦点（例如进度气泡里的滑块），否则落到第一个可聚焦元素。
+    (panel.querySelector<HTMLElement>("[data-autofocus]") ?? panel.querySelector<HTMLElement>("input, select, textarea, button"))?.focus({ preventScroll: true });
   }, []);
 
   const labelled = titleId ? { "aria-labelledby": titleId } : { "aria-label": label };

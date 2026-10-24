@@ -1137,6 +1137,13 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await openTaskPoolMenu(user);
     await user.click(await screen.findByRole("button", { name: /新建重复习惯/ }));
+    await screen.findByRole("dialog", { name: "新建重复习惯" });
+    // 点空白即取消并丢弃草稿，不写库。
+    await user.click(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建重复习惯" })).toBeNull());
+    expect(native.createRecurringHabit).not.toHaveBeenCalled();
+    await openTaskPoolMenu(user);
+    await user.click(await screen.findByRole("button", { name: /新建重复习惯/ }));
     const habitDialog = await screen.findByRole("dialog", { name: "新建重复习惯" });
     await user.type(within(habitDialog).getByRole("textbox", { name: "习惯名称" }), "拉伸");
     await user.click(screen.getByRole("button", { name: "创建习惯" }));
@@ -1985,15 +1992,31 @@ describe("phase 1 manual alpha", () => {
   });
 
   it("updates task progress from the compact pool row", async () => {
+    const user = userEvent.setup();
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       tasks: [{ id: "task-progress", projectId: null, title: "推进任务", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: null, sortOrder: 0, kind: "task" }],
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
-    const slider = await screen.findByRole("slider", { name: "推进任务 完成度" });
+    await user.click(await screen.findByRole("button", { name: "调整进度 推进任务，当前 10%" }));
+    const dialog = await screen.findByRole("dialog", { name: "调整进度 推进任务" });
+    // 任务名只在无障碍名里，气泡本身不重复。
+    expect(within(dialog).queryByText("推进任务")).toBeNull();
+
+    const slider = within(dialog).getByRole("slider", { name: "推进任务 完成度" });
+    expect(slider).toHaveFocus();
     fireEvent.change(slider, { target: { value: "60" } });
     fireEvent.keyUp(slider);
     await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-progress", toProgress: 60 })));
+
+    // 常用值直接写库，气泡保持打开以便连续调整。
+    await user.click(within(dialog).getByRole("button", { name: "25%" }));
+    await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ toProgress: 25 })));
+    expect(dialog).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "标记 推进任务 已完成" }));
+    await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ toProgress: 100 })));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "调整进度 推进任务" })).toBeNull());
   });
 
   it("filters the task pool from the overflow menu", async () => {
