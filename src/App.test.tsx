@@ -1110,7 +1110,7 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
-    expect(screen.getByRole("dialog", { name: "自动排程 Lite" })).toHaveTextContent("准备候选版");
+    expect(screen.getByRole("dialog", { name: "自动排程" })).toHaveTextContent("准备候选版");
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
     await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
@@ -1761,9 +1761,10 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
-    const dialog = await screen.findByRole("dialog", { name: "自动排程 Lite" });
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
     const item = await within(dialog).findByText("写大纲");
-    expect(item.closest("label")).toHaveTextContent(/可安排|放不下/);
+    // 结果胶囊在行右侧列里、不在 label 内，所以按整行断言。
+    expect(item.closest(".schedule-row")).toHaveTextContent(/分钟|放不下/);
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
     expect(await screen.findByRole("button", { name: /应用 \d+ 个时段/ })).toBeVisible();
     await user.click(screen.getByRole("button", { name: /应用 \d+ 个时段/ }));
@@ -1788,8 +1789,10 @@ describe("phase 1 manual alpha", () => {
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
-    const dialog = await screen.findByRole("dialog", { name: "自动排程 Lite" });
-    expect((await within(dialog).findByText("写大纲")).closest("label")).toHaveTextContent("当前 7 天暂时放不下");
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    // 排不进的项不再混在主列表里：先展开底部折叠，再读它的确定性原因。
+    await user.click(within(dialog).getByRole("button", { name: /另有 1 项暂时无法安排/ }));
+    expect((await within(dialog).findByText("写大纲")).closest(".schedule-row")).toHaveTextContent("截止日期前没有可用空档");
     expect(screen.getByRole("button", { name: "生成排程草案" })).toBeDisabled();
   });
 
@@ -1984,12 +1987,126 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     await user.click(screen.getByRole("button", { name: "生成排程草案" }));
-    expect(screen.getByRole("heading", { name: "确认排程草案" })).toBeVisible();
-    const previewTitles = Array.from(document.querySelectorAll(".schedule-preview strong")).map((node) => node.textContent ?? "");
-    const stretchTitles = previewTitles.filter((title) => title.startsWith("拉伸 ·"));
-    expect(stretchTitles.length).toBe(6);
-    expect(stretchTitles.every((title) => /^拉伸 · 8月\d+日$/.test(title))).toBe(true);
+    expect(screen.getByRole("heading", { name: "排程草案" })).toBeVisible();
+    // 候选中习惯收成一行，预览仍按日列卡：6 张卡各是一天的「拉伸」，已跳过的 8月2日不在其中。
+    const cards = Array.from(document.querySelectorAll(".schedule-card"));
+    expect(cards).toHaveLength(6);
+    expect(cards.every((card) => card.querySelector("strong")?.textContent === "拉伸")).toBe(true);
+    const days = Array.from(document.querySelectorAll(".schedule-day h3")).map((node) => node.textContent ?? "");
+    expect(days).toHaveLength(6);
+    expect(days.every((label) => !label.includes("8月2日"))).toBe(true);
     vi.useRealTimers();
+  });
+
+  it("closes the schedule panel with Escape, discards the selection and returns focus", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+    const native = createNativeApi(initial);
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    const trigger = await screen.findByRole("button", { name: "自动排程" });
+    await user.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    // 动作气泡不锁背景：任务池在气泡打开期间仍然可点。
+    expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
+    // Tab 能进候选滚动区（axe 的 scrollable-region-focusable 要求它有焦点入口）。
+    const region = within(dialog).getByRole("region", { name: "排程候选" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "自动排程" })).not.toBeInTheDocument());
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+    expect(document.activeElement).toBe(trigger);
+    // 勾选是纯临时状态：关掉再打开回到推荐组合，不写任何执行时段。
+    await user.click(trigger);
+    expect(within(await screen.findByRole("dialog", { name: "自动排程" })).getByRole("checkbox", { name: /写大纲/ })).toBeChecked();
+    expect(vi.mocked(native.applyScheduleDraft)).not.toHaveBeenCalled();
+  });
+
+  it("leads to the default time slot settings when auto scheduling has no slots at all", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, defaultTimeSlots: [] };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    // 零默认时段时不再渲染 13 行假候选，只留一句事实 + 一个设置入口。
+    expect(within(dialog).getByText("还没有默认时段")).toBeVisible();
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "去设置默认时段" }));
+    expect(await screen.findByRole("heading", { name: "设置", level: 1 })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "自动排程" })).not.toBeInTheDocument();
+  });
+
+  it("restores the recommended combination after the selection is cleared", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    // 打开时按推荐组合预勾；底栏取消全选后主按钮禁用并给出中性提示。
+    expect(within(dialog).getByRole("checkbox", { name: /写大纲/ })).toBeChecked();
+    await user.click(within(dialog).getByRole("checkbox", { name: /全选当前筛选的/ }));
+    expect(within(dialog).getByRole("checkbox", { name: /写大纲/ })).not.toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "生成排程草案" })).toBeDisabled();
+    expect(within(dialog).getByText("请先选择至少一个任务")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "恢复推荐" }));
+    expect(within(dialog).getByRole("checkbox", { name: /写大纲/ })).toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "生成排程草案" })).toBeEnabled();
+  });
+
+  it("lists the selected items that can only be partly scheduled, with the reason", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-1", projectId: null, title: "写年度总结", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 240, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(initial)} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    // 行内结果读当前勾选：240 分钟放不进任何一段空档，只能部分安排。
+    expect(within(dialog).getByText(/^\d+\/240 分钟$/)).toBeVisible();
+    // 底栏那枚计数不列清单，点一下直接定位到行；原因本来就写在第二行。
+    await user.click(within(dialog).getByRole("button", { name: /1 项只能部分安排/ }));
+    expect(within(dialog).getByText("还差 60 分钟")).toBeVisible();
+    await waitFor(() => expect(within(dialog).getByText("写年度总结").closest(".schedule-row")).toHaveClass("is-flash"));
+  });
+
+  it("arranges a whole project from its card with only that project's candidates", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      projects: [{ id: "project-1", title: "Alpha", deadlineLocal: null }, { id: "project-2", title: "Beta", deadlineLocal: null }],
+      tasks: [
+        { id: "task-a", projectId: "project-1", title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+        { id: "task-b", projectId: "project-2", title: "别处的任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 1, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "项目" }));
+    await user.click(await screen.findByRole("button", { name: "安排项目 Alpha" }));
+    const dialog = await screen.findByRole("dialog", { name: "自动排程" });
+    expect(within(dialog).getByText("写大纲")).toBeVisible();
+    expect(within(dialog).queryByText("别处的任务")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "生成排程草案" }));
+    await user.click(screen.getByRole("button", { name: /^应用 \d+ 个时段$/ }));
+    await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
+    expect((native.applyScheduleDraft as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual([expect.objectContaining({ taskId: "task-a" })]);
+  });
+
+  it("removes a single draft card and applies only the remaining sessions", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [
+      { id: "task-a", projectId: null, title: "写大纲", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+      { id: "task-b", projectId: null, title: "整理资料", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 30, priority: "normal", sortOrder: 1, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" },
+    ] };
+    const native = createNativeApi(initial);
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    await user.click(screen.getByRole("button", { name: "生成排程草案" }));
+    expect(screen.getByRole("button", { name: /^应用 2 个时段$/ })).toBeVisible();
+    // 移除一张卡 = 取消该键勾选，留在预览步；容量与主按钮同步减一。
+    await user.click(screen.getByRole("button", { name: "移除 整理资料" }));
+    expect(screen.getByRole("button", { name: /^应用 1 个时段$/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^应用 1 个时段$/ }));
+    await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
+    expect((native.applyScheduleDraft as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual([expect.objectContaining({ taskId: "task-a" })]);
   });
 
   it("keeps one project open at a time in the task pool", async () => {
@@ -2594,12 +2711,12 @@ describe("phase 4 P4-06 deadline view", () => {
       await screen.findByRole("heading", { name: "截止事项", level: 1 });
       await user.click(screen.getByRole("button", { name: /^安排任务 Alpha 任务/ }));
 
-      const candidates = await screen.findByRole("dialog", { name: "自动排程 Lite" });
+      const candidates = await screen.findByRole("dialog", { name: "自动排程" });
       // 预选只影响候选勾选，不会写任何执行时段。
       expect(vi.mocked(native.applyScheduleDraft)).not.toHaveBeenCalled();
       await user.click(within(candidates).getByRole("button", { name: "生成排程草案" }));
 
-      const preview = await screen.findByRole("dialog", { name: "确认排程草案" });
+      const preview = await screen.findByRole("dialog", { name: "排程草案" });
       expect(vi.mocked(native.applyScheduleDraft)).not.toHaveBeenCalled();
       await user.click(within(preview).getByRole("button", { name: /^应用 \d+ 个时段$/ }));
       await waitFor(() => expect(vi.mocked(native.applyScheduleDraft)).toHaveBeenCalledTimes(1));

@@ -110,7 +110,7 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await page.getByRole("textbox", { name: "任务标题" }).fill("准备 21 天候选版");
   await page.getByRole("button", { name: "创建任务" }).click();
   await page.getByRole("button", { name: "自动排程" }).click();
-  await expect(page.getByRole("dialog", { name: "自动排程 Lite" })).toContainText("准备 21 天候选版");
+  await expect(page.getByRole("dialog", { name: "自动排程" })).toContainText("准备 21 天候选版");
   await page.getByRole("button", { name: "生成排程草案" }).click();
   await page.getByRole("button", { name: /应用 \d+ 个时段/ }).click();
   await expect(page.getByRole("button", { name: /撤销本次自动排程/ })).toBeVisible();
@@ -889,11 +889,11 @@ test("phase 4 M10 previews the deadline schedule draft before writing any sessio
   expect(await sessionCount()).toBe(0);
 
   await page.getByRole("button", { name: "安排任务 截止任务 03" }).click();
-  await expect(page.getByRole("dialog", { name: "自动排程 Lite" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "自动排程" })).toBeVisible();
   await page.getByRole("button", { name: "生成排程草案" }).click();
 
   // 草案只是预览：确认之前不写入任何执行时段。
-  await expect(page.getByRole("dialog", { name: "确认排程草案" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "排程草案" })).toBeVisible();
   expect(await sessionCount()).toBe(0);
 
   await page.getByRole("button", { name: /^应用 \d+ 个时段$/ }).click();

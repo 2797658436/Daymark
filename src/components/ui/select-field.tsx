@@ -24,13 +24,15 @@ interface SelectFieldProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  /** 没有可见 label 时的读屏名。 */
+  ariaLabel?: string;
 }
 
-export function SelectField({ id, value, options, onChange, disabled, className }: SelectFieldProps) {
+export function SelectField({ id, value, options, onChange, disabled, className, ariaLabel }: SelectFieldProps) {
   const current = options.find((option) => option.value === value);
   return (
     <span className={className ? `select-shell ${className}` : "select-shell"}>
-      <select id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+      <select id={id} value={value} disabled={disabled} aria-label={ariaLabel} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
         ))}

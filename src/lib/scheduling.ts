@@ -32,9 +32,33 @@ export interface ScheduleAllocation {
   habitId?: string;
 }
 
+/**
+ * 一项排不进当前组合的**确定性原因**。界面只翻译这几种，不自己猜。
+ * `continuous-unavailable` 是给「单个任务需要连续时段」预留的一位（2026-10-24 D4=a
+ * 定为后续阶段）：本轮既没有字段也没有算法分支，所以**永远不会产出**它，
+ * 留着是为了 schema 落地时直接接上、不用改调用方的分支。
+ */
+export type ScheduleUnscheduledReason =
+  | "below-minimum"
+  | "no-slots"
+  | "no-gap-that-day"
+  | "fixed-start-busy"
+  | "deadline-no-gap"
+  | "gaps-too-short"
+  | "continuous-unavailable";
+
+export interface ScheduleUnscheduledItem {
+  key: string;
+  reason: ScheduleUnscheduledReason;
+  /** 该任务在当前约束下最长的一段可用空档（分钟）；与空档无关的原因记 0。 */
+  longestGapMinutes: number;
+}
+
 export interface SchedulePlan {
   allocations: ScheduleAllocation[];
+  /** 兼容字段：只要排不进就出现在这里，顺序与 `unscheduled` 一致。 */
   unscheduledKeys: string[];
+  unscheduled: ScheduleUnscheduledItem[];
   availableMinutes: number;
   usedMinutes: number;
 }
@@ -53,6 +77,7 @@ export function buildSchedulePlan(input: {
   const availableMinutes = gaps.reduce((sum, gap) => sum + (gap.end - gap.start >= input.minimumMinutes ? gap.end - gap.start : 0), 0);
   const allocations: ScheduleAllocation[] = [];
   const unscheduledKeys: string[] = [];
+  const unscheduled: ScheduleUnscheduledItem[] = [];
   const ordered = [...input.items].sort((left, right) =>
     (left.deadlineLocal ?? "9999-12-31").localeCompare(right.deadlineLocal ?? "9999-12-31")
       || priorityRank(right.priority) - priorityRank(left.priority)
@@ -60,15 +85,20 @@ export function buildSchedulePlan(input: {
       || left.key.localeCompare(right.key));
 
   for (const item of ordered) {
+    // D1=a（2026-10-24）：截止日期早于窗口首日的任务按**窗口首日**参与排档。
+    // 否则逾期任务的 `eligible` 恒为空，等于「已逾期 = 永久不可安排」——那正好是
+    // 防拖延工具最该接住的一批。只钳制参与过滤的截止值，排序口径仍用原始截止日期。
+    const deadline = item.deadlineLocal && item.deadlineLocal < input.startDate ? input.startDate : item.deadlineLocal;
     if (item.targetMinutes < input.minimumMinutes) {
       unscheduledKeys.push(item.key);
+      unscheduled.push({ key: item.key, reason: "below-minimum", longestGapMinutes: 0 });
       continue;
     }
     const fixedStart = item.fixedStartLocal ? timeToMinutes(item.fixedStartLocal) : null;
     const eligible = gaps
       .map((gap, index) => ({ gap, index, start: fixedStart === null ? gap.start : Math.max(gap.start, fixedStart) }))
       .filter(({ gap, start }) => (!item.fixedDate || gap.date === item.fixedDate)
-        && (!item.deadlineLocal || gap.date <= item.deadlineLocal)
+        && (!deadline || gap.date <= deadline)
         && (fixedStart === null || (gap.start <= fixedStart && gap.end > fixedStart))
         && gap.end - start >= input.minimumMinutes);
     const full = item.targetMinutes >= input.minimumMinutes
@@ -80,6 +110,7 @@ export function buildSchedulePlan(input: {
     const selected = full ?? partial;
     if (!selected) {
       unscheduledKeys.push(item.key);
+      unscheduled.push(explainUnscheduled(item, { deadline, fixedStart, gaps }));
       continue;
     }
     const minutes = Math.min(item.targetMinutes, selected.gap.end - selected.start);
@@ -102,7 +133,35 @@ export function buildSchedulePlan(input: {
     });
   }
 
-  return { allocations, unscheduledKeys, availableMinutes, usedMinutes: allocations.reduce((sum, allocation) => sum + allocation.minutes, 0) };
+  return { allocations, unscheduledKeys, unscheduled, availableMinutes, usedMinutes: allocations.reduce((sum, allocation) => sum + allocation.minutes, 0) };
+}
+
+/**
+ * 把「排不进」翻译成一个确定性原因。
+ *
+ * 判定顺序刻意与上面那段过滤条件一一对应：先排除与空档无关的原因（时长、没有空档、
+ * 固定日期没有空档），再按固定开始时间／截止日期收窄，最后才是「空档都太短」。
+ * 走到最后一条分支时 `eligible` 必然为空但空档确实存在，所以唯一诚实的说法是空档不够长。
+ */
+function explainUnscheduled(item: ScheduleItem, context: {
+  deadline: string | null;
+  fixedStart: number | null;
+  gaps: Gap[];
+}): ScheduleUnscheduledItem {
+  const { deadline, fixedStart, gaps } = context;
+  if (!gaps.length) return { key: item.key, reason: "no-slots", longestGapMinutes: 0 };
+  const dayGaps = item.fixedDate ? gaps.filter((gap) => gap.date === item.fixedDate) : gaps;
+  if (!dayGaps.length) return { key: item.key, reason: "no-gap-that-day", longestGapMinutes: 0 };
+  const deadlineGaps = deadline ? dayGaps.filter((gap) => gap.date <= deadline) : dayGaps;
+  if (!deadlineGaps.length) return { key: item.key, reason: "deadline-no-gap", longestGapMinutes: 0 };
+  if (fixedStart === null) {
+    return { key: item.key, reason: "gaps-too-short", longestGapMinutes: Math.max(...deadlineGaps.map((gap) => gap.end - gap.start)) };
+  }
+  const around = deadlineGaps.filter((gap) => gap.start <= fixedStart && gap.end > fixedStart);
+  if (!around.length) return { key: item.key, reason: "fixed-start-busy", longestGapMinutes: 0 };
+  // 走到这里说明上面那段过滤同样没选中任何空档，而固定开始时间确实落在一段空档里 ——
+  // 唯一还成立的原因就是这段空档短于最低有效时长。
+  return { key: item.key, reason: "gaps-too-short", longestGapMinutes: Math.max(...around.map((gap) => gap.end - Math.max(gap.start, fixedStart))) };
 }
 
 function priorityRank(priority: ScheduleItem["priority"]) {

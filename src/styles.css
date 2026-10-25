@@ -1067,7 +1067,177 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
    剩下的 `.calendar-time-block time { display: none }` 是活的 —— `time` 是后代。
    条件按**内容盒**判定（实测：100% 下短块高 28px、内容盒 12px ≤ 26px，`time` 确实被隐藏）。*/
 @container (max-height: 26px) { .calendar-time-block time { display: none; } }
-.schedule-modal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; }.capacity-summary { padding: 10px 12px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong); font-size: .82rem; font-weight: 600; }.schedule-candidates, .schedule-preview { display: grid; gap: 6px; max-height: 45vh; overflow: auto; }.schedule-candidates > label { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-candidates > label > span { display: grid; gap: 2px; }.schedule-candidates small { color: var(--muted); }.schedule-preview article { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }.schedule-preview time, .schedule-preview span { color: var(--muted); font-size: .76rem; }
+/* ---------------------------------------------------------------------------
+   自动排程气泡（2026-10-25 重做，评估报告 W1–W4）
+
+   候选选择与草案预览在**同一个非模态大气泡**里完成：`FloatingPanel kind="action"`，
+   不 inert 主界面，点空白或 Esc 关闭即丢弃本次勾选。结构照 `.review-detail-panel`：
+   `padding:0` + flex 列 + 头／容量／工具行／滚动体／底栏。
+
+   与编辑气泡的两处差异是有意的：
+   1. 头与底**不吸顶**。本面板的滚动只发生在 `.schedule-body` 里，面板自己不出滚动条，
+      所以不需要 `.floating-panel h2/header` 那套 `top:-16px` 偏移（那是给整块面板滚动的
+      编辑气泡准备的；本面板 `padding:0`，照抄会差 16px）。
+   2. 正文能滚时只软掉底边 10px（`.is-scrollable`，照 `.review-detail-body` 的做法）。
+   --------------------------------------------------------------------------- */
+/* 高度：上下各留 48px，所以面板最高 = 视口 - 96px。
+   为什么不是照 `.review-detail-panel` 的 72vh：72vh 在 1200×800 下只有 576px，
+   扣掉 143px chrome 与 55px 底栏后只剩 378px，按 44px 行高连 8 行都放不下（算术见实施报告）。
+   72vh 对只读明细够用，对「要在列表里挑 8 项」的候选面不够。 */
+/* 宽度 600px：改成两行后，横向压力消失了 —— 原先 704px 是为了把「标题 + 说明 + 时长」
+   三样并排塞下，标题长一点就要省略。现在标题独占一行，600px 反而能整条显示。
+   窄窗口按 100vw - 48px 收，留左右各 24px。 */
+.floating-panel.schedule-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; width: min(37.5rem, calc(100vw - 48px)); max-height: calc(100dvh - 96px); }
+/* 200% 缩放：留白会随根字号一起变贵，而「能看到的候选行数」才是这一档的验收口径
+   （UI-SPEC：高缩放时优先重排、覆盖面板和纵向滚动）。所以大字号下让面板吃满视口，
+   仍然保留 12px 的定位留白。 */
+:root[data-scale="large"] .floating-panel.schedule-panel { max-height: calc(100dvh - 24px); }
+
+.schedule-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 12px 8px 14px; border-bottom: 1px solid var(--line-soft); }
+/* 范围下拉：比工具行那套更薄，因为它挂在标题行里。 */
+.schedule-window { flex: none; --select-text-start: .5rem; --select-text-end: 1.25rem; }
+.schedule-window .select-shell > select { height: 1.75rem; font-size: .75rem; }
+.schedule-window .select-display { font-size: .75rem; }
+/* 覆盖 `.floating-panel h2` 的吸顶规则：这里 h2 只是气泡标题，不参与滚动。 */
+.floating-panel .schedule-title { position: static; margin: 0; background: transparent; font-size: 1.05rem; line-height: 1.35; font-weight: 600; }
+.schedule-sub { min-width: 0; margin: 0; color: var(--muted); font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-back { flex: none; margin-left: -4px; }
+.schedule-close { flex: none; }
+/* 「规则」：收起态零高度，只在用户主动展开时占位 —— 固定说明不再横占一行。 */
+/* 剩余量靠右：与 rules 同为 auto 时先到的那个吃掉剩余空间，容量条紧贴「规则」。 */
+.schedule-head-caps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+
+/* 剩余容量条：画的是**还剩多少**，100% = 这段完全空着，随排入缩短到 0。
+   三件套是「剩多少 · 条 · 共多少」，右对齐成一组，与左边的日期之间留出空白 ——
+   它们各自回答一件事（覆盖哪几天 / 这段时间还剩多少），贴在一起会互相挤。
+
+   条必须够长才读得出比例：46px 的条上画 47% 只是一粒橙点，加长到 100px 才有刻度感。
+   右侧的总量是分母：只看「剩 12:55」没法判断算多算少，配上 27:30 比例才有意义。
+
+   条与读数**并排**而不是叠字。叠字实测走不通：数字居中时，剩余 47% 恰好让填充边界
+   穿过数字中心，看上去「12:」在橙底上、「55」在灰底上，一个数字被切成两半；
+   把数字靠左或靠右只是把交界挪到别处，只要数字在条内且填充连续，就一定会撞上。 */
+.schedule-meter { display: inline-flex; flex: none; align-items: center; gap: .5rem; }
+.schedule-meter-track { position: relative; flex: none; width: 6.25rem; height: .375rem; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.schedule-meter-fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 999px; background: var(--accent); transition: width .18s ease; }
+.schedule-meter-value { color: var(--text); font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schedule-meter-total { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 剩余降到 10% 以下才变色 —— 提醒的是「快不够了」，不是「已经超了」。
+   总量是分母，不跟着变色：分母没变，变的只是用掉多少。 */
+.schedule-meter[data-low="true"] .schedule-meter-fill { background: var(--danger); }
+.schedule-meter[data-low="true"] .schedule-meter-value { color: var(--danger); }
+
+/* 计数标签（底栏「共 N 项」「M 个时段」、预览态「仍未安排 N 项」）：无边框无底。
+   加了边框就会被当成按钮 —— 之前那枚「剩 12 小时 55 分钟」看着像按钮、点不动，就是这个原因。 */
+.schedule-cap { display: inline-flex; align-items: baseline; gap: 3px; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.schedule-cap strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.schedule-rules { margin-left: auto; display: grid; justify-items: end; min-width: 0; }
+.schedule-rules > summary { display: inline-flex; align-items: center; min-height: 1.5rem; padding: 0 .6rem; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--muted-strong); font-size: .75rem; cursor: pointer; list-style: none; }
+.schedule-rules > summary::-webkit-details-marker { display: none; }
+.schedule-rules > summary:hover { border-color: var(--line-strong); color: var(--text); }
+.schedule-rules > p { margin: 6px 0 0; max-width: 15rem; color: var(--muted); font-size: .75rem; line-height: 1.4; }
+
+/* 项目筛选 + 搜索：一行，且**不在滚动区里**（滚到中段也改得了筛选）。全选挪到底栏左下角。 */
+.schedule-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 16px; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.schedule-field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.schedule-toolbar input[type="search"] { flex: 1 1 7rem; min-width: 5rem; height: 2rem; padding: 0 .6rem; border-radius: .625rem; font-size: .78rem; }
+/* 下拉与搜索框同高（照 `.deadline-field > .select-shell > select` 的先例）。 */
+.schedule-toolbar .select-shell > select { height: 2rem; padding-block: 0; }
+
+/* 滚动体：`flex:1` 吃满剩余高度（不是 `45vh` 这类视口比例，那样 200% 下只剩一行）。 */
+.schedule-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 6px 12px 8px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; }
+.schedule-body.is-scrollable { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent); }
+
+.schedule-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: .75rem; }
+.schedule-hint button { border: 0; background: transparent; color: var(--accent-strong); font-size: .75rem; padding: 0; text-decoration: underline; }
+
+.schedule-group { display: grid; gap: 2px; }
+.schedule-group + .schedule-group { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.schedule-group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; min-height: 1.25rem; color: var(--muted); font-size: .75rem; }
+.schedule-group-head strong { color: var(--muted-strong); font-size: .75rem; font-weight: 600; }
+.schedule-group-meta { font-variant-numeric: tabular-nums; }
+.schedule-group-head button { margin-left: auto; padding: .25rem .3rem; border: 0; background: transparent; color: var(--accent-strong); font-size: .75rem; }
+.schedule-group-head button:hover { text-decoration: underline; }
+/* 折叠的「另有 N 项」：一行文字按钮，展开后逐行给原因。 */
+.schedule-fold { display: inline-flex; align-items: center; gap: 5px; min-height: 2rem; padding: 0 .2rem; border: 0; background: transparent; color: var(--muted); font-size: .75rem; text-align: left; }
+.schedule-fold:hover { color: var(--text); }
+
+/* 候选行：整行 44px 命中（复选框视觉 18px，标签撑满整行），10px 圆角 + `--line-soft`。 */
+/* 行：无边框、只留一条分隔线。13 个带框的行曾经让列表看起来像 13 个小卡片在互相挤。 */
+.schedule-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; min-height: 2.75rem; background: var(--panel); border-bottom: 1px solid var(--line-soft); }
+.schedule-row:last-child { border-bottom: 0; }
+.schedule-row:hover { background: color-mix(in srgb, var(--panel-strong) 70%, var(--panel)); }
+.schedule-row-label { display: flex; align-items: center; gap: 10px; align-self: stretch; min-width: 0; padding: 5px 6px 5px 10px; cursor: pointer; }
+.schedule-row-text { display: grid; gap: 1px; flex: 1 1 auto; min-width: 0; }
+.schedule-row-title { display: block; color: var(--text); font-size: .84rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.schedule-row-note { display: block; color: var(--muted); font-size: .75rem; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.schedule-row-more { display: grid; place-items: center; min-width: 2.75rem; min-height: 2.75rem; border: 0; border-radius: 10px; background: transparent; color: var(--muted); }
+.schedule-row-more:hover { color: var(--text); }
+/* 定位高亮：圆角矩形描边（`inset box-shadow` 会跟着 border-radius 走）。
+   高亮期间把分隔线隐掉 —— 直的底线压在圆角块下面会露出来一截，看着像画错。 */
+.schedule-row.is-flash { border-radius: 10px; border-bottom-color: transparent; box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-softer); animation: schedule-row-flash 1.5s ease-out; }
+@keyframes schedule-row-flash { 0%, 55% { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-softer); } 100% { box-shadow: inset 0 0 0 1px transparent; background: var(--panel); } }
+
+/* 结果 chip：中性色。强调色只留给主按钮与「今天」——超选也不用惩罚性配色。 */
+.schedule-chip { flex: none; padding: .1rem .5rem; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schedule-chip.is-muted { color: var(--muted); }
+/* 右侧固定一列：结果在上、事实（逾期 / 截止早于范围）在下，右边缘对齐成一列。 */
+.schedule-row-side { display: grid; gap: 3px; justify-items: end; align-content: center; min-width: 6.5rem; padding: 4px 10px 4px 4px; }
+/* 虚线 = 陈述事实，不是可操作的东西；实线那枚才是「排在哪、多久」。 */
+.schedule-chip.is-soft { border-style: dashed; background: transparent; color: var(--muted); }
+.schedule-flag { font-style: normal; padding: .05rem .45rem; border-radius: 999px; background: color-mix(in srgb, var(--danger) 12%, var(--panel)); color: var(--danger); font-size: .75rem; font-weight: 600; }
+
+/* 复选：`appearance:none` 画 18px 勾框，配色沿用 `--action` / `--action-text` 这对
+   成对 token（白勾在深色主题的浅橙底上会掉到 2.2:1，不能用硬编码白色）。 */
+.schedule-row-label input[type="checkbox"], .schedule-subrow input[type="checkbox"], .schedule-selectall input[type="checkbox"] { appearance: none; -webkit-appearance: none; flex: none; display: grid; place-items: center; width: 1.125rem; height: 1.125rem; margin: 0; padding: 0; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); cursor: pointer; }
+.schedule-row-label input[type="checkbox"]:checked, .schedule-subrow input[type="checkbox"]:checked, .schedule-selectall input[type="checkbox"]:checked, .schedule-row-label input[type="checkbox"]:indeterminate, .schedule-selectall input[type="checkbox"]:indeterminate { border-color: var(--action); background: var(--action); }
+.schedule-row-label input[type="checkbox"]:checked::after, .schedule-subrow input[type="checkbox"]:checked::after, .schedule-selectall input[type="checkbox"]:checked::after { content: ""; width: .55rem; height: .3rem; border-left: 2px solid var(--action-text); border-bottom: 2px solid var(--action-text); transform: rotate(-45deg) translateY(-1px); }
+.schedule-row-label input[type="checkbox"]:indeterminate::after, .schedule-selectall input[type="checkbox"]:indeterminate::after { content: ""; width: .5rem; height: 2px; background: var(--action-text); }
+
+/* 习惯组展开：逐日可单独取消（D5=a）。 */
+.schedule-subrows { grid-column: 1 / -1; display: grid; gap: 2px; margin: 0 4px 4px 1.75rem; }
+.schedule-subrow { display: flex; align-items: center; gap: 8px; min-height: 2rem; padding: 2px 8px; border-radius: 8px; color: var(--muted-strong); font-size: .78rem; cursor: pointer; }
+.schedule-subrow:hover { background: var(--panel-strong); }
+.schedule-subrow span:first-of-type { flex: 1 1 auto; }
+
+/* 预览：按天分组的去强调建议卡（淡底 + 虚线边，沿用 P4-13 给计划立的那套语言）。 */
+.schedule-day { display: grid; gap: 4px; min-width: 0; }
+.schedule-day + .schedule-day { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.schedule-day h3 { margin: 0; color: var(--muted-strong); font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 建议卡：单行。标题占满剩余宽度，时刻·时长与依据依次靠右，× 收尾 —— 原来是「时间竖跨两行 + 胶囊叠在标题下」，三块互相不对齐。 */
+.schedule-card { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; box-sizing: border-box; padding: 6px 6px 6px 10px; border: 1px dashed color-mix(in srgb, var(--line-strong) 78%, transparent); border-radius: 10px; background: var(--deemphasized-surface); }
+.schedule-card strong { flex: 1 1 auto; min-width: 0; color: var(--text); font-size: .82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.schedule-card-time { flex: none; padding: .1rem .5rem; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.schedule-basis { padding: .1rem .5rem; border: 1px dashed color-mix(in srgb, var(--line-strong) 70%, transparent); border-radius: 999px; color: var(--muted-strong); font-size: .75rem; white-space: nowrap; }
+.schedule-card-remove { flex: none; color: var(--muted); }
+.schedule-card-remove:hover { color: var(--danger); }
+
+.schedule-empty { display: grid; gap: 6px; justify-items: start; padding: 16px 4px; color: var(--muted); font-size: .78rem; }
+.schedule-empty > span { color: var(--muted-strong); }
+.schedule-empty strong { color: var(--text); font-size: .84rem; }
+.schedule-empty p { margin: 0; font-size: .78rem; }
+.schedule-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.schedule-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 12px 4px 14px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+.schedule-foot-left { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.schedule-foot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+/* 全选：跟随当前筛选，勾/取消只作用于筛选出来的组。 */
+.schedule-selectall { display: inline-flex; align-items: center; gap: 6px; min-height: 1.75rem; color: var(--text); font-size: .78rem; cursor: pointer; }
+.schedule-selectall-count { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+/* 「N 项只能部分安排」：虚线胶囊，点一下滚到第一个这样的行并高亮，不另列清单。 */
+.schedule-blocked-jump { display: inline-flex; align-items: center; gap: 2px; min-height: 1.75rem; padding: 0 .2rem 0 .5rem; border: 1px dashed var(--line-strong); border-radius: 999px; background: transparent; color: var(--muted-strong); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.schedule-blocked-jump:hover { border-color: var(--text); color: var(--text); }
+.schedule-foot .error-message { flex: 1 1 100%; margin: 0; }
+.schedule-foot-hint { color: var(--muted); font-size: .75rem; }
+
+/* 任务池头的自动排程辅助：一行中性提示，不用 hover-only 的 title（UI-SPEC:219）。 */
+.pool-assist { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--panel-strong); color: var(--muted-strong); font-size: .75rem; }
+.pool-assist button { margin-left: auto; padding: .25rem .3rem; border: 0; background: transparent; color: var(--accent-strong); font-size: .75rem; }
+.pool-assist button:hover { text-decoration: underline; }
+
+/* 项目卡次操作「安排项目」：与「继续」同列，但明显是次操作。 */
+.project-card-arrange { flex: none; min-height: 2rem; padding: 0 .5rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel-strong); color: var(--muted-strong); font-size: .75rem; white-space: nowrap; }
+.project-card-arrange:hover { border-color: var(--line-strong); color: var(--text); }
 /* 回顾（阶段 4 P4-08 / M11）：周期页面、图表与页面内明细区。 */
 .review-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 /* 第一行的三个大字：投入 / 净进度 / 完成。用和下面一致的圆角卡片做底，

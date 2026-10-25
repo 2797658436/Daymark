@@ -31,7 +31,9 @@ import { COMPLETION_FIT_LABEL, isCompletionPromptTarget } from "./lib/completion
 import { buildProjectRail } from "./lib/projectRail";
 import { extractBvid } from "./lib/bilibili";
 import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
-import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem } from "./lib/scheduling";
+import { resolveScheduleWindow, windowEndDate, type ScheduleWindowMode } from "./lib/scheduleWindow";
+import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem, type ScheduleUnscheduledItem } from "./lib/scheduling";
+import { scheduleUnscheduledText } from "./lib/scheduleReasons";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
@@ -119,8 +121,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     query.addEventListener("change", sync);
     return () => query.removeEventListener("change", sync);
   }, []);
-  const [schedulingTaskId, setSchedulingTaskId] = useState<string | null>(null);
-  const [schedulingOpen, setSchedulingOpen] = useState(false);
+  // 自动排程只有一个入口状态：`taskId` 是单项入口的目标（打开后滚到该行并高亮），
+  // `projectId` 是项目级入口的作用域（候选只列该项目、预选该项目的推荐组合）。
+  // 两者都为 null 就是从任务池头打开的普通流程。
+  const [scheduling, setScheduling] = useState<{ taskId: string | null; projectId: string | null } | null>(null);
   const [calendarFocusSessionId, setCalendarFocusSessionId] = useState<string | null>(null);
   // 截止事项页的会话状态（规格 §6.2）：筛选与焦点项只放 App 层内存 —— 同一会话内跨页
   // 返回仍然有效、应用重启后不恢复，也不写 Tauri Store、不与搜索文本一并保存。
@@ -581,10 +585,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
           scrollRef={mainRef} scrollTop={deadlinesScrollTop}
           onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })}
-          onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
+          onArrangeTask={(task) => setScheduling({ taskId: task.id, projectId: null })}
           onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
           onContinueMilestone={(milestone) => { setProjectFocus({ projectId: milestone.projectId, milestoneId: milestone.id, action: "continue" }); updatePreferences({ lastPage: "projects" }); }} />}
-        {page === "projects" && <ProjectsPage workspace={workspace} index={workspaceIndex} focus={projectFocus} onFocusHandled={() => setProjectFocus(null)} selectedProjectId={projectView.selectedId} onSelectProject={(selectedId) => setProjectView({ selectedId })} onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
+        {page === "projects" && <ProjectsPage workspace={workspace} index={workspaceIndex} focus={projectFocus} onFocusHandled={() => setProjectFocus(null)} selectedProjectId={projectView.selectedId} onSelectProject={(selectedId) => setProjectView({ selectedId })} onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })} onCreateTask={async (task) => { await commit(() => native.createTask(task)); }} onArrange={(task) => setScheduling({ taskId: task.id, projectId: null })} onArrangeProject={(projectId) => setScheduling({ taskId: null, projectId })} onCreate={async (project, tasks) => { await commit(() => native.createProjectWithTasks(project, tasks)); }}
           onUpdateProject={async (project) => { await commit(() => native.updateProject(project)); }}
           onCreateMilestone={async (milestone) => { await commit(() => native.createProjectMilestone(milestone)); }}
           onUpdateMilestone={async (milestone) => { await commit(() => native.updateProjectMilestone(milestone)); }}
@@ -596,7 +600,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           scrollRef={mainRef} scrollTop={reviewScrollTop}
           onGoToday={() => updatePreferences({ lastPage: "today" })}
           onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })}
-          onArrangeTask={(task) => { setSchedulingTaskId(task.id); setSchedulingOpen(true); }}
+          onArrangeTask={(task) => setScheduling({ taskId: task.id, projectId: null })}
           onOpenProject={(projectId, milestoneId) => { setProjectFocus({ projectId, milestoneId, action: "locate" }); updatePreferences({ lastPage: "projects" }); }}
           onLoadCompletionImages={(recordId) => native.getCompletionImages(recordId)}
           onEditCompletion={openCompletionForRecord} />}
@@ -615,7 +619,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} />
         <TaskPool index={workspaceIndex} tasks={poolTasks} heldTasks={heldTasks} leavingTaskId={leavingTaskId} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
           openProject={poolOpenProject} onOpenProjectChange={setPoolOpenProject} attentionOpen={poolAttentionOpen} onAttentionOpenChange={setPoolAttentionOpen}
-          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setSchedulingOpen(true)} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
+          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setScheduling({ taskId: null, projectId: null })} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
         </>
       )}
 
@@ -681,7 +685,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           </button>
         </div>;
       })()}
-      {schedulingOpen && <AutoScheduleDialog initialTaskId={schedulingTaskId} workspace={workspace} preferences={preferences} onClose={() => { setSchedulingOpen(false); setSchedulingTaskId(null); }} onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setSchedulingOpen(false); setSchedulingTaskId(null); }} />}
+      {scheduling && <SchedulePanel workspace={workspace} index={workspaceIndex} preferences={preferences} target={scheduling}
+        onClose={() => setScheduling(null)}
+        onOpenSettings={() => { setScheduling(null); updatePreferences({ lastPage: "appearance" }); }}
+        onApply={async (sessions, occurrences) => { await commit(() => native.applyScheduleDraft(sessions, occurrences)); pushUndo({ label: "撤销本次自动排程", run: () => native.deleteExecutionSessions(sessions.map((session) => session.id)) }); setScheduling(null); }} />}
       {/* 截止页与回顾页共用的任务编辑气泡：复用与任务池完全相同的编辑会话，不复制表单。 */}
       {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
         <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setTaskEditorAnchor(null); }} onCancel={() => setTaskEditorAnchor(null)} onPhase={setTaskEditorBusy} />
@@ -944,11 +951,17 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
       {/* 自动排程与新建习惯从 ⋯ 菜单里提出来常驻：这两件事每天都要点，
           藏在二级菜单里等于每次多点一步。头部因此正好三个按钮（排程／习惯／收起）。 */}
       <div className="pool-head-actions">
-        <button type="button" className="icon-action" aria-label="自动排程" title={autoScheduleAssist && assistCount > 0 ? `自动排程：${assistCount} 项还没安排` : "自动排程"} onClick={onAutoSchedule}><Sparkles size={18} aria-hidden="true" /></button>
+        <button type="button" className="icon-action" aria-label="自动排程" title="自动排程" onClick={onAutoSchedule}><Sparkles size={18} aria-hidden="true" /></button>
         <button type="button" className="icon-action" aria-label="新建重复习惯" title="新建重复习惯" onClick={(event) => setHabitAnchor(event.currentTarget.getBoundingClientRect())}><Repeat2 size={18} aria-hidden="true" /></button>
         <button className="icon-action" aria-label="收起任务池" onClick={onClose}><X size={18} /></button>
       </div>
     </header>
+
+    {/* 自动排程辅助：一行中性提示，不用 hover-only 的 title —— 那等于没有提示（UI-SPEC:219）。 */}
+    {autoScheduleAssist && assistCount > 0 && <p className="pool-assist">
+      <span>现在 {assistCount} 项可以安排</span>
+      <button type="button" onClick={onAutoSchedule}>查看</button>
+    </p>}
 
     <form className="pool-compose" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       <input aria-label="任务标题" placeholder="写一件事" title="写一件事，按 Enter 创建" value={title} onChange={(event) => setTitle(event.target.value)} />
@@ -2016,12 +2029,12 @@ type ProjectSort = "recent" | "deadline" | "name";
  *
  * 数据来源仍是 App 建好的共享稳定索引；不要在渲染每一行时重新扫全量数组。
  */
-function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProjectId, onSelectProject, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onEditTask, onFetchBilibili, onCreateTask, onArrange }: {
+function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProjectId, onSelectProject, onCreate, onUpdateProject, onCreateMilestone, onUpdateMilestone, onDeleteMilestone, onProgress, onEditTask, onFetchBilibili, onCreateTask, onArrange, onArrangeProject }: {
   /** 来自截止事项页的定位／续排请求；处理完立即回调清空，只生效一次。 */
   focus: ProjectFocusRequest | null; onFocusHandled: () => void;
   /** 当前打开的项目（App 层内存，同会话跨页返回有效）。 */
   selectedProjectId: string | null; onSelectProject: (projectId: string | null) => void;
-  onCreateTask: (task: Task) => Promise<void>; onArrange: (task: Task) => void;
+  onCreateTask: (task: Task) => Promise<void>; onArrange: (task: Task) => void; onArrangeProject: (projectId: string) => void;
   onEditTask: (task: Task, anchorElement: HTMLElement) => void;
   workspace: WorkspaceSnapshot; index: WorkspaceIndex; onCreate: (project: Project, tasks: Task[]) => Promise<void>;
   onUpdateProject: (project: Project) => Promise<void>;
@@ -2255,6 +2268,9 @@ function ProjectsPage({ workspace, index, focus, onFocusHandled, selectedProject
           <span>{nextTask ? "继续：" + nextTask.title : "打开项目"}</span>
           <ChevronRight size={14} aria-hidden="true" />
         </button>
+        {/* 次操作：进同一个自动排程气泡，作用域锁在本项目（候选只列该项目、预选其推荐组合）。 */}
+        <button type="button" className="project-card-arrange" aria-label={"安排项目 " + project.title}
+          onClick={(event) => { event.stopPropagation(); onArrangeProject(project.id); }}>安排项目</button>
         {recentDate
           ? <time className="project-card-recent" dateTime={recentDate}>上次推进 {formatRecentAdvanceDate(recentDate, today)}</time>
           : <span className="project-card-recent">还没有推进</span>}
@@ -2513,35 +2529,515 @@ function continueMilestoneDraft(milestone: ProjectMilestone, today: string): Pro
   return { ...base, criterionKind: "projectProgress", targetTaskId: null, targetCount: null, targetProgress: milestone.targetProgress };
 }
 
-function AutoScheduleDialog({ workspace, preferences, onClose, onApply, initialTaskId }: { initialTaskId?: string | null; workspace: WorkspaceSnapshot; preferences: AppSettings; onClose: () => void; onApply: (sessions: ExecutionSession[], occurrences: HabitOccurrence[]) => Promise<void> }) {
-  const today = toLocalDate(new Date()); const endDate = addDays(today, 6);
+/**
+ * 自动排程的入口作用域：单项入口给 `taskId`（打开后滚到该行并高亮 1.5 秒），
+ * 项目卡给 `projectId`（候选只列该项目、预选该项目的推荐组合）。都为 null 就是普通流程。
+ */
+interface SchedulingRequest { taskId: string | null; projectId: string | null }
+
+/**
+ * 候选清单的**一行**。任务一行一项；习惯按 `habitId` 收成一行（2026-10-24 D5=a，
+ * 与任务池「今天 N 项」的语言一致），展开后才逐日可单独取消。
+ */
+interface ScheduleCandidateGroup {
+  /** 行标识：任务行是 `task:<taskId>`，习惯行是 `habit:<habitId>`。 */
+  id: string;
+  taskId: string;
+  habitId?: string;
+  title: string;
+  projectId: string | null;
+  /** 这一行代表的所有 `ScheduleItem.key`（习惯是多日）。 */
+  keys: string[];
+  /** 目标总分钟数。 */
+  minutes: number;
+  deadlineLocal: string | null;
+  /** 习惯行逐日展开用；任务行为空。 */
+  occurrences: Array<{ key: string; date: string }>;
+}
+
+/** 候选行分组：任务一行一项，习惯按 `habitId` 收组。顺序沿用引擎给候选的池序。 */
+function scheduleCandidateGroups(items: ScheduleItem[], workspace: WorkspaceSnapshot): ScheduleCandidateGroup[] {
+  const projectOf = new Map(workspace.tasks.map((task) => [task.id, task.projectId ?? null]));
+  const habitOf = new Map(workspace.recurringHabits.map((habit) => [habit.id, habit]));
+  const groups: ScheduleCandidateGroup[] = [];
+  const byHabit = new Map<string, ScheduleCandidateGroup>();
+  for (const item of items) {
+    const projectId = projectOf.get(item.taskId) ?? null;
+    if (item.habitId) {
+      const existing = byHabit.get(item.habitId);
+      if (existing) {
+        existing.keys.push(item.key);
+        existing.minutes += item.targetMinutes;
+        existing.occurrences.push({ key: item.key, date: item.deadlineLocal ?? "" });
+        continue;
+      }
+      const group: ScheduleCandidateGroup = {
+        id: `habit:${item.habitId}`, taskId: item.taskId, habitId: item.habitId,
+        title: habitOf.get(item.habitId)?.title ?? item.title, projectId,
+        keys: [item.key], minutes: item.targetMinutes, deadlineLocal: null,
+        occurrences: [{ key: item.key, date: item.deadlineLocal ?? "" }],
+      };
+      byHabit.set(item.habitId, group);
+      groups.push(group);
+      continue;
+    }
+    groups.push({ id: item.key, taskId: item.taskId, title: item.title, projectId, keys: [item.key], minutes: item.targetMinutes, deadlineLocal: item.deadlineLocal, occurrences: [] });
+  }
+  return groups;
+}
+
+/**
+ * 自动排程气泡：候选选择与草案预览两步都在**同一个非模态大气泡**里完成（D2=a）。
+ *
+ * 结构照 `.review-detail-panel` 拼：`padding:0` + flex 列 + 头／容量／工具行／滚动体／底栏。
+ * 点空白或 Esc 关闭即丢弃本次勾选 —— 勾选是纯临时状态，不写任何数据（应用前零写入、
+ * 应用后可整组撤销），所以它不该占居中模态那一档。
+ */
+function SchedulePanel({ workspace, index, preferences, target, onClose, onOpenSettings, onApply }: {
+  workspace: WorkspaceSnapshot;
+  index: WorkspaceIndex;
+  preferences: AppSettings;
+  target: SchedulingRequest;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onApply: (sessions: ExecutionSession[], occurrences: HabitOccurrence[]) => Promise<void>;
+}) {
+  const today = toLocalDate(new Date());
+  // 窗口口径是这一个面板的配置，放在派生值之前（items 依赖它的末日）。
+  const [windowMode, setWindowMode] = useState<ScheduleWindowMode>("next7");
+  const scheduleWindow = useMemo(() => resolveScheduleWindow(windowMode, today), [windowMode, today]);
+  const endDate = windowEndDate(scheduleWindow);
+  const minimumMinutes = preferences.minimumSessionMinutes;
+  const slots = preferences.defaultTimeSlots;
+  const zeroSlots = slots.length === 0;
+
   const items = useMemo<ScheduleItem[]>(() => {
     const tasks = workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit").map((task) => {
       return { key: `task:${task.id}`, taskId: task.id, title: task.title, targetMinutes: task.sessionMinutes ?? preferences.defaultSessionMinutes, deadlineLocal: scheduleDeadlineForTask(workspace, task, today), priority: task.priority ?? "normal", sortOrder: task.sortOrder };
     });
     const habits = workspace.recurringHabits.flatMap((habit) => {
       const task = workspace.tasks.find((item) => item.id === habit.taskId); if (!task) return [];
-      return habitDatesBetween(habit, today, endDate).filter((date) => !workspace.habitOccurrences.some((occurrence) => occurrence.habitId === habit.id && occurrence.localDate === date)).map((date, index) => ({ key: `habit:${habit.id}:${date}`, taskId: habit.taskId, title: `${habit.title} · ${formatShortDate(date)}`, targetMinutes: habit.sessionMinutes, deadlineLocal: date, priority: "normal" as const, sortOrder: workspace.tasks.length + index, fixedDate: date, fixedStartLocal: habit.preferredStartLocal ?? undefined, habitId: habit.id }));
+      return habitDatesBetween(habit, scheduleWindow.startDate, endDate).filter((date) => !workspace.habitOccurrences.some((occurrence) => occurrence.habitId === habit.id && occurrence.localDate === date)).map((date, position) => ({ key: `habit:${habit.id}:${date}`, taskId: habit.taskId, title: `${habit.title} · ${formatShortDate(date)}`, targetMinutes: habit.sessionMinutes, deadlineLocal: date, priority: "normal" as const, sortOrder: workspace.tasks.length + position, fixedDate: date, fixedStartLocal: habit.preferredStartLocal ?? undefined, habitId: habit.id }));
     });
     return [...tasks, ...habits];
-  }, [endDate, preferences.defaultSessionMinutes, today, workspace]);
+  }, [endDate, preferences.defaultSessionMinutes, scheduleWindow.startDate, today, workspace]);
+
   const busy = useMemo(() => {
     const now = new Date(); const elapsed = now.getHours() * 60 + now.getMinutes();
     const past = elapsed > 0 ? [{ localDate: today, endLocalDate: today, startLocal: "00:00", endLocal: minutesTime(Math.min(1439, elapsed + 1)) }] : [];
     return [...workspace.executionSessions.filter((session) => session.status === "scheduled"), ...workspace.timeBlocks, ...past];
   }, [today, workspace.executionSessions, workspace.timeBlocks]);
-  const recommended = useMemo(() => buildSchedulePlan({ startDate: today, days: 7, items, defaultTimeSlots: preferences.defaultTimeSlots, busy, minimumMinutes: preferences.minimumSessionMinutes }), [busy, items, preferences.defaultTimeSlots, preferences.minimumSessionMinutes, today]);
-  const [selected, setSelected] = useState(() => new Set(recommended.allocations.filter((allocation) => !initialTaskId || allocation.taskId === initialTaskId).map((allocation) => allocation.key)));
-  const [query, setQuery] = useState(""); const [projectFilter, setProjectFilter] = useState("");
-  const [preview, setPreview] = useState(false); const [busySaving, setBusySaving] = useState(false); const [error, setError] = useState("");
-  const plan = useMemo(() => buildSchedulePlan({ startDate: today, days: 7, items: items.filter((item) => selected.has(item.key)), defaultTimeSlots: preferences.defaultTimeSlots, busy, minimumMinutes: preferences.minimumSessionMinutes }), [busy, items, preferences.defaultTimeSlots, preferences.minimumSessionMinutes, selected, today]);
-  const apply = async () => {
-    setBusySaving(true); setError("");
-    const sessions = plan.allocations.map((allocation) => sessionFromAllocation(allocation));
-    const occurrences = plan.allocations.flatMap((allocation, index) => allocation.habitId ? [{ id: crypto.randomUUID(), habitId: allocation.habitId, localDate: allocation.localDate, status: "scheduled" as const, sessionId: sessions[index].id }] : []);
-    try { await onApply(sessions, occurrences); } catch (reason) { setError(readError(reason)); setBusySaving(false); }
+
+  const projectOfTask = useMemo(() => new Map(workspace.tasks.map((task) => [task.id, task.projectId ?? null])), [workspace.tasks]);
+  const groups = useMemo(() => scheduleCandidateGroups(items, workspace), [items, workspace]);
+  const recommended = useMemo(() => buildSchedulePlan({ startDate: scheduleWindow.startDate, days: scheduleWindow.days, items, defaultTimeSlots: slots, busy, minimumMinutes }), [busy, items, minimumMinutes, scheduleWindow, slots]);
+  const recommendedKeys = useMemo(() => new Set(recommended.allocations.map((allocation) => allocation.key)), [recommended]);
+
+  // 打开时的那一组勾选：单项入口只勾那一个任务；项目级入口只勾该项目的推荐组合；
+  // 普通入口就是全量推荐组合（容量充裕时等于「所有放得下的」）。
+  const defaultSelection = useMemo(() => {
+    const base = { startDate: scheduleWindow.startDate, days: scheduleWindow.days, defaultTimeSlots: slots, busy, minimumMinutes };
+    if (target.taskId) return new Set(buildSchedulePlan({ ...base, items: items.filter((item) => item.taskId === target.taskId) }).allocations.map((allocation) => allocation.key));
+    if (target.projectId) return new Set(buildSchedulePlan({ ...base, items: items.filter((item) => projectOfTask.get(item.taskId) === target.projectId) }).allocations.map((allocation) => allocation.key));
+    return new Set(recommendedKeys);
+  }, [busy, items, minimumMinutes, projectOfTask, recommendedKeys, slots, target.projectId, target.taskId, today]);
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(defaultSelection));
+  const [query, setQuery] = useState("");
+  const [projectFilter, setProjectFilter] = useState(target.projectId ?? "");
+  const [preview, setPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [showUnavailable, setShowUnavailable] = useState(Boolean(target.taskId));
+  const [openHabits, setOpenHabits] = useState<Set<string>>(() => new Set());
+
+  const plan = useMemo(() => buildSchedulePlan({ startDate: scheduleWindow.startDate, days: scheduleWindow.days, items: items.filter((item) => selected.has(item.key)), defaultTimeSlots: slots, busy, minimumMinutes }), [busy, items, minimumMinutes, scheduleWindow, selected, slots]);
+
+  // 「其他可安排」= 全量推荐里排不进、但**单独**能排进的项。逐项跑一次只含自己的计划，
+  // 这是区分「容量不够」与「根本排不进」的唯一确定性依据（不靠猜）。
+  const soloById = useMemo(() => {
+    const map = new Map<string, { ok: boolean; reason: ScheduleUnscheduledItem | null; minutes: number }>();
+    for (const item of items) {
+      const single = buildSchedulePlan({ startDate: scheduleWindow.startDate, days: scheduleWindow.days, items: [item], defaultTimeSlots: slots, busy, minimumMinutes });
+      map.set(item.key, { ok: single.allocations.length > 0, reason: single.unscheduled[0] ?? null, minutes: single.allocations[0]?.minutes ?? 0 });
+    }
+    return map;
+  }, [busy, items, minimumMinutes, slots, today]);
+
+  const matches = (group: ScheduleCandidateGroup) => (!projectFilter || group.projectId === projectFilter)
+    && (!query.trim() || group.title.toLowerCase().includes(query.trim().toLowerCase()));
+  const visibleGroups = groups.filter(matches);
+  const bucketOf = (group: ScheduleCandidateGroup) => group.keys.some((key) => recommendedKeys.has(key)) ? "recommended" : group.keys.some((key) => soloById.get(key)?.ok) ? "other" : "unavailable";
+  const recommendedGroups = visibleGroups.filter((group) => bucketOf(group) === "recommended");
+  const otherGroups = visibleGroups.filter((group) => bucketOf(group) === "other");
+  const unavailableGroups = visibleGroups.filter((group) => bucketOf(group) === "unavailable");
+  const hiddenSelected = groups.filter((group) => !matches(group)).reduce((sum, group) => sum + group.keys.filter((key) => selected.has(key)).length, 0);
+  const filtering = Boolean(projectFilter || query.trim());
+
+  const availableMinutes = recommended.availableMinutes;
+  const remainingMinutes = availableMinutes - plan.usedMinutes;
+  // 容量条画的是**剩余**：100% = 这段时间完全空着，随排入逐渐缩短到 0。
+  // 变色的时机也按剩余算 —— 剩余降到 10% 以下才提醒，而不是等已经超了才提醒。
+  const remainingRatio = availableMinutes > 0 ? Math.min(1, Math.max(0, remainingMinutes / availableMinutes)) : 0;
+  // 不做 `availableMinutes > 0` 的前置：可用时长为 0（所有空档都短于最低有效时长）时
+  // 条本来就是空的，那正是最该报警的状态，不该因为分母是 0 就退化成中性色。
+  const capacityLow = remainingMinutes <= availableMinutes * 0.1;
+  const selectedGroups = groups.filter((group) => group.keys.some((key) => selected.has(key)));
+  const blocked = items.filter((item) => selected.has(item.key)).flatMap((item) => {
+    const allocation = plan.allocations.find((value) => value.key === item.key);
+    if (!allocation) return [{ key: item.key, title: item.title, text: scheduleUnscheduledText(plan.unscheduled.find((value) => value.key === item.key), minimumMinutes) }];
+    if (allocation.minutes >= item.targetMinutes) return [];
+    return [{ key: item.key, title: item.title, text: `只能安排 ${allocation.minutes}/${item.targetMinutes} 分钟，剩余以后继续` }];
+  });
+  const unallocated = items.filter((item) => selected.has(item.key) && !plan.allocations.some((allocation) => allocation.key === item.key));
+  // 全选是「当前筛选结果的全选」：计数与勾/取消都只作用于 visibleGroups，被筛掉的勾选原样保留。
+  const visibleCheckedGroups = visibleGroups.filter((group) => group.keys.every((key) => selected.has(key))).length;
+  const allVisibleChecked = visibleGroups.length > 0 && visibleCheckedGroups === visibleGroups.length;
+  const someVisibleChecked = visibleCheckedGroups > 0 && !allVisibleChecked;
+  const lockedCount = workspace.executionSessions.filter((session) => session.status === "scheduled").length + workspace.timeBlocks.length;
+
+  // 正文底边淡出：还能往下滚才软化，滚到底撤掉（照 `.review-detail-body.is-scrollable`）。
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [moreBelow, setMoreBelow] = useState(false);
+  useLayoutEffect(() => {
+    const node = bodyRef.current;
+    if (!node) return;
+    const check = () => setMoreBelow(node.scrollHeight - node.scrollTop - node.clientHeight > 4);
+    check();
+    node.addEventListener("scroll", check, { passive: true });
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(check) : null;
+    observer?.observe(node);
+    return () => { node.removeEventListener("scroll", check); observer?.disconnect(); };
+  }, [preview, query, projectFilter, showUnavailable, plan.allocations.length, visibleGroups.length]);
+
+  // 单项入口：把目标行滚进视口并高亮 1.5 秒，用户不用在十几行里自己找刚才点的那个任务。
+  const flashKey = target.taskId ? `task:${target.taskId}` : null;
+  const [flashRow, setFlashRow] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (!flashKey) return;
+    const node = bodyRef.current?.querySelector<HTMLElement>(`[data-schedule-row="${flashKey}"]`);
+    if (!node) return;
+    node.scrollIntoView?.({ block: "center" });
+    setFlashRow(flashKey);
+    const timer = window.setTimeout(() => setFlashRow(null), 1500);
+    return () => window.clearTimeout(timer);
+  }, [flashKey]);
+
+  const toggleGroup = (group: ScheduleCandidateGroup, on: boolean) => setSelected((current) => {
+    const next = new Set(current);
+    for (const key of group.keys) { if (on) next.add(key); else next.delete(key); }
+    return next;
+  });
+  const toggleKey = (key: string, on: boolean) => setSelected((current) => {
+    const next = new Set(current);
+    if (on) next.add(key); else next.delete(key);
+    return next;
+  });
+  const removeAllocation = (key: string) => setSelected((current) => { const next = new Set(current); next.delete(key); return next; });
+
+  // 逐行结果读的是**当前勾选**算出来的 `plan`，不是全量推荐计划 —— 取消勾选后行内文字立刻跟着变。
+  const resultOf = (group: ScheduleCandidateGroup) => {
+    const checkedKeys = group.keys.filter((key) => selected.has(key));
+    if (!checkedKeys.length) {
+      const recommendedHere = group.keys.filter((key) => recommendedKeys.has(key));
+      if (recommendedHere.length) {
+        const allocation = recommended.allocations.find((value) => value.key === recommendedHere[0]);
+        return group.keys.length > 1 || !allocation ? `推荐 ${recommendedHere.length} 个时段` : `推荐 ${scheduleDayLabel(today, allocation.localDate)} ${allocation.minutes} 分钟`;
+      }
+      const solo = soloById.get(group.keys[0]);
+      return solo?.ok ? `单独可排 ${solo.minutes} 分钟` : "暂时无法安排";
+    }
+    const allocations = checkedKeys.flatMap((key) => plan.allocations.find((value) => value.key === key) ?? []);
+    if (!allocations.length) return "当前组合放不下";
+    if (group.keys.length === 1) {
+      const allocation = allocations[0];
+      return allocation.minutes >= allocation.targetMinutes ? `${scheduleDayLabel(today, allocation.localDate)} ${allocation.minutes} 分钟` : `${allocation.minutes}/${allocation.targetMinutes} 分钟`;
+    }
+    const got = allocations.reduce((sum, allocation) => sum + allocation.minutes, 0);
+    return got >= group.minutes ? `${allocations.length} 个时段 · 共 ${got} 分钟` : `${allocations.length}/${group.keys.length} 个时段 · ${got}/${group.minutes} 分钟`;
   };
-  return <ConfirmDialog id="schedule-dialog" className="schedule-modal" labelledBy="schedule-title" busy={busySaving} onClose={onClose}><div className="modal-icon"><Sparkles /></div><h2 id="schedule-title">{preview ? "确认排程草案" : "自动排程 Lite"}</h2><p>仅追加到未来 7 天的默认时段空档，不调整已有安排或时间块。</p><div className="capacity-summary">已选 {selected.size} 项 · 建议 {plan.allocations.length} 个时段 · 使用 {formatDuration(plan.usedMinutes)} / 可用 {formatDuration(recommended.availableMinutes)}</div>{preview ? <SchedulePreview allocations={plan.allocations} /> : <div className="schedule-candidates"><label>按项目选择<SelectField value={projectFilter} onChange={setProjectFilter} options={[{ value: "", label: "全部项目与习惯" }, ...workspace.projects.map((project) => ({ value: project.id, label: project.title }))]} /></label><input aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="form-actions"><Button onClick={() => setSelected(new Set(items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => item.key)))}>选择搜索结果</Button><Button onClick={() => setSelected(new Set())}>清空选择</Button></div>{items.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()) && (!projectFilter || workspace.tasks.find((task) => task.id === item.taskId)?.projectId === projectFilter)).map((item) => { const allocation = recommended.allocations.find((value) => value.key === item.key); return <label key={item.key}><input type="checkbox" checked={selected.has(item.key)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(item.key); else next.delete(item.key); return next; })} /><span><strong>{item.title}</strong><small>{allocation ? `${formatShortDate(allocation.localDate)} 可安排 ${allocation.minutes} 分钟` : "当前 7 天暂时放不下"}</small></span></label>; })}{items.length === 0 && <p>当前没有需要安排的活动任务或习惯发生项。</p>}</div>}{error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}<div className="form-actions">{preview && <Button disabled={busySaving} onClick={onClose}>取消</Button>}<Button disabled={busySaving} onClick={preview ? () => setPreview(false) : onClose}>{preview ? "返回选择" : "取消"}</Button>{preview ? <Button variant="primary" disabled={busySaving || plan.allocations.length === 0} onClick={() => void apply()}>{busySaving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button> : <Button variant="primary" disabled={selected.size === 0 || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button>}</div></ConfirmDialog>;
+
+  /**
+   * 行内第二行：先说「为什么排不进或只能排一半」，再说「它凭什么排在这里」。
+   * 这一行**永远有内容**（最差也有「任务池顺序」），所以所有行高一致，竖着扫不会跳。
+   */
+  const basisLineOf = (group: ScheduleCandidateGroup) => {
+    const parts: string[] = [];
+    const checkedKeys = group.keys.filter((key) => selected.has(key));
+    if (checkedKeys.length) {
+      const allocations = checkedKeys.flatMap((key) => plan.allocations.find((value) => value.key === key) ?? []);
+      const got = allocations.reduce((sum, allocation) => sum + allocation.minutes, 0);
+      if (!allocations.length) parts.push(scheduleUnscheduledText(plan.unscheduled.find((value) => checkedKeys.includes(value.key)), minimumMinutes));
+      else if (got < group.minutes) parts.push(`还差 ${group.minutes - got} 分钟`);
+    } else if (bucketOf(group) === "unavailable") {
+      parts.push(scheduleUnscheduledText(soloById.get(group.keys[0])?.reason ?? undefined, minimumMinutes));
+    }
+    // 有原因时只说原因：原因 + 依据拼在 600px 的第二行里会被截断，反而两头都读不全。
+    return parts.length ? parts.join(" · ") : basisTextOf(group);
+  };
+
+  /** 依据：习惯 → 项目 → 高优先级 → 截止 → 池序。只在界面这一层算关系，不重排引擎给的顺序。 */
+  const basisTextOf = (group: ScheduleCandidateGroup) => {
+    const parts: string[] = [];
+    if (group.habitId) {
+      const habit = workspace.recurringHabits.find((value) => value.id === group.habitId);
+      parts.push(habit?.pattern === "weekdays" ? "习惯 · 工作日" : habit?.pattern === "weekly" ? "习惯 · 每周" : "习惯 · 每天");
+    } else if (group.projectId) {
+      const project = workspace.projects.find((value) => value.id === group.projectId);
+      if (project) parts.push(project.title);
+    }
+    if (!group.habitId) {
+      const task = workspace.tasks.find((value) => value.id === group.taskId);
+      if (task && (task.priority ?? "normal") === "high") parts.push("高优先级");
+    }
+    if (group.deadlineLocal) parts.push(`${formatShortDate(group.deadlineLocal)}截止`);
+    if (!parts.length) parts.push("任务池顺序");
+    return parts.join(" · ");
+  };
+
+  /** 行右侧的第二枚胶囊：逾期与「截止早于范围」这类事实，短到能塞进一个 pill 里。 */
+  const sideNoteOf = (group: ScheduleCandidateGroup) => {
+    const parts: string[] = [];
+    const overdue = overdueDaysOf(group);
+    if (overdue > 0) parts.push(`逾期 ${overdue} 天`);
+    // 选「下周 / 本周剩余」时，有些任务的截止日期落在范围起点之前：它会被挤到范围首日之后，
+    // 看上去像算错。这一枚就是把这个冲突说出来（未来 7 天从今天起算，走不到这里）。
+    if (overdue === 0 && group.deadlineLocal && group.deadlineLocal < scheduleWindow.startDate) parts.push("截止早于范围");
+    return parts.join(" · ");
+  };
+
+  const overdueDaysOf = (group: ScheduleCandidateGroup) => group.deadlineLocal && group.deadlineLocal < today ? daysBetween(group.deadlineLocal, today) : 0;
+
+  const resultOfOccurrence = (key: string) => {
+    if (!selected.has(key)) return "未选";
+    const allocation = plan.allocations.find((value) => value.key === key);
+    if (!allocation) return "放不下";
+    return allocation.minutes >= allocation.targetMinutes ? `${allocation.minutes} 分钟` : `${allocation.minutes}/${allocation.targetMinutes} 分钟`;
+  };
+
+  const renderRow = (group: ScheduleCandidateGroup) => {
+    const checkedCount = group.keys.filter((key) => selected.has(key)).length;
+    const allChecked = checkedCount === group.keys.length;
+    const sideNote = sideNoteOf(group);
+    return <div key={group.id} className={flashRow === group.id ? "schedule-row is-flash" : "schedule-row"} data-schedule-row={group.id}>
+      <label className="schedule-row-label">
+        <input type="checkbox" checked={allChecked}
+          ref={(element) => { if (element) element.indeterminate = checkedCount > 0 && !allChecked; }}
+          onChange={(event) => toggleGroup(group, event.target.checked)} />
+        <span className="schedule-row-text">
+          <span className="schedule-row-title">{group.title}</span>
+          <span className="schedule-row-note">{basisLineOf(group)}</span>
+        </span>
+      </label>
+      {/* 右侧固定一列：结果胶囊在上，事实胶囊（逾期 / 截止早于范围）在下。行高随内容浮动，不为对齐而留空。 */}
+      <span className="schedule-row-side">
+        <span className={checkedCount ? "schedule-chip" : "schedule-chip is-muted"}>{resultOf(group)}</span>
+        {sideNote && <span className="schedule-chip is-soft">{sideNote}</span>}
+      </span>
+      {group.habitId && <button type="button" className="schedule-row-more" aria-label={`展开 ${group.title} 的逐日安排`} aria-expanded={openHabits.has(group.id)}
+        onClick={() => setOpenHabits((current) => { const next = new Set(current); if (next.has(group.id)) next.delete(group.id); else next.add(group.id); return next; })}>
+        {openHabits.has(group.id) ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+      </button>}
+      {group.habitId && openHabits.has(group.id) && <div className="schedule-subrows">
+        {group.occurrences.map((occurrence) => <label key={occurrence.key} className="schedule-subrow">
+          <input type="checkbox" checked={selected.has(occurrence.key)} onChange={(event) => toggleKey(occurrence.key, event.target.checked)} />
+          <span>{formatShortDate(occurrence.date)}</span>
+          <span className={selected.has(occurrence.key) ? "schedule-chip" : "schedule-chip is-muted"}>{resultOfOccurrence(occurrence.key)}</span>
+        </label>)}
+      </div>}
+    </div>;
+  };
+
+  /** 依据 chip：习惯 → 已逾期/临期 → 高优先级 → 项目下一项 → 按池序（领域关系只在界面这一层算）。 */
+  const basisOf = (allocation: ScheduleAllocation) => {
+    if (allocation.habitId) return "习惯";
+    const task = workspace.tasks.find((value) => value.id === allocation.taskId);
+    if (!task) return "任务池顺序";
+    const deadline = scheduleDeadlineForTask(workspace, task, today);
+    if (deadline) {
+      const days = daysBetween(today, deadline);
+      if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
+      if (days === 0) return "今天截止";
+      if (days <= 3) return `还有 ${days} 天截止`;
+    }
+    if ((task.priority ?? "normal") === "high") return "高优先级";
+    if (task.projectId) {
+      const next = workspace.tasks.filter((value) => value.projectId === task.projectId && value.status === "active" && value.kind !== "habit").sort((left, right) => left.sortOrder - right.sortOrder)[0];
+      if (next?.id === task.id) return "项目下一项";
+    }
+    return "任务池顺序";
+  };
+  const titleOfAllocation = (allocation: ScheduleAllocation) => allocation.habitId
+    ? workspace.recurringHabits.find((habit) => habit.id === allocation.habitId)?.title ?? allocation.title
+    : workspace.tasks.find((task) => task.id === allocation.taskId)?.title ?? allocation.title;
+
+  const apply = async () => {
+    setSaving(true); setError("");
+    const sessions = plan.allocations.map((allocation) => sessionFromAllocation(allocation));
+    const occurrences = plan.allocations.flatMap((allocation, at) => allocation.habitId ? [{ id: crypto.randomUUID(), habitId: allocation.habitId, localDate: allocation.localDate, status: "scheduled" as const, sessionId: sessions[at].id }] : []);
+    try { await onApply(sessions, occurrences); } catch (reason) { setError(readError(reason)); setSaving(false); }
+  };
+
+  const toggleAllVisible = (on: boolean) => setSelected((current) => {
+    const next = new Set(current);
+    for (const group of visibleGroups) for (const key of group.keys) { if (on) next.add(key); else next.delete(key); }
+    return next;
+  });
+  /**
+   * 底栏那枚可点计数：不另列清单（原因已经写在每行第二行），
+   * 直接把列表滚到第一个只能部分安排 / 放不下的行并高亮，省掉一份重复文案。
+   */
+  const jumpToBlocked = () => {
+    const first = blocked[0];
+    if (!first) return;
+    const group = groups.find((value) => value.keys.includes(first.key));
+    if (!group) return;
+    if (bucketOf(group) === "unavailable" && !showUnavailable) setShowUnavailable(true);
+    window.setTimeout(() => {
+      const node = bodyRef.current?.querySelector<HTMLElement>(`[data-schedule-row="${group.id}"]`);
+      node?.scrollIntoView?.({ block: "center" });
+      setFlashRow(group.id);
+      window.setTimeout(() => setFlashRow(null), 1500);
+    }, 0);
+  };
+
+  const previewDates = [...new Set(plan.allocations.map((allocation) => allocation.localDate))].sort();
+  const bodyClass = moreBelow ? "schedule-body is-scrollable" : "schedule-body";
+
+  return <FloatingPanel kind="action" wide closeOnOutsideClick busy={saving} label={preview ? "排程草案" : "自动排程"} titleId="schedule-panel-title" className="schedule-panel" onClose={onClose}>
+    <div className="schedule-head">
+      {preview && <button type="button" className="icon-action schedule-back" aria-label="返回选择" onClick={() => setPreview(false)}><ChevronLeft size={18} aria-hidden="true" /></button>}
+      <h2 id="schedule-panel-title" className="schedule-title">{preview ? "排程草案" : "自动排程"}</h2>
+      {/* 顺序是「口径 → 日期」：先选按哪种范围排，右边跟着显示这次具体覆盖哪几天。
+          副标题写日期而不是「未来 7 天」—— 周三打开时没人知道那 7 天到底是哪 7 天。 */}
+      {!preview && !zeroSlots && <span className="schedule-window">
+        <SelectField ariaLabel="排程范围" value={windowMode} onChange={(value) => setWindowMode(value as ScheduleWindowMode)}
+          options={[{ value: "next7", label: "未来 7 天" }, { value: "thisWeek", label: "本周剩余" }, { value: "nextWeek", label: "下周" }]} />
+      </span>}
+      <p className="schedule-sub">{formatShortDate(scheduleWindow.startDate)}–{formatShortDate(endDate)}</p>
+      {/* 三枚容量 chip 直接挂在标题行，取代原来那条独立容量行：「可用」「已锁」已经进「规则」，
+          「用 X」删掉 —— 剩多少是唯一要答的问题。 */}
+      {/* 顶部只留结论性的剩余量，做成容量条；项数与时段数下沉到底栏左下角，跟全选放在一起。 */}
+      {!preview && !zeroSlots && <span className="schedule-head-caps">
+        <span className="schedule-meter" role="img" data-low={capacityLow ? "true" : undefined}
+          aria-label={`可安排时间${remainingMinutes < 0 ? `已超出 ${formatDuration(-remainingMinutes)}` : `还剩 ${formatDuration(remainingMinutes)}`}，共 ${formatDuration(availableMinutes)}`}
+          title={remainingMinutes < 0 ? `已超出 ${formatDuration(-remainingMinutes)}` : `剩余 ${formatDuration(remainingMinutes)} / 共 ${formatDuration(availableMinutes)}`}>
+          <span className="schedule-meter-value" aria-hidden="true">{remainingMinutes < 0 ? `超 ${formatClockMinutes(remainingMinutes)}` : formatClockMinutes(remainingMinutes)}</span>
+          <span className="schedule-meter-track" aria-hidden="true">
+            <span className="schedule-meter-fill" style={{ width: `${Math.round(remainingRatio * 100)}%` }} />
+          </span>
+          {/* 右侧的总量是分母：只有「剩 12:55」时你没法判断这算多算少，配上 27:30 比例才有意义。 */}
+          <span className="schedule-meter-total" aria-hidden="true">{formatClockMinutes(availableMinutes)}</span>
+        </span>
+      </span>}
+      {preview && unallocated.length > 0 && <span className="schedule-head-caps">
+        <span className="schedule-cap">仍未安排 <strong>{unallocated.length}</strong> 项</span>
+      </span>}
+      <details className="schedule-rules">
+        <summary>规则</summary>
+        <p>仅追加到空档，不调整已有安排或时间块。所选范围共 {formatDuration(availableMinutes)} 可用；已锁 {lockedCount} 个既有安排与时间块，这部分时间不会被重复使用。</p>
+      </details>
+      <button type="button" className="icon-action schedule-close" aria-label="关闭自动排程" onClick={onClose}><X size={18} aria-hidden="true" /></button>
+    </div>
+
+    {!preview && !zeroSlots && <div className="schedule-toolbar">
+      <label className="schedule-field"><span>项目</span>
+        <SelectField value={projectFilter} onChange={setProjectFilter} options={[{ value: "", label: "全部" }, ...workspace.projects.map((project) => ({ value: project.id, label: project.title }))]} />
+      </label>
+      <input type="search" aria-label="搜索排程任务" placeholder="搜索任务或习惯" value={query} onChange={(event) => setQuery(event.target.value)} data-autofocus />
+    </div>}
+
+    {preview
+      ? <div className={bodyClass} ref={bodyRef} tabIndex={0} role="region" aria-label="排程草案">
+        {previewDates.map((date) => {
+          const dayAllocations = plan.allocations.filter((allocation) => allocation.localDate === date).sort((left, right) => left.startLocal.localeCompare(right.startLocal));
+          return <section key={date} className="schedule-day">
+            <h3>{scheduleDayLabel(today, date)} · {dayAllocations.length} 个时段 · {formatDuration(dayAllocations.reduce((sum, allocation) => sum + allocation.minutes, 0))}</h3>
+            {dayAllocations.map((allocation) => <article key={allocation.key} className="schedule-card">
+              <strong>{titleOfAllocation(allocation)}</strong>
+              {/* 时刻与时长合并成一枚，跟依据并列在行右侧 —— 与候选行同一套「左标题、右事实」的阅读顺序。 */}
+              <span className="schedule-card-time">{allocation.startLocal}–{allocation.endLocal} · {allocation.minutes >= allocation.targetMinutes ? `${allocation.minutes} 分钟` : `${allocation.minutes}/${allocation.targetMinutes} 分钟`}</span>
+              <span className="schedule-basis">{basisOf(allocation)}</span>
+              <button type="button" className="icon-action schedule-card-remove" aria-label={`移除 ${titleOfAllocation(allocation)}`} onClick={() => removeAllocation(allocation.key)}><X size={16} aria-hidden="true" /></button>
+            </article>)}
+          </section>;
+        })}
+        {!previewDates.length && <div className="schedule-empty">
+          <strong>没有可应用的时段</strong>
+          <p>当前勾选在当前空档里排不下。返回选择改一改，或放弃预览。</p>
+          <Button onClick={() => setPreview(false)}>返回选择</Button>
+        </div>}
+      </div>
+      : <div className={bodyClass} ref={bodyRef} tabIndex={0} role="region" aria-label="排程候选">
+        {zeroSlots
+          ? <div className="schedule-empty">
+            <span><CalendarDays size={20} aria-hidden="true" /></span>
+            <strong>还没有默认时段</strong>
+            <p>自动排程只在默认时段里找空档；先去设置里加一段能用的时间。</p>
+            <div className="schedule-empty-actions"><Button variant="primary" onClick={onOpenSettings}>去设置默认时段</Button><Button onClick={onClose}>关闭</Button></div>
+          </div>
+          : <>
+            {filtering && <div className="schedule-hint">
+              <span>已按{projectFilter ? "项目" : "搜索"}筛选 · 显示 {visibleGroups.length}/{groups.length} · 选择仍含其余 {hiddenSelected} 项</span>
+              <button type="button" onClick={() => { setProjectFilter(""); setQuery(""); }}>显示全部</button>
+            </div>}
+            {recommendedGroups.length > 0 && <section className="schedule-group" aria-labelledby="schedule-group-recommended">
+              <div className="schedule-group-head">
+                <strong id="schedule-group-recommended">推荐本次安排</strong>
+                <button type="button" onClick={() => setSelected(new Set(defaultSelection))}>恢复推荐</button>
+              </div>
+              {recommendedGroups.map(renderRow)}
+            </section>}
+            {otherGroups.length > 0 && <section className="schedule-group" aria-labelledby="schedule-group-other">
+              <div className="schedule-group-head">
+                <strong id="schedule-group-other">其他可安排</strong>
+                <span className="schedule-group-meta">{otherGroups.length} 项</span>
+                <button type="button" onClick={() => setSelected((current) => { const next = new Set(current); for (const group of otherGroups) for (const key of group.keys) next.add(key); return next; })}>全选本组</button>
+              </div>
+              {otherGroups.map(renderRow)}
+            </section>}
+            {unavailableGroups.length > 0 && <section className="schedule-group">
+              <button type="button" className="schedule-fold" aria-expanded={showUnavailable} onClick={() => setShowUnavailable(!showUnavailable)}>
+                {showUnavailable ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                另有 {unavailableGroups.length} 项暂时无法安排
+              </button>
+              {showUnavailable && unavailableGroups.map(renderRow)}
+            </section>}
+            {!visibleGroups.length && (groups.length
+              ? <div className="schedule-empty"><strong>当前筛选没有任务</strong><p>切回全部即可看到其余 {groups.length} 项。</p><Button onClick={() => { setProjectFilter(""); setQuery(""); }}>清除筛选</Button></div>
+              : <div className="schedule-empty"><strong>没有可安排的任务</strong><p>任务池里的活动任务都已安排，或暂时没有任务。</p></div>)}
+          </>}
+      </div>}
+
+    {(!zeroSlots || preview) && <div className="schedule-foot">
+      {error && <p className="error-message" role="alert"><CircleAlert />{error}</p>}
+      <span className="schedule-foot-left">
+        {/* data-* 给结构账探针读（跟 data-schedule-row 一样）：DOM 的 checked 与 React state 是否一致靠它验证。 */}
+        {!preview && !zeroSlots && <label className="schedule-selectall" data-all={allVisibleChecked ? "1" : "0"} data-some={someVisibleChecked ? "1" : "0"} data-groups={visibleGroups.length}>
+          <input type="checkbox" checked={allVisibleChecked} aria-label={`全选当前筛选的 ${visibleGroups.length} 项`}
+            ref={(element) => { if (element) element.indeterminate = someVisibleChecked; }}
+            /* 按当前状态取反，不读 event.target.checked：受控 checkbox 在 indeterminate 状态
+               下，浏览器在 change 之前会把 checked 复原成 props 里的值，读到的永远是 false
+               —— 于是「点全选」变成了「全部取消」。 */
+            onChange={() => toggleAllVisible(!allVisibleChecked)} />
+          <span>全选</span>
+        </label>}
+        {(!zeroSlots || preview) && <>
+          <span className="schedule-cap">共 <strong>{visibleGroups.length}</strong> 项</span>
+          <span className="schedule-cap"><strong>{plan.allocations.length}</strong> 个时段</span>
+        </>}
+        {!preview && !zeroSlots && blocked.length > 0 && <button type="button" className="schedule-blocked-jump" onClick={jumpToBlocked}>
+          {blocked.length} 项只能部分安排<ChevronRight size={13} aria-hidden="true" />
+        </button>}
+        {!preview && !zeroSlots && plan.allocations.length === 0 && <span className="schedule-foot-hint">请先选择至少一个任务</span>}
+      </span>
+      <span className="schedule-foot-actions">
+        {preview
+          ? <><Button disabled={saving} onClick={onClose}>放弃预览</Button><Button variant="primary" disabled={saving || plan.allocations.length === 0} onClick={() => void apply()}>{saving ? "正在应用…" : `应用 ${plan.allocations.length} 个时段`}</Button></>
+          : <><Button disabled={saving} onClick={onClose}>取消</Button><Button variant="primary" disabled={saving || plan.allocations.length === 0} onClick={() => setPreview(true)}>生成排程草案</Button></>}
+      </span>
+    </div>}
+  </FloatingPanel>;
 }
 
 function scheduleDeadlineForTask(workspace: WorkspaceSnapshot, task: Task, today: string) {
@@ -2913,11 +3409,13 @@ function isEditable(target: EventTarget | null) { return target instanceof HTMLE
 function applyDisplayPreferences(settings: AppSettings, systemDark: boolean, systemReduced: boolean) { const root = document.documentElement; root.dataset.theme = settings.appearance === "system" ? (systemDark ? "dark" : "light") : settings.appearance; root.dataset.motion = settings.motion === "system" ? (systemReduced ? "reduce" : "full") : settings.motion; root.dataset.scale = settings.scale >= 150 ? "large" : "normal"; root.style.fontSize = `${settings.scale}%`; }
 function readError(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const rest = minutes % 60; return hours === 0 ? `${rest} 分钟` : rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分钟`; }
-
-function SchedulePreview({ allocations }: { allocations: ScheduleAllocation[] }) {
-  const dates = [...new Set(allocations.map((item) => item.localDate))].sort();
-  return <div className="schedule-preview">{dates.map((date) => { const items = allocations.filter((item) => item.localDate === date).sort((a, b) => a.startLocal.localeCompare(b.startLocal)); return <section key={date}><h3>{formatShortDate(date)} · {items.length} 个时段 · {formatDuration(items.reduce((sum, item) => sum + item.minutes, 0))}</h3>{items.map((item) => <article key={item.key}><time>{item.startLocal}–{item.endLocal}</time><strong>{item.title}</strong><span>{item.minutes < item.targetMinutes ? `先安排 ${item.minutes}/${item.targetMinutes} 分钟` : formatDuration(item.minutes)}</span></article>)}</section>; })}{!dates.length && <p>当前选择没有可应用的空档。</p>}</div>;
+/** 容量条两侧的时长：`h:mm`，等宽数字所以条宽不跳动。
+    超容量时前缀「超」而不是负号 —— 负号要读者自己换算成「欠了多少」。 */
+function formatClockMinutes(minutes: number) {
+  const total = Math.abs(minutes);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
+
+function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const rest = minutes % 60; return hours === 0 ? `${rest} 分钟` : rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分钟`; }
 
 function hasFutureSchedule(session: ExecutionSession) { return session.status === "scheduled" && localSessionStart(session) > Date.now(); }

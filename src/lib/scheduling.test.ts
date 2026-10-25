@@ -127,4 +127,84 @@ describe("automatic scheduling Lite", () => {
       expect.objectContaining({ key: "flexible-task", startLocal: "19:00", endLocal: "20:00" }),
     ]);
   });
+
+  // D1=a（2026-10-24）：逾期任务按窗口首日参与排档。改前这条会红 —— 截止日期早于窗口首日时
+  // `eligible` 恒为空，任务永远进 unscheduledKeys。
+  it("schedules an overdue task against the first day of the window", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2,
+      items: [task("overdue", 20, { deadlineLocal: "2026-08-01" })],
+      defaultTimeSlots: slots, busy: [], minimumMinutes: 15,
+    });
+
+    expect(plan.allocations).toEqual([expect.objectContaining({ key: "overdue", localDate: "2026-08-03", startLocal: "19:00", endLocal: "19:20" })]);
+    expect(plan.unscheduled).toEqual([]);
+  });
+
+  it("never lets a clamped overdue deadline reach past the first day", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2,
+      // 首日只有 10 分钟（低于最低有效时长），次日有整段可用：钳制之后仍然不能跨到次日。
+      items: [task("overdue", 30, { deadlineLocal: "2026-08-01" })],
+      defaultTimeSlots: [{ ...slots[0], start: "19:00", end: "19:50" }],
+      busy: [{ localDate: "2026-08-03", endLocalDate: "2026-08-03", startLocal: "19:00", endLocal: "19:40" }],
+      minimumMinutes: 15,
+    });
+
+    expect(plan.allocations).toEqual([]);
+    expect(plan.unscheduled).toEqual([{ key: "overdue", reason: "gaps-too-short", longestGapMinutes: 10 }]);
+  });
+});
+
+describe("automatic scheduling unscheduled reasons", () => {
+  const only = (plan: ReturnType<typeof buildSchedulePlan>) => plan.unscheduled.map((item) => `${item.key}:${item.reason}:${item.longestGapMinutes}`);
+
+  it("reports below-minimum for a target shorter than the minimum effective length", () => {
+    const plan = buildSchedulePlan({ startDate: "2026-08-03", days: 1, items: [task("tiny", 10)], defaultTimeSlots: slots, busy: [], minimumMinutes: 15 });
+    expect(only(plan)).toEqual(["tiny:below-minimum:0"]);
+    // 兼容字段与结构化输出一一对应，顺序一致。
+    expect(plan.unscheduledKeys).toEqual(plan.unscheduled.map((item) => item.key));
+  });
+
+  it("reports no-slots when no default time slot produces a gap at all", () => {
+    const plan = buildSchedulePlan({ startDate: "2026-08-03", days: 7, items: [task("anything", 30)], defaultTimeSlots: [], busy: [], minimumMinutes: 15 });
+    expect(only(plan)).toEqual(["anything:no-slots:0"]);
+  });
+
+  it("reports no-gap-that-day for a dated occurrence on a day without default slots", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2,
+      items: [task("habit:2026-08-04", 30, { fixedDate: "2026-08-04" })],
+      defaultTimeSlots: [{ ...slots[0], weekdays: [1] }], busy: [], minimumMinutes: 15,
+    });
+    expect(only(plan)).toEqual(["habit:2026-08-04:no-gap-that-day:0"]);
+  });
+
+  it("reports fixed-start-busy when the fixed start falls inside an occupied range", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 1,
+      items: [task("fixed", 30, { fixedDate: "2026-08-03", fixedStartLocal: "20:30" })],
+      defaultTimeSlots: slots,
+      busy: [{ localDate: "2026-08-03", endLocalDate: "2026-08-03", startLocal: "20:00", endLocal: "21:00" }],
+      minimumMinutes: 15,
+    });
+    expect(only(plan)).toEqual(["fixed:fixed-start-busy:0"]);
+  });
+
+  it("reports deadline-no-gap when every gap sits after the deadline day", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2,
+      items: [task("due-today", 30, { deadlineLocal: "2026-08-03" })],
+      defaultTimeSlots: [{ ...slots[0], weekdays: [2] }], busy: [], minimumMinutes: 15,
+    });
+    expect(only(plan)).toEqual(["due-today:deadline-no-gap:0"]);
+  });
+
+  it("reports gaps-too-short with the longest gap it could find", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 1, items: [task("long", 60)],
+      defaultTimeSlots: [{ ...slots[0], start: "19:00", end: "19:10" }], busy: [], minimumMinutes: 15,
+    });
+    expect(only(plan)).toEqual(["long:gaps-too-short:10"]);
+  });
 });
