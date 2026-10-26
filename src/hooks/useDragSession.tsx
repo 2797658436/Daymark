@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { dragEdgeScrollVelocity } from "./useCalendarViewport";
 import { clockMinutes, segmentMinuteAtOffset, segmentOffsetAtMinute, type TimelineSegment } from "../lib/calendarTimeline";
 import {
-  resolveCalendarDrop, sessionMinutes,
+  resizeChanges, resolveCalendarDrop, sessionMinutes,
   type CalendarDropIntent, type CalendarDropMode, type SessionPlacementChange,
 } from "../lib/calendarPlacement";
 import type { ExecutionSession, Task } from "../lib/native";
@@ -23,6 +23,8 @@ import { snapDelta, snapMinutesFor, snapTo } from "../lib/timelineDrag";
  *
  * `deciding` 是「已经松手、但要用户先确认」的一段（§187 跨默认时段/跨天、§185 时间块）。
  * 它不是提交：气泡里点确认才进 `landing`，取消直接回 `idle`，副作用一次都没发生。
+ * B3 起改时长也走这一段（§189 后半／§197）：它的确认出口是 `onResize`（带同一份时长），
+ * 由 App 把「时长 + 让位」写成一次事务与一个撤销项（D12）。
  */
 
 export type DragSessionPhase = "idle" | "picked" | "dragging" | "landing" | "deciding";
@@ -71,10 +73,15 @@ export interface DragDecision {
   dates: string[];
   /** 时间块标题（block 用）。 */
   blockTitle: string;
-  /** 确认后的落点。 */
+  /** 确认后的落点。改时长时只用来描述「哪天、从哪开始、推走了谁」，提交走 `onResize`。 */
   intent: CalendarDropIntent;
-  /** 「放到时间块之后」的落点（只有 block 有）。 */
+  /** 「放到时间块之后」的落点（只有 block 且不是改时长时才有；改时长没有「之后」语义）。 */
   afterIntent: CalendarDropIntent | null;
+  /**
+   * 改时长的确认：非空表示这次决策来自 `kind: "resize"`，确认后走 `onResize(session, resizeDuration)`，
+   * 而不是 `onCommit(intent)`。`null` 表示移动／池路径的落点决策。
+   */
+  resizeDuration: number | null;
 }
 
 export interface DragSessionState {
@@ -125,9 +132,18 @@ export interface UseDragSessionOptions {
    * 松手时问一次「这次落点要不要先确认」。
    *
    * 业务规则（哪些算越界、时间块三选项各落在哪）留在 App；状态机只负责在返回非空时
-   * 停在 `deciding` 并把它交给气泡，返回 null 就直接提交。
+   * 停在 `deciding` 并把它交给气泡，返回 null 就直接提交。`kind: "resize"` 也走这一条
+   * （B3／D12）：确认后不是 `onCommit`，而是带同一份时长走 `onResize`。
    */
   buildDecision?: (input: { intent: CalendarDropIntent; preview: DragSessionPreview; point: { x: number; y: number } }) => DragDecision | null;
+  /**
+   * 日视图的折叠条正被悬停展开时置 true（B3／D13）。展开期间边缘自动滚动必须停：
+   * 折叠条贴在轨道上沿、指针同时落在 56px 触发带里，两条规格会互相破坏，落点边展开边往上跑。
+   *
+   * 用 ref 而不是布尔入参：这个值每帧在 rAF 循环里读（不给 React 加一次重渲染），
+   * 也不新建第二套状态 —— 写它的还是日视图那个 `dragExpandedGapKey`。
+   */
+  edgeScrollHoldRef?: RefObject<boolean>;
 }
 
 const DRAG_THRESHOLD_PX = 5;
@@ -318,9 +334,15 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
       const pixelsPerMinute = optionsRef.current.hourHeight / 60;
       const deltaMinutes = (y - gesture.originY) / pixelsPerMinute;
       const duration = Math.max(snap, Math.min(1440, source.duration + snapDelta(deltaMinutes, snap)));
+      // B3／D12：拉长与插入共用同一份级联让位（§197）。缩短时 `resizeChanges` 天然返回空 ——
+      // 新结束分钟不越过任何人，只释放空档（§198）。
+      const sessions = optionsRef.current.sessionsFor(source.date);
+      const shifted = gesture.session
+        ? resizeChanges({ sessions, session: gesture.session, startMinute: source.startMinute, duration })
+        : [];
       return {
         kind, date: source.date, startMinute: source.startMinute, duration,
-        mode: "place", targetSessionId: "", targetRatio: null, latched: false, shifted: [],
+        mode: "place", targetSessionId: "", targetRatio: null, latched: false, shifted,
         collapsedGapKey: null, blockId: null,
       };
     }
@@ -390,6 +412,8 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
    * 边缘自动滚动（§197）：拖拽期间一条 rAF 循环，指针在触发带里就按速度推进滚动，
    * 回到中央自然停（速度 0，循环继续但不写 `scrollTop`）。滚动之后重新算一次落点，
    * 否则「内容动了、虚线框没动」，松手位置会与预览不一致。
+   *
+   * B3／D13：折叠条正被悬停展开时一律不滚（见下方 `gapExpanding`）。
    */
   const startEdgeScroll = useCallback((gesture: Gesture) => {
     stopEdgeScroll();
@@ -406,7 +430,12 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
       // 因为落在视口上边缘的触发带里而一路把日历往上卷（E2E 实测过）。
       const insideViewport = gesture.lastX >= rect.left && gesture.lastX <= rect.right
         && gesture.lastY >= rect.top && gesture.lastY <= rect.bottom;
-      const velocity = insideViewport
+      // §128 的悬停展开与 §200 的边缘滚动在轨道上沿同时成立时会互相破坏：展开把内容铺开、
+      // 滚动又把落点连同折叠条一起卷走，用户根本没法精确放置（F22）。两段窗口都要压住：
+      // ① 半秒等待期 —— 指针还压在折叠条上，`preview.collapsedGapKey` 认得出来；
+      // ② 展开之后 —— 那条折叠条已经不存在，改由日视图经 ref 上报的展开态认（`dragExpandedGapKey`）。
+      const gapExpanding = Boolean(gesture.preview?.collapsedGapKey) || Boolean(optionsRef.current.edgeScrollHoldRef?.current);
+      const velocity = insideViewport && !gapExpanding
         ? dragEdgeScrollVelocity({ clientY: gesture.lastY, viewportTop: rect.top, viewportBottom: rect.bottom })
         : 0;
       if (velocity !== 0) {
@@ -466,6 +495,23 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
     gesture.committed = true;
     setState((current) => ({ ...current, phase: "landing", preview: null, decision: null, overPool: false }));
     void optionsRef.current.onCommit(intent)
+      .catch(() => { gesture.committed = false; })
+      .finally(() => finish(gesture));
+  }, [finish]);
+
+  /**
+   * 改时长的提交入口（松手直提与气泡确认共用）。
+   *
+   * `landing` 期间保留 `preview`，卡片才会停在拖出来的高度上等写入回来；
+   * 「时长变化 + 让位」是 App 侧 `onResize` 的一次事务、一个撤销项（D12）。
+   */
+  const commitResize = useCallback((gesture: Gesture, preview: DragSessionPreview) => {
+    if (!gesture.session) { finish(gesture); return; }
+    gesture.decision = null;
+    gesture.preview = preview;
+    gesture.committed = true;
+    setState((current) => ({ ...current, phase: "landing", preview, decision: null, delta: { x: 0, y: 0 }, overPool: false }));
+    void optionsRef.current.onResize(gesture.session, preview.duration)
       .catch(() => { gesture.committed = false; })
       .finally(() => finish(gesture));
   }, [finish]);
@@ -545,15 +591,6 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
       }
       const preview = computePreview(gesture, gesture.lastX, gesture.lastY, gesture.lastAltKey, true);
       if (!preview) { finish(gesture); return; }
-      if (kind === "resize") {
-        if (!gesture.session) { finish(gesture); return; }
-        gesture.committed = true;
-        setState((current) => ({ ...current, phase: "landing", preview, delta: { x: 0, y: 0 }, overPool: false }));
-        void optionsRef.current.onResize(gesture.session, preview.duration)
-          .catch(() => { gesture.committed = false; })
-          .finally(() => finish(gesture));
-        return;
-      }
       const intent: CalendarDropIntent = {
         date: preview.date,
         startMinute: preview.startMinute,
@@ -565,11 +602,15 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
       };
       const decision = optionsRef.current.buildDecision?.({ intent, preview, point: { x: gesture.lastX, y: gesture.lastY } }) ?? null;
       if (decision) {
-        // 停在 deciding：一次副作用都还没发生，气泡确认后才走同一条 commitIntent。
+        // 停在 deciding：一次副作用都还没发生，气泡确认后才走同一条出口
+        // （移动→`commitIntent`，改时长→`commitResize`）。
         gesture.decision = decision;
+        gesture.preview = preview;
         setState((current) => ({ ...current, phase: "deciding", preview, decision, overPool: false }));
         return;
       }
+      // 改时长不走 `commitIntent`：它的提交是「时长 + 让位」的一次 `onResize`（D12）。
+      if (kind === "resize") { commitResize(gesture, preview); return; }
       commitIntent(gesture, intent);
     };
     handlers.cancel = () => { if (gestureRef.current === gesture) cancelGesture(); };
@@ -589,7 +630,7 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
     window.addEventListener("pointercancel", handlers.cancel);
     window.addEventListener("keydown", handlers.key, true);
     window.addEventListener("blur", handlers.blur);
-  }, [cancelGesture, commitIntent, computePreview, detachGesture, endViewportDrag, finish, publish, startEdgeScroll, stopEdgeScroll]);
+  }, [cancelGesture, commitIntent, commitResize, computePreview, detachGesture, endViewportDrag, finish, publish, startEdgeScroll, stopEdgeScroll]);
 
   /**
    * 拖拽期间禁止选中文本。pointer 通道没有 HTML5 DnD 的默认行为兜底，
@@ -611,8 +652,14 @@ export function useDragSession(options: UseDragSessionOptions): DragSessionApi {
     const gesture = gestureRef.current;
     const decision = gesture?.decision;
     if (!gesture || !decision) return;
+    // 改时长的确认：时长与它推走的后续时段一起写，仍是一个撤销项（D12）。
+    if (decision.resizeDuration !== null) {
+      if (!gesture.preview) { finish(gesture); return; }
+      commitResize(gesture, { ...gesture.preview, duration: decision.resizeDuration });
+      return;
+    }
     commitIntent(gesture, decision.intent);
-  }, [commitIntent]);
+  }, [commitIntent, commitResize, finish]);
 
   const chooseAfterBlock = useCallback(() => {
     const gesture = gestureRef.current;

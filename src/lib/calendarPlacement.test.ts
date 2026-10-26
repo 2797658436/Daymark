@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { concurrentLayouts, dropImpact, insertionChanges, placeableSessions, resolveCalendarDrop } from "./calendarPlacement";
-import type { ExecutionSession } from "./native";
+import { blockOverlapping, concurrentLayouts, dropImpact, insertionChanges, placeableSessions, resizeChanges, resolveCalendarDrop } from "./calendarPlacement";
+import type { ExecutionSession, TimeBlock } from "./native";
 
 const session = (id: string, startLocal: string, endLocal: string): ExecutionSession => ({ id, taskId: `task-${id}`, localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal, endLocal, timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" });
 
@@ -83,5 +83,31 @@ describe("calendar placement", () => {
     expect(across).toMatchObject({ reason: "cross-day", dates: ["2026-08-06"] });
     // 没有配置默认时段时不存在「越界」，只判跨天。
     expect(dropImpact({ date: "2026-08-05", shifted: [{ session: session("a", "10:00", "11:00"), startMinute: 600 }], defaultRanges: [] })).toBeNull();
+  });
+
+  it("pushes later sessions when a resize grows, but leaves shrinking and parallel runs alone", () => {
+    const source = session("source", "10:00", "11:00");
+    const sessions = [source, session("next", "11:00", "12:00"), session("later", "12:00", "12:30"), session("parallel", "10:00", "11:00")];
+    // 拉长到 11:30：原本 11:00–12:00 那一项整体让到 11:30，12:00 那一项顺次接在它后面；
+    // 并排那一项（同样起始 10:00）不动 —— 它从来没有落在被延长的那一段里（§198 的反面）。
+    const grown = resizeChanges({ sessions, session: source, startMinute: 600, duration: 90 });
+    expect(grown.map((change) => [change.session.id, change.startMinute])).toEqual([["next", 690], ["later", 750]]);
+    // 拉长到原来一样长 / 缩短：一个都不动，只释放空档（§198）。
+    expect(resizeChanges({ sessions, session: source, startMinute: 600, duration: 60 })).toEqual([]);
+    expect(resizeChanges({ sessions, session: source, startMinute: 600, duration: 30 })).toEqual([]);
+    // 拉长到 12:00 正好压住 next 的起点：它让到 12:00，后面的 later 顺延。
+    expect(resizeChanges({ sessions, session: source, startMinute: 600, duration: 120 }).map((change) => [change.session.id, change.startMinute])).toEqual([["next", 720], ["later", 780]]);
+  });
+
+  it("finds the time block a resize covers even when the pointer sits on the bottom handle", () => {
+    const block = (id: string, startLocal: string, endLocal: string, localDate = "2026-08-05"): TimeBlock => ({ id, title: id, localDate, endLocalDate: localDate, startLocal, endLocal, timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 });
+    const blocks = [block("lunch", "11:30", "12:30"), block("next-day", "11:30", "12:30", "2026-08-06"), block("midnight", "23:30", "00:30")];
+    // 10:00–12:00 盖住午休；10:00–11:00 不碰它。
+    expect(blockOverlapping({ blocks, date: "2026-08-05", startMinute: 600, duration: 120 })?.id).toBe("lunch");
+    expect(blockOverlapping({ blocks, date: "2026-08-05", startMinute: 600, duration: 60 })).toBeNull();
+    // 只看预览所在的那一天。
+    expect(blockOverlapping({ blocks, date: "2026-08-06", startMinute: 600, duration: 120 })?.id).toBe("next-day");
+    // 跨午夜的块按 24 小时算结尾。
+    expect(blockOverlapping({ blocks, date: "2026-08-05", startMinute: 1380, duration: 60 })?.id).toBe("midnight");
   });
 });

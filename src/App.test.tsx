@@ -2412,6 +2412,114 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(native.updateExecutionSession).toHaveBeenCalledWith(expect.objectContaining({ id: "session-resize", startLocal: "10:00", endLocal: "13:00", localDate: "2026-08-05" })));
   });
 
+  /**
+   * 日历整改 B3（F21／D12）：改时长接入让位与确认。
+   *
+   * 这三条钉住的是「resize 与 move 走同一条让位与确认路」：拖动中后续真卡 `data-yielding`、
+   * 侵入时间块只给两个出口、越界取消后一个字段都没动。
+   */
+  it("yields the following cards while a resize grows through them and commits both in one write", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-grow", projectId: null, title: "拉长源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-follow", projectId: null, title: "拉长邻位", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "session-grow", taskId: "task-grow", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-follow", taskId: "task-follow", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:00", endLocal: "12:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const handle = await screen.findByRole("button", { name: "调整 拉长源 时长" });
+    const follow = screen.getByText("拉长邻位", { selector: ".calendar-session strong" }).closest<HTMLElement>(".calendar-session")!;
+
+    fireEvent(handle, createEvent.pointerDown(handle, { button: 0, clientY: 600 }));
+    // 48px/小时 → 48px = 60 分钟：10:00–12:00，原本 11:00 那一项让位到 12:00。
+    fireEvent(window, createEvent.pointerMove(window, { clientY: 648 }));
+    expect(screen.getByRole("status", { name: "调整时长预览" })).toHaveTextContent("10:00–12:00 · 120 分钟");
+    expect(follow).toHaveAttribute("data-yielding", "true");
+    expect(parseFloat(follow.style.top)).toBeCloseTo(720 / 1440 * 100, 3);
+
+    fireEvent(window, createEvent.pointerUp(window, { clientY: 648 }));
+    await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalledOnce());
+    // 时长与让位是**一次**写入：分开写会留下「已经变长、后面还没让位」的中间态。
+    const updates = (native.applyExecutionSessionChanges as ReturnType<typeof vi.fn>).mock.calls[0][0].update;
+    expect(updates.map((session: { id: string; startLocal: string; endLocal: string }) => [session.id, session.startLocal, session.endLocal])).toEqual([
+      ["session-grow", "10:00", "12:00"], ["session-follow", "12:00", "13:00"],
+    ]);
+    expect(screen.getByRole("button", { name: /撤销时间修改/ })).toBeVisible();
+  });
+
+  it("asks with exactly two options when a resize would cover a time block", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-block", projectId: null, title: "撞块源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "session-block", taskId: "task-block", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+      timeBlocks: [{ id: "block-lunch", title: "午休", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:30", endLocal: "12:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const handle = await screen.findByRole("button", { name: "调整 撞块源 时长" });
+
+    fireEvent(handle, createEvent.pointerDown(handle, { button: 0, clientY: 600 }));
+    // 拉到 12:00：区间盖住 11:30–12:30 的午休，但指针始终停在卡片下缘（11:00 附近）。
+    fireEvent(window, createEvent.pointerMove(window, { clientY: 648 }));
+    fireEvent(window, createEvent.pointerUp(window, { clientY: 648 }));
+
+    const bubble = await screen.findByRole("dialog", { name: "重叠确认" });
+    expect(bubble).toHaveTextContent("午休");
+    expect(within(bubble).getByRole("button", { name: "仍然安排" })).toBeVisible();
+    expect(within(bubble).getByRole("button", { name: "取消" })).toBeVisible();
+    // 改时长没有「放到时间块之后」：时长已经由手势定死，整体挪到块后面是另一件事。
+    expect(within(bubble).queryByRole("button", { name: "放到时间块之后" })).not.toBeInTheDocument();
+    expect(document.querySelector(".calendar-page")).toHaveAttribute("data-drag-phase", "deciding");
+    expect(native.updateExecutionSession).not.toHaveBeenCalled();
+    expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
+
+    fireEvent.click(within(bubble).getByRole("button", { name: "仍然安排" }));
+    await waitFor(() => expect(native.updateExecutionSession).toHaveBeenCalledWith(expect.objectContaining({ id: "session-block", startLocal: "10:00", endLocal: "12:00" })));
+  });
+
+  it("cancels a resize that would push a session out of the default slots without touching either", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 },
+      defaultTimeSlots: [{ id: "morning", label: "上午专注", start: "09:00", end: "12:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }] };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-slot", projectId: null, title: "越界源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-slot-next", projectId: null, title: "越界邻位", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "session-slot", taskId: "task-slot", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-slot-next", taskId: "task-slot-next", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:00", endLocal: "12:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const handle = await screen.findByRole("button", { name: "调整 越界源 时长" });
+
+    fireEvent(handle, createEvent.pointerDown(handle, { button: 0, clientY: 600 }));
+    // 拉满默认时段：10:00–12:00 把 11:00 那一项推到 12:00–13:00，落在默认时段之外。
+    fireEvent(window, createEvent.pointerMove(window, { clientY: 648 }));
+    fireEvent(window, createEvent.pointerUp(window, { clientY: 648 }));
+
+    const bubble = await screen.findByRole("dialog", { name: "越界确认" });
+    expect(bubble).toHaveTextContent("会影响 1 项已有安排");
+    expect(document.querySelector(".calendar-page")).toHaveAttribute("data-drag-phase", "deciding");
+
+    fireEvent.click(within(bubble).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.querySelector(".calendar-page")).toHaveAttribute("data-drag-phase", "idle"));
+    // 零副作用：时长、后续时段、库内写入一样都没动（取消不等于「写回去」，是根本没写）。
+    expect(native.updateExecutionSession).not.toHaveBeenCalled();
+    expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
+    expect(screen.getByText("越界源", { selector: ".calendar-session strong" }).closest(".calendar-session")!.querySelector("time")).toHaveTextContent("10:00–11:00");
+    expect(screen.getByText("越界邻位", { selector: ".calendar-session strong" }).closest(".calendar-session")!.querySelector("time")).toHaveTextContent("11:00–12:00");
+  });
+
   it("deletes a lightweight time block from the calendar", async () => {
     const today = isoDaysFromNow(0);
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),

@@ -2808,3 +2808,196 @@ test("calendar B2 auto-scrolls while the pointer sits in the edge band and stops
   await page.keyboard.press("Escape");
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
 });
+
+/**
+ * 日历整改 B3（F21／D12）：改时长接入让位与确认。
+ *
+ * 一条真实指针走完全程：拉长压住后续安排并盖住时间块 → 后续真卡让位 → 松手出气泡
+ * （改时长只有两个出口）→「仍然安排」落库 = 拖动中的读数 → 一次 `Ctrl+Z` 把
+ * 「时长 + 后移」一起撤回（同一个撤销项）。
+ */
+test("calendar B3 resizes across a time block and undoes the length and the shifts in one step", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date(`${anchor}T12:00:00`));
+  await page.evaluate((day) => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { day, week: day, month: day },
+      // 日视图 compact 档就是 84px/小时；档位与值必须是同一档，否则会被「档位忠实迁移」改写成 168。
+      calendarZoom: { day: "compact", week: "compact", month: "compact" },
+      calendarScale: { day: 84, week: 84, month: 120 },
+      snapMinutes: 15, showActualRecords: false,
+    }));
+    const task = (id: string, title: string, order: number) => ({ id, projectId: null, title, progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, sortOrder: order, kind: "task" });
+    const session = (id: string, taskId: string, startLocal: string, endLocal: string) => ({ id, taskId, localDate: day, endLocalDate: day, startLocal, endLocal, timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" });
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [task("b3-resize-task", "拉长穿块", 0), task("b3-follow-task", "拉长邻位", 1)],
+      executionSessions: [session("b3-resize-source", "b3-resize-task", "10:00", "11:00"), session("b3-follow", "b3-follow-task", "11:00", "11:30")],
+      timeBlocks: [{ id: "b3-lunch", title: "午休", localDate: day, endLocalDate: day, startLocal: "11:30", endLocal: "12:30", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset() }],
+    }));
+  }, anchor);
+  await page.reload();
+  await page.setViewportSize({ width: 1200, height: 900 });
+
+  const axis = page.getByRole("region", { name: "连续日时间轴" });
+  const source = page.locator('.calendar-session[data-session-id="b3-resize-source"]');
+  const follow = page.locator('.calendar-session[data-session-id="b3-follow"]');
+  await expect(source).toBeVisible();
+  await waitForScrollSettled(axis);
+  // 源卡放到视口上部：拉长后的卡片下缘与后续邻位都还在视口里，不需要中途滚动。
+  await axis.evaluate((element) => {
+    const card = document.querySelector<HTMLElement>('[data-session-id="b3-resize-source"]');
+    if (!card) return;
+    element.scrollTop += card.getBoundingClientRect().top - element.getBoundingClientRect().top - 160;
+  });
+  await waitForScrollSettled(axis);
+
+  const handle = source.getByRole("button", { name: "调整 拉长穿块 时长" });
+  const handleBox = await handle.boundingBox();
+  if (!handleBox) throw new Error("改时长手柄必须可见");
+  const followTopBefore = await follow.evaluate((element) => parseFloat((element as HTMLElement).style.top));
+  const handleX = handleBox.x + handleBox.width / 2;
+  const handleY = handleBox.y + handleBox.height / 2;
+  await page.mouse.move(handleX, handleY);
+  await page.mouse.down();
+  // 84px/小时：下移 84px = 60 分钟 → 10:00–12:00，原本 11:00 那一项让到 12:00。
+  await page.mouse.move(handleX, handleY + 84, { steps: 8 });
+  const readout = page.getByRole("status", { name: "调整时长预览" });
+  await expect(readout).toHaveText("10:00–12:00 · 120 分钟");
+  // §197：后续真卡实时让位（同一张卡、同一个 top 过渡），不是另画一层幽灵。
+  // 这条轨道按 px 定位（有效日折叠后走分段映射），所以量的是「正好下移一小时」的像素差。
+  await expect(follow).toHaveAttribute("data-yielding", "true");
+  await expect.poll(async () => follow.evaluate((element) => parseFloat((element as HTMLElement).style.top)))
+    .toBeCloseTo(followTopBefore + 84, 0);
+  await page.mouse.up();
+
+  // §189 后半：改时长侵入时间块沿用同一套确认，而且只有两个出口。
+  const bubble = page.getByRole("dialog", { name: "重叠确认" });
+  await expect(bubble).toBeVisible();
+  await expect(bubble).toContainText("午休");
+  await expect(bubble.getByRole("button", { name: "仍然安排" })).toBeVisible();
+  await expect(bubble.getByRole("button", { name: "取消" })).toBeVisible();
+  await expect(bubble.getByRole("button", { name: "放到时间块之后" })).toHaveCount(0);
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "deciding");
+  // 还没确认：一个字节都没写。
+  expect((await storedSession(page, "b3-resize-source"))?.endLocal).toBe("11:00");
+  expect((await storedSession(page, "b3-follow"))?.startLocal).toBe("11:00");
+
+  await bubble.getByRole("button", { name: "仍然安排" }).click();
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
+  // 落库 = 拖动中的读数，且「时长 + 后移」在同一次提交里。
+  await expect.poll(async () => (await storedSession(page, "b3-resize-source"))?.endLocal).toBe("12:00");
+  await expect.poll(async () => (await storedSession(page, "b3-follow"))?.startLocal).toBe("12:00");
+  expect((await storedSession(page, "b3-resize-source"))?.startLocal).toBe("10:00");
+  await expect(follow.locator("time")).toHaveText("12:00–12:30");
+
+  // 一次 Ctrl+Z 把两件事一起撤回 —— 它们本来就是同一个撤销项。
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await storedSession(page, "b3-resize-source"))?.endLocal).toBe("11:00");
+  await expect.poll(async () => (await storedSession(page, "b3-follow"))?.startLocal).toBe("11:00");
+  await expect(follow.locator("time")).toHaveText("11:00–11:30");
+});
+
+/**
+ * 日历整改 B3（F22／D13）：折叠条被悬停展开期间，边缘自动滚动必须停。
+ *
+ * 折叠条贴在轨道上沿，指针悬停在它上面时**同时**落在 56px 边缘触发带里 —— 两条规格会互相
+ * 破坏：展开把内容铺开，滚动又把落点连同折叠条一起卷走。这里钉住「展开期间 `scrollTop`
+ * 一动不动」，并确认指针离开折叠条后 §200 的滚动照旧（下沿触发带仍然会滚）。
+ */
+test("calendar B3 holds edge scrolling while the folded bar expands and resumes after leaving it", async ({ page }) => {
+  const anchor = "2026-08-06";
+  // 锚点是「明天」：避开默认时段模式下「当前时间自动显露」那两小时，折叠条才是完整的一段。
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await page.evaluate((day) => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots",
+      calendarAnchors: { day, week: day, month: day },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+      calendarScale: { day: 84, week: 84, month: 120 },
+      snapMinutes: 15, showActualRecords: false,
+      defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [
+        { id: "b3-gap-folded", projectId: null, title: "折叠安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, sortOrder: 0, kind: "task" },
+        { id: "b3-gap-drop", projectId: null, title: "拖入折叠区", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, sortOrder: 1, kind: "task" },
+      ],
+      executionSessions: [{ id: "b3-gap-session", taskId: "b3-gap-folded", localDate: day, endLocalDate: day, startLocal: "10:00", endLocal: "11:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" }],
+    }));
+  }, anchor);
+  await page.reload();
+  await page.setViewportSize({ width: 1200, height: 900 });
+
+  const axis = page.getByRole("region", { name: "连续日时间轴" });
+  const panel = page.locator(`[data-calendar-date="${anchor}"]`);
+  const folded = panel.getByRole("button", { name: "00:00–19:00 · 1 项安排" });
+  const foldedSession = panel.locator(".calendar-session", { hasText: "折叠安排" });
+  await expect(folded).toBeVisible();
+  await expect(foldedSession).toHaveCount(0);
+  await waitForScrollSettled(axis);
+  // 把折叠条滚到视口上沿（8px 处）：只有这样「悬停展开」与「上边缘自动滚动」才会同时成立，
+  // 也才看得见「边展开边往上跑」这个 bug。
+  await axis.evaluate((element, date) => {
+    const bar = document.querySelector<HTMLElement>(`[data-calendar-date="${date}"] .collapsed-time-gap`);
+    if (!bar) return;
+    element.scrollTop += bar.getBoundingClientRect().top - element.getBoundingClientRect().top - 8;
+  }, anchor);
+  await waitForScrollSettled(axis);
+  const barBox = await panel.locator(".collapsed-time-gap").first().boundingBox();
+  if (!barBox) throw new Error("折叠条必须可见");
+
+  const card = page.locator(".task-card", { hasText: "拖入折叠区" });
+  const cardBox = await card.boundingBox();
+  if (!cardBox) throw new Error("拖拽源必须可见");
+  await page.mouse.move(cardBox.x + 20, cardBox.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(cardBox.x + 32, cardBox.y + 16, { steps: 2 });
+  // 指针还在任务池上（在日历视口之外），此刻不可能有边缘滚动：这就是「展开前」的基准。
+  const before = await axis.evaluate((element) => element.scrollTop);
+  // 一步到位落在折叠条上：多步移动在慢机器上会自己耗掉半秒，把「不足半秒仍折叠」那段裁掉。
+  await page.mouse.move(barBox.x + barBox.width / 2, barBox.y + barBox.height / 2);
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
+  // 半秒后展开（§128 照旧），整个过程里视口一格都没动（D13 的验收点）。
+  await expect(foldedSession).toBeVisible({ timeout: 3000 });
+  await page.waitForTimeout(200);
+  expect(await axis.evaluate((element) => element.scrollTop), "折叠条悬停展开期间边缘滚动必须停住").toBe(before);
+  // 展开之后指针仍压在 56px 触发带里、但已经不在折叠条上（折叠条不存在了）：这一段只有日视图
+  // 经 ref 上报的展开态能认出来。轻推 3px 让状态机重算一次落点，`collapsedGapKey` 变空 ——
+  // 若 gate 只认「指针在折叠条上」，这一步就会把内容连同落点一起卷走（D13 的第二段窗口）。
+  await page.mouse.move(barBox.x + barBox.width / 2, barBox.y + barBox.height / 2 + 3, { steps: 1 });
+  await page.waitForTimeout(240);
+  expect(await axis.evaluate((element) => element.scrollTop), "展开结束后指针还在上沿带里也不能滚").toBe(before);
+
+  // 指针离开折叠条、落到下沿触发带：§200 立刻恢复（越近越快由 B2 那条用例钉住单调性）。
+  //
+  // 不能直接把指针往屏幕底下一搁就量：轨道两端本身也是折叠条（00:00–19:00 与 22:00–24:00），
+  // 下沿带很可能正压在另一条折叠条上，那样 gate 会「合理地」继续生效。先把指针挪回任务池
+  // （展开收起、gate 释放），再把视口滚到「晚间时段越过视口下沿」的位置，最后落进下沿带。
+  const poolBox = await page.locator("#task-pool").boundingBox();
+  if (!poolBox) throw new Error("任务池必须可见");
+  await page.mouse.move(poolBox.x + 30, poolBox.y + 40, { steps: 6 });
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
+  // 指针一离开折叠条，展开就收起、gate 释放；这时把视口滚到「最后一天的晚间时段越过下沿」的位置，
+  // 下沿触发带于是压在时段里而不是压在折叠条上。用绝对目标写，别用相对增量（收起后版面已变）。
+  await axis.evaluate((element) => {
+    const slots = document.querySelectorAll<HTMLElement>(".default-slot");
+    const last = slots[slots.length - 1];
+    if (!last) return;
+    const offsetBottom = last.getBoundingClientRect().bottom - element.getBoundingClientRect().top + element.scrollTop;
+    element.scrollTop = Math.max(0, offsetBottom - element.clientHeight - 60);
+  });
+  const resumeBaseline = await axis.evaluate((element) => element.scrollTop);
+  const axisBox = await axis.boundingBox();
+  if (!axisBox) throw new Error("时间轴必须可见");
+  await page.mouse.move(axisBox.x + axisBox.width / 2, axisBox.y + axisBox.height - 12, { steps: 4 });
+  await page.waitForTimeout(320);
+  expect(await axis.evaluate((element) => element.scrollTop), "离开折叠条后边缘滚动必须恢复").toBeGreaterThan(resumeBaseline + 40);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
+});

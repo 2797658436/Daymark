@@ -1,5 +1,5 @@
 import { addLocalDays } from "./deadlines";
-import type { ExecutionSession } from "./native";
+import type { ExecutionSession, TimeBlock } from "./native";
 
 export type CalendarDropMode = "place" | "insert-before" | "insert-after" | "overlap";
 
@@ -36,15 +36,17 @@ export function sessionMinutes(session: ExecutionSession) {
   return end - start;
 }
 
-export function insertionChanges(sessions: ExecutionSession[], sourceId: string, targetId: string, edge: "before" | "after", sourceDuration: number): SessionPlacementChange[] {
-  const target = sessions.find((session) => session.id === targetId);
-  if (!target) return [];
-  const targetStart = clockMinutes(target.startLocal);
-  const targetEnd = targetStart + sessionMinutes(target);
-  const insertionStart = edge === "before" ? targetStart : targetEnd;
-  let cursor = insertionStart + sourceDuration;
+/**
+ * 让位的唯一级联算法：从 `fromMinute` 起按顺序排一遍，凡是起点落在「已占用窗口」里、
+ * 或者与前面刚被推后的时段相撞的，就顺次后移。
+ *
+ * 插入（`insertionChanges`）与改时长（`resizeChanges`）共用这一份 —— 两条通道各写一遍
+ * 级联正是 F21 之前的状态：改时长不动别人，拉长压住后续安排时毫无反应。
+ */
+function cascadeChanges(sessions: ExecutionSession[], sourceId: string, fromMinute: number, occupiedUntil: number): SessionPlacementChange[] {
+  let cursor = occupiedUntil;
   const candidates = sessions
-    .filter((session) => session.id !== sourceId && clockMinutes(session.startLocal) >= (edge === "before" ? targetStart : targetEnd))
+    .filter((session) => session.id !== sourceId && clockMinutes(session.startLocal) >= fromMinute)
     .sort((a, b) => clockMinutes(a.startLocal) - clockMinutes(b.startLocal));
   const changes: SessionPlacementChange[] = [];
   for (const session of candidates) {
@@ -54,6 +56,61 @@ export function insertionChanges(sessions: ExecutionSession[], sourceId: string,
     cursor += sessionMinutes(session);
   }
   return changes;
+}
+
+export function insertionChanges(sessions: ExecutionSession[], sourceId: string, targetId: string, edge: "before" | "after", sourceDuration: number): SessionPlacementChange[] {
+  const target = sessions.find((session) => session.id === targetId);
+  if (!target) return [];
+  const targetStart = clockMinutes(target.startLocal);
+  const targetEnd = targetStart + sessionMinutes(target);
+  const insertionStart = edge === "before" ? targetStart : targetEnd;
+  return cascadeChanges(sessions, sourceId, insertionStart, insertionStart + sourceDuration);
+}
+
+/**
+ * 改时长的让位（UI-SPEC §197）：向下拉长时同列后续时段实时后退，向上缩短只释放空档。
+ *
+ * 判据是「新结束分钟越过了谁」——只有原本在**旧结束之后**开始的时段才可能被让位。
+ * 与源时段并排（起点早于旧结束）的其它安排一概不动：否则一次拉长会把同时进行的那一项
+ * 也推走，缩短时更会把并排项整体后移，直接违反 §198。
+ */
+export function resizeChanges(input: {
+  /** 当天参与落点的时段（与提交同一套集合，见 `placeableSessions`）。 */
+  sessions: ExecutionSession[];
+  /** 正在改时长的那一份；旧时长由它自己给出，不需要调用方另算。 */
+  session: ExecutionSession;
+  /** 源时段的开始分钟（改时长不动开始时间）。 */
+  startMinute: number;
+  /** 拖出来的新时长（分钟）。 */
+  duration: number;
+}): SessionPlacementChange[] {
+  const previousEnd = input.startMinute + sessionMinutes(input.session);
+  return cascadeChanges(input.sessions, input.session.id, previousEnd, input.startMinute + input.duration);
+}
+
+/**
+ * 改时长是否侵入时间块（UI-SPEC §189 后半）。
+ *
+ * 看的是**拉长后的区间**覆盖了哪个块，而不是指针位置：拖底边时指针一直停在卡片下缘，
+ * 时间块却可能在卡片中段，按指针判会整个漏掉。移动／池路径仍用指针命中（`blockId`），
+ * 因为那里「落点」本身就是指针。
+ */
+export function blockOverlapping(input: {
+  blocks: TimeBlock[];
+  date: string;
+  startMinute: number;
+  duration: number;
+}): TimeBlock | null {
+  const start = input.startMinute;
+  const end = input.startMinute + input.duration;
+  for (const block of input.blocks) {
+    if (block.localDate !== input.date) continue;
+    const blockStart = clockMinutes(block.startLocal);
+    const blockEndRaw = clockMinutes(block.endLocal);
+    const blockEnd = blockEndRaw <= blockStart ? blockEndRaw + 1440 : blockEndRaw;
+    if (blockStart < end && blockEnd > start) return block;
+  }
+  return null;
 }
 
 /**
