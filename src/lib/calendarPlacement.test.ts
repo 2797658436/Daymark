@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { concurrentLayouts, insertionChanges } from "./calendarPlacement";
+import { concurrentLayouts, dropImpact, insertionChanges, placeableSessions, resolveCalendarDrop } from "./calendarPlacement";
 import type { ExecutionSession } from "./native";
 
 const session = (id: string, startLocal: string, endLocal: string): ExecutionSession => ({ id, taskId: `task-${id}`, localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal, endLocal, timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" });
@@ -40,5 +40,48 @@ describe("calendar placement", () => {
     const four = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:00", "11:00"), session("c", "10:00", "11:00"), session("d", "10:00", "11:00")], 2);
     expect(four.get("b")).toMatchObject({ hiddenCount: 2 });
     expect(four.get("c")).toMatchObject({ hidden: true });
+  });
+
+  it("keeps preview and commit on one input set: only scheduled|missed of that day", () => {
+    const sessions = [
+      session("scheduled", "10:00", "11:00"),
+      { ...session("missed", "11:00", "12:00"), status: "missed" as const },
+      { ...session("cancelled", "12:00", "13:00"), status: "cancelled" as const },
+      { ...session("other-day", "10:00", "11:00"), localDate: "2026-08-06" },
+    ];
+    expect(placeableSessions(sessions, "2026-08-05").map((item) => item.id)).toEqual(["scheduled", "missed"]);
+  });
+
+  it("previews place in the middle but commits overlap (D5), and resolves both edges identically", () => {
+    const sessions = [session("target", "10:00", "11:00"), session("next", "11:00", "12:00")];
+    const base = { sessions, sourceSessionId: "source", sourceDuration: 60, pointerMinute: 600, targetSessionId: "target" };
+    // 拖动中中央：停在 place，只提示「悬停半秒」。
+    expect(resolveCalendarDrop({ ...base, targetRatio: .5, commit: false })).toMatchObject({ mode: "place", startMinute: 600, shifted: [] });
+    // 松手：没有 latch 也按 overlap 提交，目标卡不动（F04/D5）。
+    expect(resolveCalendarDrop({ ...base, targetRatio: .5, commit: true })).toMatchObject({ mode: "overlap", startMinute: 600, shifted: [] });
+    // 边缘两路：预览与提交同口径，后移集合完全一致。
+    const before = resolveCalendarDrop({ ...base, targetRatio: .1, commit: false });
+    const committed = resolveCalendarDrop({ ...base, targetRatio: .1, commit: true });
+    expect(before).toMatchObject({ mode: "insert-before", startMinute: 600 });
+    expect(committed).toEqual(before);
+    expect(before.shifted.map((change) => [change.session.id, change.startMinute])).toEqual([["target", 660], ["next", 720]]);
+    expect(resolveCalendarDrop({ ...base, targetRatio: .9, commit: true })).toMatchObject({ mode: "insert-after", startMinute: 660 });
+  });
+
+  it("only reports a boundary impact when the insertion pushes something out of the day or the default slots", () => {
+    const ranges = [{ start: 1140, end: 1320 }];
+    // 没有后移 → 不打扰用户（§188「没有跨时段的普通插入直接提交」）。
+    expect(dropImpact({ date: "2026-08-05", shifted: [], defaultRanges: ranges })).toBeNull();
+    // 后移但仍在默认时段内 → 也不确认。
+    expect(dropImpact({ date: "2026-08-05", shifted: [{ session: session("a", "19:00", "19:30"), startMinute: 1200 }], defaultRanges: ranges })).toBeNull();
+    // 被推出默认时段 → 记下受影响项。
+    const outside = dropImpact({ date: "2026-08-05", shifted: [{ session: session("a", "19:30", "20:00"), startMinute: 1320 }], defaultRanges: ranges });
+    expect(outside).toMatchObject({ reason: "outside-slots", dates: [] });
+    expect(outside?.affected.map((change) => change.session.id)).toEqual(["a"]);
+    // 被推到第二天 → 记下新日期（且原因优先报「跨天」）。
+    const across = dropImpact({ date: "2026-08-05", shifted: [{ session: session("a", "23:00", "23:30"), startMinute: 1440 }], defaultRanges: [] });
+    expect(across).toMatchObject({ reason: "cross-day", dates: ["2026-08-06"] });
+    // 没有配置默认时段时不存在「越界」，只判跨天。
+    expect(dropImpact({ date: "2026-08-05", shifted: [{ session: session("a", "10:00", "11:00"), startMinute: 600 }], defaultRanges: [] })).toBeNull();
   });
 });

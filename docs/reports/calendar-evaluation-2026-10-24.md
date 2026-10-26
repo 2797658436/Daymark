@@ -23,17 +23,17 @@
 | F01 | 进入日视图落在 00:00，首次定位被三日缓冲吞掉 | P0 | A（第 1 步） |
 | F02 | 页头 + 工具栏 14 个控件两行，chrome 占窗口 23%–57% | P0 | A（第 2 步） |
 | F03 | 周视图 1200 宽列宽 94px（比 960 还窄），三并行卡片 23px | P0 | A（第 3 步） |
-| F04 | 卡片中央松手未 latch 时 drop 被静默丢弃 | P0 | B |
+| F04 | 卡片中央松手未 latch 时 drop 被静默丢弃 | P0 | B（已收口） |
 | F05 | 日视图同一天写三遍日期，92px 双层吸顶 | P1 | A（第 4 步） |
 | F06 | 200% 下工具栏折行、周视图强制横向滚动（min-width 用 px） | P1 | A（第 2、3 步） |
 | F07 | 全天标记／月格文字 mid-glyph 截断（需 355px 只有 64px） | P1 | A（第 3 步） |
 | F08 | 一屏只有 6.8 小时、一天 3 屏滚动，00–06 点空网格占半屏 | P1 | A（第 4 步） |
-| F09 | 拖拽两套通道五处状态、预览与提交各算一遍 | P1 | B |
-| F10 | UI-SPEC 拖拽段 9 条目标未实现 | P1 | B |
+| F09 | 拖拽两套通道五处状态、预览与提交各算一遍 | P1 | B（已收口） |
+| F10 | UI-SPEC 拖拽段 9 条目标未实现 | P1 | B（已收口，多选整组除外） |
 | F11 | 日历视觉语言与已优化页面脱节（eyebrow、.66rem 字号、7px 圆角） | P2 | A（第 2、4 步） |
 | F12 | 周视图日期头单击直接跳日视图，右侧当天详情无入口 | P2 | A（第 3 步） |
 | F13 | 月视图 70% 空格与截断信息格并存，密度分配反了 | P2 | 后续包 |
-| F14 | 折叠条拖拽展开只接了日视图，周视图是死路径 | P2 | B（删除死路径） |
+| F14 | 折叠条拖拽展开只接了日视图，周视图是死路径 | P2 | B（删除死路径，已收口） |
 | F15 | 执行卡内容压出/浮出卡片：30 分钟卡裁切 15–37px，待回顾卡 `overflow: visible` 把文字画到网格上，200% 最坏裁切 364px | P1 | A5 |
 | F16 | 200% 下时间轴首列硬编码 58px，刻度丢首位数字（日 17 条/周 24 条各裁 9px） | P1 | A5 |
 | F17 | 周「今天」日号药丸白字压 `--accent` 只有 3.61:1（深色 2.47），常驻吸顶却不达 4.5 | P1 | A5 |
@@ -111,11 +111,13 @@
 
 **整改**：列宽下限 84 → **112px**（7×112+58 = 902px 网格需求）；把任务池停靠判定从「窗口宽 ≥1200」改为「网格可用宽 ≥902」，不足即复用 960–1199 已有的覆盖面板机制（含遮罩、Esc、焦点归还）。并行并排上限改为随列宽降级：列宽 <96px 时最多 2 并排 + 「另外 N 项」（`calendarPlacement.ts:60-63` 的阈值参数化）。
 
-### F04 · P0 · 卡片中央松手未 latch 时 drop 被静默丢弃
+### F04 · P0 · 卡片中央松手未 latch 时 drop 被静默丢弃 —— **已收口（B1／B2）**
 
 **现象／根因**：`CalendarDay` 的 `onDrop` 里 `if (preview.mode === "place" && preview.targetSessionId) { setDragPreview(null); …; return; }`（`App.tsx:1513`）。用户在某张卡片中央松手、但 500ms 的「同时安排」latch（`App.tsx:1481-1484`）还没触发时，走到这个分支：不提交、不提示、不回弹——用户看到「卡片闪一下回到原位，什么都没发生」。
 
 **整改**：该分支二选一并已定案（见 §6 D5）：按 overlap 提交（与 latch 触发后同语义，只是省掉等待）。补 E2E：卡片中央 <500ms 松手必须有可见结果。
+
+**收口记录（2026-10-26）**：已收口（B1／B2）。状态机、同口径纯函数与让位见 [`calendar-b1-implementation.md`](calendar-b1-implementation.md)；池 → 日历／拖回池／跨时段确认／时间块三选项／重叠预演／边缘滚动的最终形态见 [`calendar-b2-implementation.md`](calendar-b2-implementation.md)。
 
 ### F05 · P1 · 日视图同一天写三遍日期，92px 双层吸顶
 
@@ -147,7 +149,7 @@
 
 **整改**：① 密度预设上移：`CALENDAR_SCALE_PRESET`（`settings.ts:282-288`）day/week 改 `compact 60 / standard 84 / detailed 108`（现 48/72/96，已定案见 §6 D4），standard 下一屏 ≈ 8 小时；② 全天模式引入「有效日」：00:00–06:00 与 23:00–24:00 在**该日无安排时**默认折成折叠带（复用 `collapsed-time-gap` 与 `calendarTimeline` 的补集逻辑），有安排或当前时间落入时自动展开——等于把「默认时段模式」的折叠语义推广为全天模式的默认值，保留「展开整天」入口；③ 保留三日缓冲但把「上一天」渲染成 44px 吸顶带（F05 的同一条带），向上滚过带子才展开完整前一天。验收：1200×800 日视图一屏 ≥8 小时、一天 ≤2 屏；跨日拖拽与「回到现在」回归通过。
 
-### F09 · P1 · 拖拽两套通道、五处状态、预览与提交各算一遍
+### F09 · P1 · 拖拽两套通道、五处状态、预览与提交各算一遍 —— **已收口（B1／B2）**
 
 **现象**（代码调研）：换位置 = HTML5 DnD（任务池→日历 `copy`／日历内 `move`／拖回池取消，`App.tsx:1033`、`1799`、`930-932`）；改时长与时间块整块 = pointer events（`App.tsx:1613-1672`、`1776-1796`、空白框选 `1505-1508`）。状态散在五处：`CalendarDay.dragPreview/dragSourceId`（列级）、`weekGhost/dayGhost`（网格级 `1092/1240`）、`calendarDrag.active`（模块级影子副本）、`pendingPlacement`（模块级 external store）、`CalendarTimeBlock.resize/landed`（组件级）；清理靠 5 个 `useEffect` 各自监听 window `dragend/drop` 兜底。`previewFromDrag` 在 dragover 与 drop 各跑一遍（`1455-1492`、`1511`），`placeCalendarItem` 用 `insertionChanges` 第三遍重算（`App.tsx:448-465`），且**预览用全部 sessions、提交只取 `scheduled|missed`**（`1420` vs `456`），两套集合不一致时预览与落库不同。
 
@@ -155,11 +157,15 @@
 
 **整改**：统一为**一个 pointer 自绘的 drag session 状态机**（`useDragSession` hook）：拾起（5px 阈值）→ 预览（半透明跟手卡 + 落点虚线框 + 贴卡时间读数，复用 `drag-time-preview.tsx`）→ 让位（真卡片 transition）→ 提交（单事务 + 整组撤销）→ 清理（session 结束即清，不再靠 window 事件兜底）。预览与提交共用同一纯函数，输入集合统一为 `scheduled|missed`。`calendarDrag.ts` 整份删除；`pendingPlacement.ts` 退化为 session 的一个阶段；`timelineDrag.ts`／`calendarPlacement.ts` 保留。分两步落地：先把「日历内移动卡片 + 改时长」换 pointer 并验证，再换「任务池→日历」与「拖回池」。
 
-### F10 · P1 · UI-SPEC「拖拽排程」段 9 条目标未实现
+**收口记录（2026-10-26）**：已收口（B1／B2）。状态机、同口径纯函数与让位见 [`calendar-b1-implementation.md`](calendar-b1-implementation.md)；池 → 日历／拖回池／跨时段确认／时间块三选项／重叠预演／边缘滚动的最终形态见 [`calendar-b2-implementation.md`](calendar-b2-implementation.md)。
+
+### F10 · P1 · UI-SPEC「拖拽排程」段 9 条目标未实现 —— **已收口（B1／B2，多选整组除外）**
 
 逐条对照（行号为 UI-SPEC）：**§171 手机图标式平滑让位**未实现（`.calendar-shift-preview` 是无 transition 的静态虚线幽灵，真卡片拖动期间不动，`styles.css:965`）；**§166/168 拖拽中持续显示精确起止时间**未实现（`.drag-time-preview` 只服务 pointer 那两套，DnD 全程无读数）；**§187/188 跨默认时段/跨天确认气泡**未实现（`placeCalendarItem` 直接 commit）；**§185/186 拖入时间块中央的「与时间块同时安排」+ 三选项气泡**未实现（时间块对 DnD 完全透明）；**§191 拖回任务池的「移回任务池」落区视觉**未实现（取消逻辑有、落区无）；**§86/88/181 多选整组拖动与批量预览**未实现（全仓无日历多选状态）；**§176 选中浮前 + 同组左右键切换**未实现；**§177 拖入重叠区预演并排结果**未实现；**§126 折叠条拖拽悬停展开**只接了日视图（F14）。已实现的：吸附与 Alt 反转、磁铁按钮、插入线 + 插入并后移、中央半秒 latch、并行 2–3 并排与「另外 N 项」、空白 hover `＋`/单击三入口/纵向框选、5 秒撤销提示与 Ctrl+Z、边缘自动滚动（线性、不随距离加速）。
 
 **整改**：随 B 轮一并补齐前 8 条（多选整组建议与任务池多选同轮做，本轮可后置）；§126 见 F14。
+
+**收口记录（2026-10-26）**：已收口（B1／B2）。状态机、同口径纯函数与让位见 [`calendar-b1-implementation.md`](calendar-b1-implementation.md)；池 → 日历／拖回池／跨时段确认／时间块三选项／重叠预演／边缘滚动的最终形态见 [`calendar-b2-implementation.md`](calendar-b2-implementation.md)。
 
 ### F11 · P2 · 日历视觉语言与已优化页面脱节
 
@@ -182,11 +188,13 @@
 
 **整改（后续包）**：格内改为「标记行（截止旗/里程碑菱/项目截止旗 + 短标题，至多 2 条）+ 聚合行（完成 M · 推进 K · 未推进 J）」；空格底色再降一档（`--panel` → 更淡），内容格用 `--panel-strong` 提为焦点；行高下限 120 → 96px 让六行在 800 高窗口不滚。
 
-### F14 · P2 · 折叠条拖拽展开只接了日视图
+### F14 · P2 · 折叠条拖拽展开只接了日视图 —— **已收口（B2）**
 
 **现象**：`beginGapHover`／`retainDragExpansion`／`dragExpandedGapKey` 只由 `DayCalendarGrid` 传入（`App.tsx:1296-1327`）；周视图的 `CalendarDay` 调用点（`App.tsx:1216`）没接这些 props，周视图拖拽悬停折叠条无任何反应——而周视图根本没有折叠条（折叠只存在于日视图的 timeline），所以这是一条**规格写了、实现只有一半、另一半是死参数**的路径。
 
 **整改**（已定案见 §6 D6）：明确「折叠只属于日视图」，删除周视图路径上的死参数与 UI-SPEC §126 的周视图暗示（回写规格）。
+
+**收口记录（2026-10-26）**：已收口（B1／B2）。状态机、同口径纯函数与让位见 [`calendar-b1-implementation.md`](calendar-b1-implementation.md)；池 → 日历／拖回池／跨时段确认／时间块三选项／重叠预演／边缘滚动的最终形态见 [`calendar-b2-implementation.md`](calendar-b2-implementation.md)。
 
 ### F15 · P1 · 执行卡内容压出/浮出卡片（A 轮验收时发现，2026-10-26）
 

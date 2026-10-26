@@ -280,89 +280,6 @@ test("the project detail is always a right drawer and keeps the full card grid b
   await expect(detail).toHaveCount(0);
 });
 
-/**
- * 真实鼠标拖拽的回归护栏。
- *
- * `dragstart` 里把拖拽源改成不可命中（`.is-dragging-source { pointer-events: none }`）
- * 会让 Chromium 在拖拽刚开始时就把整个拖拽取消掉：按下、移动、松手全都没反应，
- * 也就是「日历里的卡片怎么都拖不动」。合成 `dispatchEvent` 的用例发现不了这件事
- * （合成事件不经过浏览器的拖拽循环），所以这里必须走真实指针。
- */
-const dragGuard = async (page: import("@playwright/test").Page, action: Promise<unknown>) => {
-  // 拖拽被浏览器接手时 Playwright 的 mouse.move 会一直等 CDP 回执；用宿主的定时器兜住
-  // （不要用 page.waitForTimeout：拖拽取消时页面侧的等待也可能一起挂住）。
-  await Promise.race([action.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1200))]);
-};
-
-test("a real native drag of a scheduled card stays alive across day columns", async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 760 });
-  // 固定时钟：卡片位置、自动滚动和列宽都跟"现在"有关，跟随真实时钟会在午夜后抖。
-  await page.clock.setFixedTime(new Date("2026-09-20T20:00:00"));
-  await page.goto("/");
-  await page.evaluate(() => {
-    localStorage.clear();
-    const now = new Date();
-    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    const startMinutes = now.getHours() * 60 + Math.floor(now.getMinutes() / 15) * 15;
-    const clock = (minutes: number) => `${String(Math.floor((minutes % 1440) / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
-      lastPage: "calendar", calendarView: "week", calendarAnchors: { day: today, week: today, month: today },
-      calendarZoom: { day: "compact", week: "compact", month: "compact" }, calendarScale: { day: 48, week: 48, month: 120 }, showActualRecords: false,
-    }));
-    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
-      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
-      tasks: [{ id: "drag-task", projectId: null, title: "拖动探针", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 45, sessionMinutes: 45, sortOrder: 0, kind: "task" }],
-      executionSessions: [{ id: "drag-session", taskId: "drag-task", localDate: today, endLocalDate: today, startLocal: clock(startMinutes), endLocal: clock(startMinutes + 45), timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" }],
-    }));
-  });
-  await page.reload();
-  await page.evaluate(() => {
-    const seen: string[] = [];
-    (window as unknown as { __dragSeen: string[] }).__dragSeen = seen;
-    for (const type of ["dragstart", "dragenter", "dragover", "drop", "dragend"]) {
-      document.addEventListener(type, (event) => {
-        const target = event.target as HTMLElement | null;
-        seen.push(`${type}@${target?.className ?? ""}`);
-      }, true);
-    }
-  });
-
-  const card = page.locator(".calendar-session", { hasText: "拖动探针" });
-  await expect(card).toBeVisible();
-  const box = await card.boundingBox();
-  if (!box) throw new Error("拖动探针卡片必须可见");
-  const targetTrack = page.locator(".calendar-day:not(.today) .day-track").first();
-  const targetBox = await targetTrack.boundingBox();
-  if (!targetBox) throw new Error("目标列必须可见");
-
-  const pressX = box.x + box.width / 2;
-  const pressY = box.y + 6;
-  await dragGuard(page, page.mouse.move(pressX, pressY));
-  await dragGuard(page, page.mouse.down());
-  // 小位移：这一步指针仍在卡片上，浏览器在此刻决定「拖起来了」。
-  // 位移必须**明确超过** Chromium 的拖拽阈值（约 5px）：原来的 (+5,+3) 恰好 5.8px，
-  // 时而触发、时而不触发，是这条用例偶发「拖拽根本没有开始」的根因。
-  await dragGuard(page, page.mouse.move(pressX + 10, pressY + 6));
-  const afterStart = await page.evaluate(() => ({
-    seen: (window as unknown as { __dragSeen: string[] }).__dragSeen.slice(),
-    sourcePointerEvents: (() => {
-      const node = document.querySelector(".calendar-session");
-      return node ? getComputedStyle(node).pointerEvents : "missing";
-    })(),
-  }));
-  await dragGuard(page, page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + 200));
-  const during = await page.evaluate(() => (window as unknown as { __dragSeen: string[] }).__dragSeen.slice());
-  await dragGuard(page, page.mouse.up());
-
-  expect(afterStart.seen.some((entry) => entry.startsWith("dragstart@")), `拖拽根本没有开始：${JSON.stringify(afterStart.seen)}`).toBe(true);
-  // 关键判据：拖拽被取消时 `dragend` 会在同一个事件循环里紧跟着 `dragstart` 到来
-  // （源被设成不可命中，浏览器立刻放弃这次拖拽）。指针都已经移动过了，这时还没有
-  // `dragend` 就说明拖拽真的活着 —— 这正是「卡片怎么都拖不动」的判别式。
-  expect(afterStart.seen.some((entry) => entry.startsWith("dragend@")), `dragstart 之后拖拽立刻被取消：${JSON.stringify(afterStart.seen)}`).toBe(false);
-  expect(during.some((entry) => entry.startsWith("dragstart@")), `拖拽无法活到移动结束：${JSON.stringify(during)}`).toBe(true);
-  expect(afterStart.sourcePointerEvents, "拖拽源在拖动期间必须仍然可命中").not.toBe("none");
-});
-
 test("the drop indicator never shrinks below the card and glides between slots", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.clock.setFixedTime(new Date("2026-09-20T20:00:00"));
@@ -387,33 +304,40 @@ test("the drop indicator never shrinks below the card and glides between slots",
 
   const card = page.locator(".calendar-session", { hasText: "短安排" });
   await expect(card).toBeVisible();
+  const cardBox = await card.boundingBox();
+  if (!cardBox) throw new Error("卡片必须可见");
   const track = page.locator(".calendar-day .day-track").nth(2);
   const trackBox = await track.boundingBox();
   if (!trackBox) throw new Error("目标列必须可见");
-  const transfer = await page.evaluateHandle(() => new DataTransfer());
-  await card.dispatchEvent("dragstart", { dataTransfer: transfer });
 
-  const over = async (clientY: number) => {
-    await track.dispatchEvent("dragover", { dataTransfer: transfer, clientX: trackBox.x + 20, clientY });
-    await page.waitForTimeout(220);
-    return page.locator(".calendar-drag-ghost").boundingBox();
-  };
+  // B1 起卡片移动走 pointer：真卡跟手，落点框另画。
+  await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + 4);
+  await page.mouse.down();
+  // 目标轨道是整条 24 小时（顶部在视口上方），指针必须落在视口内才可靠。
+  await page.mouse.move(trackBox.x + trackBox.width / 2, 180, { steps: 8 });
+  const ghost = page.locator(".calendar-drag-preview");
+  await expect(ghost).toBeVisible();
+  await page.waitForTimeout(220);
+  const first = await ghost.boundingBox();
   // 15 分钟安排在紧凑比例下只有 12px：虚线框不得比卡片还矮（用户反馈「太短」）。
-  const first = await over(trackBox.y + 200);
-  const cardBox = await card.boundingBox();
   expect(first).not.toBeNull();
-  expect(cardBox).not.toBeNull();
-  expect(first!.height).toBeGreaterThanOrEqual(cardBox!.height);
+  expect(first!.height).toBeGreaterThanOrEqual(cardBox.height);
   expect(first!.height).toBeGreaterThanOrEqual(32);
 
   // 换一格：虚线框要有过渡（不是瞬移），并且确实移动了。
-  const moved = await over(trackBox.y + 480);
+  await page.mouse.move(trackBox.x + trackBox.width / 2, 560, { steps: 8 });
+  await page.waitForTimeout(220);
+  const moved = await ghost.boundingBox();
   expect(moved).not.toBeNull();
   expect(moved!.y).toBeGreaterThan(first!.y + 100);
-  const transition = await page.locator(".calendar-drag-ghost").evaluate((node) => getComputedStyle(node).transitionProperty);
+  const transition = await ghost.evaluate((node) => getComputedStyle(node).transitionProperty);
   expect(transition).toContain("top");
-  expect(await page.locator(".calendar-drag-ghost").evaluate((node) => getComputedStyle(node).transitionDuration)).not.toBe("0s");
-  await transfer.dispose();
+  expect(await ghost.evaluate((node) => getComputedStyle(node).transitionDuration)).not.toBe("0s");
+  // Esc 取消，不写库、真卡复原。
+  await page.keyboard.press("Escape");
+  await expect(ghost).toHaveCount(0);
+  await page.mouse.up();
+  await expect(card).toBeVisible();
 });
 
 test("pending-review actions open from the card itself instead of on hover", async ({ page }) => {

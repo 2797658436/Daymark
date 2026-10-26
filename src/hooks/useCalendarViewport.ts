@@ -54,6 +54,9 @@ export const CALENDAR_SAMPLE_SETTLE_MS = 300;
 /** 边缘自动滚动的触发带宽度，与阶段 3 的实现一致。 */
 const DRAG_AUTOSCROLL_EDGE = 56;
 
+/** 指针贴到边缘时每帧最多推进的像素（约 60fps 下 ≈ 1300px/s）。 */
+const DRAG_AUTOSCROLL_MAX_PX = 22;
+
 /**
  * 同一帧内恢复失败时连续重试的帧数。
  *
@@ -152,17 +155,25 @@ export function initialCalendarMinute(input: { isToday: boolean; nowMinute: numb
 }
 
 /**
- * 优先级 1 的边缘自动滚动：拖拽悬停在滚动容器上下边缘时每帧推进的 `scrollTop`。
+ * 优先级 1 的边缘自动滚动速度（UI-SPEC §197）：**距离边缘越近越快，指针回中央立即停**。
  *
- * 拖拽期间位置由拖拽自己拥有，其它恢复请求会被延后（见 `CALENDAR_SCROLL_PRIORITY`）。
+ * 每帧调用一次，返回值直接加到 `scrollTop` 上（负数向上）。原实现把 `/4` 写死在
+ * `dragover` 回调里，速度恒为 1–14px/帧且与距离无关；这里改成二次爬升：
+ * 刚进入 56px 触发带时 1px/帧（能微调），贴到边缘时 22px/帧（能跨屏）。
+ * 触发带外返回 0 —— 调用方据此停手，不需要另判「在中间」。
  */
-export function dragEdgeScrollTop(input: {
-  currentScrollTop: number; clientY: number; viewportTop: number; viewportBottom: number; edge?: number;
+export function dragEdgeScrollVelocity(input: {
+  clientY: number; viewportTop: number; viewportBottom: number; edge?: number; maxPerFrame?: number;
 }): number {
   const edge = input.edge ?? DRAG_AUTOSCROLL_EDGE;
-  if (input.clientY < input.viewportTop + edge) return input.currentScrollTop - Math.ceil((input.viewportTop + edge - input.clientY) / 4);
-  if (input.clientY > input.viewportBottom - edge) return input.currentScrollTop + Math.ceil((input.clientY - (input.viewportBottom - edge)) / 4);
-  return input.currentScrollTop;
+  const max = input.maxPerFrame ?? DRAG_AUTOSCROLL_MAX_PX;
+  const ramp = (depth: number) => {
+    const ratio = Math.min(1, Math.max(0, depth / edge));
+    return Math.round(1 + ratio * ratio * (max - 1));
+  };
+  if (input.clientY < input.viewportTop + edge) return -ramp(input.viewportTop + edge - input.clientY);
+  if (input.clientY > input.viewportBottom - edge) return ramp(input.clientY - (input.viewportBottom - edge));
+  return 0;
 }
 
 function minuteInSegments(segments: TimelineSegment[], totalHeight: number, localOffset: number): number {
@@ -248,6 +259,10 @@ export interface CalendarViewportApi {
   noteProgrammaticPosition: () => void;
   /** 只读：当前这次 scroll 是否仍落在应用自己刚写下的位置上。 */
   isProgrammaticPosition: () => boolean;
+  /** 指针拖拽显式进入拖动期：低优先级滚动请求延后。 */
+  beginDrag: () => void;
+  /** 指针拖拽结束：重新判断延后的请求。 */
+  endDrag: () => void;
   /** 只读：当前内存中的逻辑位置。 */
   positions: () => CalendarPositions;
 }
@@ -584,7 +599,11 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     return () => observer.disconnect();
   }, [applyPosition, date, pump, scrollerFor, view]);
 
-  // 拖拽期间（优先级 1）所有低优先级请求延后，dragend／drop 后重新判断。
+  // 拖拽期间（优先级 1）所有低优先级请求延后，拖拽结束再重新判断。
+  //
+  // B2 起应用内已经没有 HTML5 DnD，拖拽由 `useDragSession` 的 pointer 状态机调用
+  // `beginDrag()`／`endDrag()` 显式告知；这里保留 window 的 `dragstart`／`dragend`／`drop`，
+  // 只为「从窗口外拖进文件」这类浏览器原生拖拽仍然不要让恢复请求在它进行中落地。
   useEffect(() => {
     const start = () => { draggingRef.current = true; };
     const end = () => { draggingRef.current = false; pump(); };
@@ -643,6 +662,11 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
 
   const captureZoomAnchor = useCallback((measurement: ZoomAnchorMeasurement) => { zoomAnchorRef.current = measurement; }, []);
 
+  // 指针拖拽（`useDragSession`）没有浏览器 dragstart／dragend 事件，需要显式告诉仲裁
+  // 「拖动正在进行」；原生 DnD 的 window 监听保持不变，供任务池路径使用。
+  const beginDrag = useCallback(() => { draggingRef.current = true; }, []);
+  const endDrag = useCallback(() => { draggingRef.current = false; pump(); }, [pump]);
+
   /**
    * 应用自己刚刚程序化写入过滚动位置（日视图进入、三日缓冲平移、点「上一段／下一段」）。
    *
@@ -686,6 +710,8 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     captureZoomAnchor,
     noteProgrammaticPosition,
     isProgrammaticPosition,
+    beginDrag,
+    endDrag,
     positions: readCalendarPositions,
   };
 }

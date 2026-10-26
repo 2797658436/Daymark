@@ -3,15 +3,16 @@ import {
   Clock3, Copy, Database, Diamond, Ellipsis, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 
 import { hasSubmittingEditor, hasUncommittedEditorDraft, useEditorSession, type EditorSessionApi } from "./hooks/useEditorSession";
-import { dragEdgeScrollTop, seedCalendarPositions, useCalendarViewport, type CalendarPosition, type TimelineView } from "./hooks/useCalendarViewport";
+import { seedCalendarPositions, useCalendarViewport, type CalendarPosition, type TimelineView } from "./hooks/useCalendarViewport";
+import { DragSessionProvider, useDragSession, useDragSessionContext, type DragDecision, type DragSessionPreview } from "./hooks/useDragSession";
 import { FloatingPanel } from "./components/ui/floating-panel";
 import { DragTimePreview } from "./components/ui/drag-time-preview";
-import { DRAG_TARGET_MIN_PX, snapDelta, snapMinutesFor, snapTo } from "./lib/timelineDrag";
+import { snapDelta, snapMinutesFor, snapTo } from "./lib/timelineDrag";
 import { placementSettled, setPendingPlacement, usePendingPlacement } from "./lib/pendingPlacement";
 import { OverlayHostProvider, useOverlayLayer } from "./components/ui/overlay-host";
 import { Button } from "./components/ui/button";
@@ -37,8 +38,7 @@ import { scheduleUnscheduledText } from "./lib/scheduleReasons";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { collapsedGapHeight, createCalendarTimeline, defaultSlotSlicesForWeekday, fullDayEffectiveRanges, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
-import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
-import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
+import { concurrentLayouts, dropImpact, placeableSessions, resolveCalendarDrop, type CalendarDropIntent, type CalendarDropMode, type SessionPlacementChange } from "./lib/calendarPlacement";
 import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel, formatCompactMinutes, type CalendarMarker, type DeadlineUrgency } from "./lib/calendarSummary";
 import {
   createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type CompletionImage, type CompletionRecord, type CompletionRecordSummary,
@@ -55,7 +55,6 @@ type UndoOperation = { label: string; run: () => Promise<WorkspaceSnapshot> };
 /** UI-SPEC §187：「拖拽提交后在底部显示**约 5 秒**的轻量结果提示和撤销操作」。 */
 const UNDO_TOAST_MS = 5_000;
 interface AppProps { settings?: SettingsRepository; native?: NativeApi }
-interface CalendarDropIntent { date: string; startMinute: number; taskId: string; sessionId: string; mode: CalendarDropMode; targetSessionId: string }
 /** 从截止事项页跳到项目页时要定位（或续排）的目标。 */
 interface ProjectFocusRequest { projectId: string; milestoneId: string | null; action: "locate" | "continue" }
 /**
@@ -470,24 +469,92 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     const source = workspace.executionSessions.find((item) => item.id === intent.sessionId);
     if (!task && !source) return;
     const duration = source ? sessionDuration(source) : Math.max(5, task?.sessionMinutes ?? task?.estimatedMinutes ?? 60);
-    const target = workspace.executionSessions.find((item) => item.id === intent.targetSessionId);
-    const startMinute = intent.mode === "overlap" && target ? timeMinutes(target.startLocal) : intent.startMinute;
-    const shifted = intent.mode === "insert-before" || intent.mode === "insert-after"
-      ? insertionChanges(workspace.executionSessions.filter((item) => item.localDate === intent.date && (item.status === "scheduled" || item.status === "missed")), source?.id ?? "", intent.targetSessionId, intent.mode === "insert-before" ? "before" : "after", duration)
-      : [];
-    const at = placementDateTime(intent.date, startMinute);
+    // 预览与提交共用这一份落点/后移：输入集合统一为当天 scheduled|missed（F09），
+    // 卡片中央松手一律按 overlap（F04/D5），不再有「什么都不发生」的分支。
+    const resolved = resolveCalendarDrop({
+      sessions: placeableSessions(workspace.executionSessions, intent.date),
+      sourceSessionId: source?.id ?? "",
+      sourceDuration: duration,
+      pointerMinute: intent.startMinute,
+      targetSessionId: intent.targetSessionId,
+      targetRatio: intent.targetRatio ?? null,
+      requestedMode: intent.mode,
+      overlapLatched: intent.mode === "overlap",
+      commit: true,
+    });
+    const at = placementDateTime(intent.date, resolved.startMinute);
     const placed = source ? moveSessionTo(source, at.date, at.time, duration) : makeSession(task!, at.date, at.time, duration);
-    const updates = shifted.map((change) => { const nextAt = placementDateTime(intent.date, change.startMinute); return moveSessionTo(change.session, nextAt.date, nextAt.time, sessionDuration(change.session)); });
+    const updates = resolved.shifted.map((change) => { const nextAt = placementDateTime(intent.date, change.startMinute); return moveSessionTo(change.session, nextAt.date, nextAt.time, sessionDuration(change.session)); });
     if (source) updates.unshift(placed);
-    const previous = [source, ...shifted.map((change) => change.session)].filter((item): item is ExecutionSession => Boolean(item));
+    const previous = [source, ...resolved.shifted.map((change) => change.session)].filter((item): item is ExecutionSession => Boolean(item));
     await commit(() => native.applyExecutionSessionChanges({ create: source ? [] : [placed], update: updates, deleteIds: [] }));
-    pushUndo({ label: intent.mode.startsWith("insert") ? "撤销插入排程" : intent.mode === "overlap" ? "撤销同时安排" : source ? "撤销时间修改" : "撤销安排", run: () => native.applyExecutionSessionChanges({ create: [], update: previous, deleteIds: source ? [] : [placed.id] }) });
+    pushUndo({ label: resolved.mode.startsWith("insert") ? "撤销插入排程" : resolved.mode === "overlap" ? "撤销同时安排" : source ? "撤销时间修改" : "撤销安排", run: () => native.applyExecutionSessionChanges({ create: [], update: previous, deleteIds: source ? [] : [placed.id] }) });
   };
 
   const cancelSession = async (session: ExecutionSession) => {
     await commit(() => native.deleteExecutionSession(session.id));
     pushUndo({ label: "恢复本次安排", run: () => native.createExecutionSession(session) });
   };
+
+  // ---------------------------------------------------------------------------
+  // 拖拽（B2 起全仓唯一通道）：状态机放在 App 这一层
+  // ---------------------------------------------------------------------------
+  // 任务池与日历是兄弟节点：池行要能拉起同一个 session、日历要在拖动中画落点、
+  // 池要在拖回时显示落区。只有把 Provider 罩在两者之上，才不必在组件之间传指针状态。
+  const calendarRootRef = useRef<HTMLElement | null>(null);
+  /** 日历把滚动仲裁的 begin/end 注册到这里：状态机不直接依赖 `useCalendarViewport`。 */
+  const viewportDragRef = useRef<null | { begin: () => void; end: () => void }>(null);
+  /**
+   * 松手后先按落点画一份（`pendingPlacement`），等写入回来再交给事实。
+   * 目标列与源列是兄弟组件，落地覆盖只能靠这份共享状态；失败时撤掉覆盖。
+   */
+  const commitCalendarDrag = async (intent: CalendarDropIntent) => {
+    const session = workspace.executionSessions.find((item) => item.id === intent.sessionId);
+    if (session) {
+      const at = placementDateTime(intent.date, intent.startMinute);
+      const atEnd = placementDateTime(intent.date, intent.startMinute + sessionDuration(session));
+      setPendingPlacement({ sessionId: session.id, localDate: at.date, startLocal: at.time, endLocalDate: atEnd.date, endLocal: atEnd.time });
+    }
+    try { await placeCalendarItem(intent); } catch (error) { setPendingPlacement(null); throw error; }
+  };
+  /**
+   * 松手时问一次「要不要先确认」——两条业务规则都在这里，状态机只负责停在 `deciding`：
+   * ① 落点在时间块中央（§185/186）：三个选项，「仍然安排」只覆盖本次；
+   * ② 插入把别的安排推出了默认时段或推到新日期（§187/188）：确认才提交。
+   */
+  const buildDragDecision = (input: { intent: CalendarDropIntent; preview: DragSessionPreview; point: { x: number; y: number } }): DragDecision | null => {
+    const { intent, preview, point } = input;
+    const block = preview.blockId ? workspace.timeBlocks.find((item) => item.id === preview.blockId) ?? null : null;
+    if (block) {
+      return {
+        kind: "block", reason: "block", anchor: point, count: 1, dates: [], blockTitle: block.title, intent,
+        afterIntent: { ...intent, startMinute: timeMinutes(block.endLocal), mode: "place", targetSessionId: "", targetRatio: null },
+      };
+    }
+    // 「越出默认时段」只在**日视图的默认时段模式**里成立：那是唯一把非默认时段折成 44px 带子的
+    // 视图，被推出去的安排当场就看不见了，才需要确认。周视图与全天模式全程可见，
+    // 再问一次只是把每一次插入都变成两步（§188「没有跨时段的普通插入直接提交」）。
+    const foldsDefaultSlots = preferences.calendarView === "day" && preferences.calendarDayMode === "defaultSlots";
+    const weekdayNumber = new Date(`${intent.date}T12:00:00`).getDay();
+    const defaultRanges = foldsDefaultSlots
+      ? defaultSlotSlicesForWeekday(preferences.defaultTimeSlots, weekdayNumber).map((slot) => ({ start: timeMinutes(slot.start), end: timeMinutes(slot.end) }))
+      : [];
+    const impact = dropImpact({ date: intent.date, shifted: preview.shifted, defaultRanges });
+    if (!impact) return null;
+    return { kind: "boundary", reason: impact.reason, anchor: point, count: impact.affected.length, dates: impact.dates, blockTitle: "", intent, afterIntent: null };
+  };
+  const dragSession = useDragSession({
+    rootRef: calendarRootRef,
+    snapMinutes: preferences.snapMinutes,
+    hourHeight: preferences.calendarScale[preferences.calendarView === "week" ? "week" : "day"],
+    sessionsFor: (date) => placeableSessions(workspace.executionSessions, date),
+    onCommit: commitCalendarDrag,
+    onResize: (session, duration) => moveSession(session, session.localDate, session.startLocal, duration),
+    onCancelSession: cancelSession,
+    onDragStart: () => viewportDragRef.current?.begin(),
+    onDragEnd: () => viewportDragRef.current?.end(),
+    buildDecision: buildDragDecision,
+  });
 
   const startSession = async (session: ExecutionSession) => {
     const record: ExecutionRecord = {
@@ -584,6 +651,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
 
   const saveLabel = saveState === "saved" ? "已保存到本机" : saveState === "saving" ? "正在保存…" : "未保存，点击重试";
   return (
+    <DragSessionProvider value={dragSession}>
     <div ref={shellRef} className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"} ${dayViewPool && showTaskPool ? "day-view-pool" : ""} ${poolUsesOverlay ? "pool-overlay" : ""}`} style={preferences.taskPoolWidth ? ({ "--pool-width": `${preferences.taskPoolWidth}px` } as CSSProperties) : undefined}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="sidebar">
@@ -608,7 +676,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {undoStack.length > 0 && undoToastOpen && <button className="undo-toast" onClick={() => void undo()} onMouseEnter={clearUndoToastTimer} onMouseLeave={dismissUndoToastLater} onFocus={clearUndoToastTimer} onBlur={dismissUndoToastLater}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
         {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} onRecordCompletion={openCompletionForEvent} />}
-        {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} onPlace={placeCalendarItem} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
+        {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} rootRef={calendarRootRef} viewportDragRef={viewportDragRef} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
         {page === "deadlines" && <DeadlinesPage index={workspaceIndex} filter={deadlinesView.filter} onFilterChange={(filter) => setDeadlinesView((current) => ({ ...current, filter }))}
           focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
           scrollRef={mainRef} scrollTop={deadlinesScrollTop}
@@ -647,7 +715,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         <button className="task-pool-scrim" aria-label="关闭任务池浮层" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} />
         <TaskPool index={workspaceIndex} tasks={poolTasks} heldTasks={heldTasks} leavingTaskId={leavingTaskId} habits={workspace.recurringHabits} occurrences={workspace.habitOccurrences} autoScheduleAssist={preferences.autoScheduleAssist}
           openProject={poolOpenProject} onOpenProjectChange={setPoolOpenProject} attentionOpen={poolAttentionOpen} onAttentionOpenChange={setPoolAttentionOpen}
-          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onCancelSession={cancelSession} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setScheduling({ taskId: null, projectId: null })} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
+          onCreate={createTask} onUpdate={async (task) => { await commit(() => native.updateTask(task)); }} onProgress={updateProgress} onClose={() => poolUsesOverlay ? setPoolOverlayOpen(false) : setTaskPoolOpen(false)} onAutoSchedule={() => setScheduling({ taskId: null, projectId: null })} onCreateHabit={createHabit} onScheduleHabit={scheduleHabit} onSkipHabit={skipHabit} />
         </>
       )}
 
@@ -721,8 +789,47 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
       {taskEditorAnchor && (() => { const task = workspaceIndex.tasksById.get(taskEditorAnchor.taskId); return task ? <FloatingPanel className="task-editor-panel" label={`编辑任务 ${task.title}`} anchorElement={taskEditorAnchor.anchorElement} busy={taskEditorBusy} closeOnOutsideClick onClose={() => setTaskEditorAnchor(null)}><div className="task-editor-fields">
         <h2>编辑任务</h2><TaskEditorFields task={task} projects={workspace.projects} onUpdate={async (next) => { await commit(() => native.updateTask(next)); setTaskEditorAnchor(null); }} onCancel={() => setTaskEditorAnchor(null)} onPhase={setTaskEditorBusy} />
       </div></FloatingPanel> : null; })()}
+      {/* 松手后的确认气泡（§185/§187）：状态机停在 `deciding`，这里只负责文案与三个出口。 */}
+      {dragSession.decision && (() => {
+        const decision = dragSession.decision;
+        return <FloatingPanel kind="action" className="drag-decision-panel" label={decision.kind === "block" ? "重叠确认" : "越界确认"}
+          anchor={dragDecisionAnchor(decision)} closeOnOutsideClick onClose={dragSession.dismissDecision}>
+          <div className="drag-decision">
+            <strong>{decision.kind === "block" ? `与时间块「${decision.blockTitle}」同一时段` : `会影响 ${decision.count} 项已有安排`}</strong>
+            <p>{decision.kind === "block"
+              ? "仍然安排会与时间块重叠；时间块与任务各自独立，不会合并数据。"
+              : decision.reason === "cross-day"
+                ? `它们会被推到 ${decision.dates.map(formatShortDate).join("、")}。`
+                : "它们会被推出默认时段。"}</p>
+            <div className="drag-decision-actions">
+              {decision.kind === "block" ? <>
+                <button type="button" className="button-primary" onClick={dragSession.confirmDecision}>仍然安排</button>
+                <button type="button" className="button-quiet" onClick={dragSession.chooseAfterBlock}>放到时间块之后</button>
+                <button type="button" className="button-quiet" onClick={dragSession.dismissDecision}>取消</button>
+              </> : <>
+                <button type="button" className="button-primary" onClick={dragSession.confirmDecision}>确认</button>
+                <button type="button" className="button-quiet" onClick={dragSession.dismissDecision}>取消</button>
+              </>}
+            </div>
+          </div>
+        </FloatingPanel>;
+      })()}
     </div>
+    </DragSessionProvider>
   );
+}
+
+/**
+ * 确认气泡的锚点：优先取**落点框**的矩形，让气泡贴着它出现（§187「在落点附近」）。
+ *
+ * 不能直接传松手点那个 `DOMRect(x, y, 0, 0)`：`FloatingPanel` 把零尺寸矩形当成
+ * 「没有锚点」，会退回 `activeElement`（拖完松手时是任务池里的输入框），气泡于是
+ * 飘到面板另一头（实测偏出 340px）。所以退回分支也给一个 1×1 的矩形。
+ */
+function dragDecisionAnchor(decision: DragDecision): DOMRect {
+  const ghost = typeof document === "undefined" ? null : document.querySelector<HTMLElement>(".calendar-drag-preview")?.getBoundingClientRect() ?? null;
+  if (ghost && ghost.width > 0 && ghost.height > 0) return ghost;
+  return new DOMRect(decision.anchor.x, decision.anchor.y, 1, 1);
 }
 
 function PageHeader({ eyebrow, title, actions, className, titleId, titleLabel, titleLive }: {
@@ -907,14 +1014,15 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
  * `sessionsById`。此前这里对每一行都 `sessions.some/filter` 扫一遍 3,000 条时段
  * （1,000 任务 → 每次渲染约三百万次比较），是规格 §8 点名要消除的模式。
  */
-function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences, autoScheduleAssist, openProject, onOpenProjectChange, attentionOpen: attentionChoice, onAttentionOpenChange, onCreate, onUpdate, onProgress, onCancelSession, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
+function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences, autoScheduleAssist, openProject, onOpenProjectChange, attentionOpen: attentionChoice, onAttentionOpenChange, onCreate, onUpdate, onProgress, onClose, onAutoSchedule, onCreateHabit, onScheduleHabit, onSkipHabit }: {
   index: WorkspaceIndex; tasks: Task[]; heldTasks: Task[]; leavingTaskId: string | null; habits: RecurringHabit[]; occurrences: HabitOccurrence[]; autoScheduleAssist: boolean;
   /** 由 App 持有：面板关闭会卸载本组件，展开状态放在这里才不会丢。`undefined` = 没手动选过。 */
   openProject: string | null | undefined; onOpenProjectChange: (key: string | null) => void;
   /** 同上：`null` = 没手动动过，按临期数量决定默认。 */
   attentionOpen: boolean | null; onAttentionOpenChange: (open: boolean) => void;
   onCreate: (title: string) => Promise<Task>; onUpdate: (task: Task) => Promise<void>; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>;
-  onCancelSession: (session: ExecutionSession) => Promise<void>; onClose: () => void; onAutoSchedule: () => void;
+  /** 拖回任务池的落区与「松手取消本次安排」都由拖拽状态机承载（§191），池子不再自己处理 DnD。 */
+  onClose: () => void; onAutoSchedule: () => void;
   onCreateHabit: (habit: Omit<RecurringHabit, "id" | "taskId" | "status">) => Promise<void>;
   onScheduleHabit: (habit: RecurringHabit, date: string) => Promise<void>; onSkipHabit: (habit: RecurringHabit, date: string) => Promise<void>;
 }) {
@@ -975,9 +1083,16 @@ function TaskPool({ index, tasks, heldTasks, leavingTaskId, habits, occurrences,
   const toggleProject = (key: string) => onOpenProjectChange(activeProjectKey === key ? null : key);
   const submit = async () => { if (!title.trim() || busy) return; setBusy(true); try { await onCreate(title); setTitle(""); } finally { setBusy(false); } };
   const row = (task: Task) => <TaskPoolRow key={task.id} task={task} sessions={index.sessionsByTaskId.get(task.id) ?? []} completed={task.status === "completed"} leaving={leavingTaskId === task.id} progressOpen={progressEdit?.taskId === task.id} onProgressEdit={(next, anchor) => setProgressEdit({ taskId: next.id, anchor })} onEdit={toggleEditor} />;
-  return <aside id="task-pool" className="task-pool" aria-label="任务池" onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => {
-    const id = event.dataTransfer.getData("application/x-daymark-session"); const session = index.sessionsById.get(id); if (session) void onCancelSession(session);
-  }}>
+  const drag = useDragSessionContext();
+  const poolDropActive = drag.overPool && drag.kind === "move";
+  return <aside id="task-pool" className={`task-pool${poolDropActive ? " is-drop-target" : ""}`} aria-label="任务池" data-drop-target={poolDropActive ? "true" : undefined}>
+    {/* §191 拖回任务池：落区在拖动期间明确出现，文案先说清「只取消这一次」——
+        用户担心的是「拖回去会不会把任务一起删了」。 */}
+    {poolDropActive && <div className="pool-drop-zone" role="status">
+      <Inbox size={18} aria-hidden="true" />
+      <strong>移回任务池</strong>
+      <span>只取消本次时段，保留任务与历史</span>
+    </div>}
     <header className="pool-head">
       <h2>任务池</h2>
       <span className="pool-count">{tasks.length} 项</span>
@@ -1088,8 +1203,15 @@ function TaskPoolRow({ task, sessions, completed = false, leaving = false, progr
     ? `截止：${formatShortDate(task.deadlineLocal)}${next ? ` · 下次：${formatShortDate(next.localDate)} ${next.startLocal}` : ""}`
     : next ? `下次安排：${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : "尚未安排";
   const hint = `拖动安排 · 完成度 ${task.progress}%${task.deadlineLocal ? ` · 截止 ${formatShortDate(task.deadlineLocal)}` : ""}${next ? ` · 下次 ${formatShortDate(next.localDate)} ${next.startLocal}（共 ${upcoming.length} 次）` : ""}`;
-  const className = ["task-card", "pool-task-row", completed ? "is-completed" : "", leaving ? "is-leaving" : ""].filter(Boolean).join(" ");
-  return <article className={className} tabIndex={0} draggable={!completed} title={hint} onDragStart={(event) => { event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("application/x-daymark-task", task.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "task", id: task.id, grabOffsetY }); }}>
+  const drag = useDragSessionContext();
+  const isDragSource = drag.kind === "create" && drag.sourceTaskId === task.id && drag.phase !== "idle";
+  const className = ["task-card", "pool-task-row", completed ? "is-completed" : "", leaving ? "is-leaving" : "", isDragSource ? "is-dragging-source" : ""].filter(Boolean).join(" ");
+  return <article className={className} tabIndex={0} title={hint} data-dragging={isDragSource ? "true" : undefined} onPointerDown={(event) => {
+    if (completed || event.button !== 0) return;
+    // 卡身上的按钮（进度、编辑）只执行自己的操作，不触发拖拽（UI-SPEC §91）。
+    if ((event.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+    drag.beginCreate(event, task);
+  }}>
     <div className="pool-task-main">
       <span className="pool-task-title-row">
         {completed && <span className="pool-task-check" aria-hidden="true"><Check size={13} /></span>}
@@ -1133,14 +1255,17 @@ function PoolProgressEditor({ task, anchor, onCommit, onClose }: { task: Task; a
   </div>;
 }
 
-function CalendarPage({ workspace, index, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
+function CalendarPage({ workspace, index, preferences, focusSessionId, onPreferences, onCalendarPosition, onSchedule, onCreateTaskAt, onMove, rootRef, viewportDragRef, onProgress, onSkipReview, onCreateBlock, onUpdateBlock, onDeleteBlock }: {
   workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; focusSessionId: string | null; onPreferences: (patch: Partial<AppSettings>) => void;
   /** 用户滚动落定后的日／周浏览位置（只有用户滚动会到这里，见 `useCalendarViewport`）。 */
   onCalendarPosition: (view: TimelineView, position: CalendarPosition) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
-  onPlace: (intent: CalendarDropIntent) => Promise<void>;
+  /** 拖拽状态机在 App 层（任务池与日历是兄弟节点），日历把自己的根节点交给它做落点查询。 */
+  rootRef: RefObject<HTMLElement | null>;
+  /** 把滚动仲裁的 begin/end 注册给状态机：进入 dragging 时低优先级恢复请求延后。 */
+  viewportDragRef: RefObject<null | { begin: () => void; end: () => void }>;
   onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
 }) {
@@ -1150,8 +1275,6 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
   // 精确时间编辑的提交态：FloatingPanel 据此在提交中拦住 Esc 与外部点击。
   const [editingSessionBusy, setEditingSessionBusy] = useState(false);
   const [continuingSession, setContinuingSession] = useState<ExecutionSession | null>(null);
-  const [weekGhost, setWeekGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
-  useEffect(() => { const clearGhost = () => setWeekGhost(null); window.addEventListener("dragend", clearGhost); window.addEventListener("drop", clearGhost); return () => { window.removeEventListener("dragend", clearGhost); window.removeEventListener("drop", clearGhost); }; }, []);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string | null>(null); const [detailTaskId, setDetailTaskId] = useState<string | null>(null); const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
   const [monthFocusDate, setMonthFocusDate] = useState<string | null>(null);
   const [weekKeyboardFocus, setWeekKeyboardFocus] = useState<{ kind: "header" | "grid"; date: string; minute: number }>(() => ({ kind: "header", date: anchor, minute: 540 }));
@@ -1162,7 +1285,7 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
   useEffect(() => { if (blockForm) setMoreAnchor(null); }, [blockForm]);
   // 提交态由 TimeBlockEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
   const [blockBusy, setBlockBusy] = useState(false);
-  const calendarRef = useRef<HTMLElement>(null); const weekFocusRequested = useRef(false); const [nowDirection, setNowDirection] = useState<"up" | "down" | null>(null);
+  const calendarRef = rootRef; const weekFocusRequested = useRef(false); const [nowDirection, setNowDirection] = useState<"up" | "down" | null>(null);
   // 周列宽用真实网格量（详情面板挤占后也成立）；<96px 时并行最多并排 2 项。
   const [weekColumnWidth, setWeekColumnWidth] = useState<number | null>(null);
   useLayoutEffect(() => {
@@ -1190,6 +1313,12 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
     slots: preferences.defaultTimeSlots, dates, rootRef: calendarRef,
     onPositionSettled: onCalendarPosition,
   });
+  const drag = useDragSessionContext();
+  // 把滚动仲裁的 begin/end 交给 App 层状态机：日历自己不再持有拖拽状态（B2）。
+  useEffect(() => {
+    viewportDragRef.current = { begin: viewport.beginDrag, end: viewport.endDrag };
+    return () => { viewportDragRef.current = null; };
+  }, [viewport.beginDrag, viewport.endDrag, viewportDragRef]);
   const setZoom = (value: AppSettings["calendarZoom"]["day"]) => onPreferences({
     calendarZoom: { ...preferences.calendarZoom, [preferences.calendarView]: value },
     calendarScale: { ...preferences.calendarScale, [preferences.calendarView]: calendarScaleForZoom(preferences.calendarView, value) },
@@ -1306,7 +1435,7 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
       : null;
   const snapLabel = preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`;
   const backToCurrentLabel = preferences.calendarView === "day" ? "回到今天" : preferences.calendarView === "week" ? "回到本周" : "回到本月";
-  return <section ref={calendarRef} className="calendar-page" aria-labelledby="calendar-title" data-calendar-zoom={zoom} data-calendar-scale={scale} data-calendar-view={preferences.calendarView} data-ui-scale={preferences.scale} data-compact-title={compactRangeTitle ? "true" : undefined} style={calendarStyle}>
+  return <section ref={calendarRef} className="calendar-page" aria-labelledby="calendar-title" data-calendar-zoom={zoom} data-calendar-scale={scale} data-calendar-view={preferences.calendarView} data-ui-scale={preferences.scale} data-drag-phase={drag.phase} data-compact-title={compactRangeTitle ? "true" : undefined} style={calendarStyle}>
     <PageHeader
       className="calendar-header"
       titleId="calendar-title"
@@ -1335,10 +1464,9 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
       </div>
     </div>
     <div ref={viewportRef} className={`calendar-viewport ${preferences.calendarView}-viewport`} role="region" aria-label="日历时间网格">
-      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} onBufferShift={viewport.requestBufferShift} isProgrammaticScroll={viewport.isProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} selectedDate={selectedCalendarDate} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} defaultCollapsed={preferences.scale >= 200} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
+      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} onBufferShift={viewport.requestBufferShift} isProgrammaticScroll={viewport.isProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} selectedDate={selectedCalendarDate} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} defaultCollapsed={preferences.scale >= 200} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
         <CalendarTimeAxis />
-        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} index={index} preferences={preferences} now={now} concurrencyLimit={weekConcurrencyLimit} selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
-        {weekGhost && weekGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${weekGhost.leftPx}px`, top: `${weekGhost.topPx}px`, width: `${weekGhost.widthPx}px`, height: `${weekGhost.heightPx}px` }}><span>{weekGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
+        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} index={index} preferences={preferences} now={now} concurrencyLimit={weekConcurrencyLimit} selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} />)}
       </div></div>{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div>}
     </div>
     {nowDirection && <button className="back-to-now" onClick={returnToNow}>{nowDirection === "up" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}回到现在</button>}
@@ -1355,7 +1483,7 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
   </section>;
 }
 
-function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, onBufferShift, isProgrammaticScroll, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
+function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, onBufferShift, isProgrammaticScroll, onSchedule, onCreateTaskAt, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
   anchor: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date; focusSessionId: string | null; onAnchorChange: (date: string) => void;
   /** 三日缓冲在仲裁落点写完之后上报：这次 scroll 是应用自己的定位，不是用户滚动。 */
   onProgrammaticPosition: () => void;
@@ -1365,12 +1493,13 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
   isProgrammaticScroll: () => boolean;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
-  onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
-  onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
 }) {
   const axisRef = useRef<HTMLDivElement>(null); const pendingScrollOffset = useRef<number | null>(null); const shifting = useRef(false);
+  const drag = useDragSessionContext();
+  /** 落点目前落在哪一天：那一天的吸顶日期带在拖动中保持醒目（§198）。 */
+  const dragTargetDate = drag.phase === "dragging" || drag.phase === "deciding" ? drag.preview?.date ?? null : null;
   const previousPanelRef = useRef<HTMLElement | null>(null);
   const previousExpansionRef = useRef<null | { beforeHeight: number; scrollTop: number }>(null);
   const previousDate = addDays(anchor, -1);
@@ -1402,8 +1531,6 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
     // 只把新增的高度补进 scrollTop，避免整屏跳走。
     if (delta > 0 && info.scrollTop > 0) { axis.scrollTop = info.scrollTop + delta; onProgrammaticPosition(); }
   }, [previousExpanded, onProgrammaticPosition]);
-  const [dayGhost, setDayGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
-  useEffect(() => { const clearGhost = () => setDayGhost(null); window.addEventListener("dragend", clearGhost); window.addEventListener("drop", clearGhost); return () => { window.removeEventListener("dragend", clearGhost); window.removeEventListener("drop", clearGhost); }; }, []);
   // 三日缓冲的对齐不再直接写 scrollTop：交给父级的滚动仲裁（优先级 4），由它把
   // 「缓冲平移 → 进入恢复／首次定位」串成一次落地。layout effect 只负责最早提交请求；
   // 真正的写入发生在仲裁的 rAF 里 —— 那时父级 ref 已挂上，`onProgrammaticPosition()`
@@ -1451,16 +1578,16 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
     {[previousDate, anchor, addDays(anchor, 1)].map((date) => {
       const collapsedPrevious = date === previousDate && !previousExpanded;
       return <section key={date} ref={date === previousDate ? previousPanelRef : undefined} className={`continuous-day-panel ${collapsedPrevious ? "is-previous-collapsed" : ""}`.trim()} data-calendar-date={date} aria-label={formatLongDate(date)}>
-        <CalendarDayBand date={date} workspace={workspace} now={now} previous={date === previousDate} collapsed={collapsedPrevious} onExpand={collapsedPrevious ? expandPreviousDay : undefined} />
-        {!collapsedPrevious && <DayCalendarGrid date={date} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={(g) => setDayGhost(g)} />}
+        {/* §198：跨过午夜拖动时，落点所在那一天的日期带保持醒目 —— 日期归属由它承担。 */}
+        <CalendarDayBand date={date} workspace={workspace} now={now} previous={date === previousDate} collapsed={collapsedPrevious} dragging={dragTargetDate === date} onExpand={collapsedPrevious ? expandPreviousDay : undefined} />
+        {!collapsedPrevious && <DayCalendarGrid date={date} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} />}
       </section>;
     })}
-    {dayGhost && dayGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${dayGhost.leftPx}px`, top: `${dayGhost.topPx}px`, width: `${dayGhost.widthPx}px`, height: `${dayGhost.heightPx}px` }}><span>{dayGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
   </div>;
 }
 
-function CalendarDayBand({ date, workspace, now, previous, collapsed, onExpand }: {
-  date: string; workspace: WorkspaceSnapshot; now: Date; previous: boolean; collapsed: boolean; onExpand?: () => void;
+function CalendarDayBand({ date, workspace, now, previous, collapsed, dragging = false, onExpand }: {
+  date: string; workspace: WorkspaceSnapshot; now: Date; previous: boolean; collapsed: boolean; dragging?: boolean; onExpand?: () => void;
 }) {
   const today = toLocalDate(now);
   const summary = calendarDaySummary(workspace, date, today);
@@ -1468,7 +1595,7 @@ function CalendarDayBand({ date, workspace, now, previous, collapsed, onExpand }
   const minutes = formatCompactMinutes(summary.scheduledMinutes);
   const facts = count === 0 ? "无安排" : `${count} 项安排`;
   const detail = `${facts}${minutes ? ` · 投入 ${minutes}` : ""}`;
-  return <header className={`calendar-day-band ${previous ? "is-previous" : ""} ${collapsed ? "is-collapsed" : ""}`.trim()} aria-label={`${previous ? "前一天 " : ""}${formatLongDate(date)} · ${detail}`}>
+  return <header className={`calendar-day-band ${previous ? "is-previous" : ""} ${collapsed ? "is-collapsed" : ""} ${dragging ? "is-drag-target" : ""}`.trim()} data-drag-target={dragging ? "true" : undefined} aria-label={`${previous ? "前一天 " : ""}${formatLongDate(date)} · ${detail}`}>
     <strong className="calendar-day-band-date">{formatShortDate(date)} <span>{weekday(date)}</span></strong>
     {date === today && <span className="calendar-day-band-today">今天</span>}
     <span className="calendar-day-band-summary" title={detail}>{facts}{minutes ? ` · 投入 ${minutes}` : ""}</span>
@@ -1484,14 +1611,12 @@ function continuousPanelStarts(axis: HTMLElement, panels: HTMLElement[], fallbac
     : [0, fallback, fallback * 2];
 }
 
-function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessionId, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
+function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessionId, onSchedule, onCreateTaskAt, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
   date: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date; focusSessionId: string | null;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
-  onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
-  onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
-  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void; onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
+  onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
 }) {
   const [expandedGapKeys, setExpandedGapKeys] = useState<Set<string>>(() => new Set());
   const [dragExpandedGapKey, setDragExpandedGapKey] = useState<string | null>(null);
@@ -1552,14 +1677,60 @@ function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessio
     const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next;
   });
   const cancelDragHoverTimer = useCallback(() => { if (dragHoverTimer.current !== null) window.clearTimeout(dragHoverTimer.current); dragHoverTimer.current = null; }, []);
-  const clearDragExpansion = useCallback(() => { cancelDragHoverTimer(); setDragExpandedGapKey(null); }, [cancelDragHoverTimer]);
-  useEffect(() => { window.addEventListener("dragend", clearDragExpansion); return () => { window.removeEventListener("dragend", clearDragExpansion); cancelDragHoverTimer(); }; }, [cancelDragHoverTimer, clearDragExpansion]);
+  useEffect(() => () => cancelDragHoverTimer(), [cancelDragHoverTimer]);
   const beginGapHover = (key: string) => { if (dragHoverTimer.current !== null || dragExpandedGapKey === key) return; dragHoverTimer.current = window.setTimeout(() => { dragHoverTimer.current = null; setDragExpandedGapKey(key); }, 500); };
   const leaveGapHover = () => { if (dragHoverTimer.current !== null) { window.clearTimeout(dragHoverTimer.current); dragHoverTimer.current = null; } };
-  const retainDragExpansion = () => { if (!dragExpandedGapKey) return; setExpandedGapKeys((current) => new Set(current).add(dragExpandedGapKey)); setDragExpandedGapKey(null); };
+  /**
+   * 拖拽悬停折叠条约半秒自动展开（§128）。B2 起没有 `dragenter` 可听：指针在哪条折叠条上
+   * 由状态机算（`preview.collapsedGapKey`），这里只按它开表计时。
+   */
+  const drag = useDragSessionContext();
+  /**
+   * 指针下的折叠条。展开之后那条折叠条本身就不存在了，所以还要认「指针仍在刚展开的那一段里」
+   * —— 否则展开后指针一动就自己收回去（旧实现靠 `drag-expanded-region` 的 dragleave 兜住）。
+   */
+  const hoveredGapKey = (() => {
+    if (!drag.preview || drag.preview.kind === "resize" || drag.preview.date !== date) return null;
+    if (drag.preview.collapsedGapKey) return drag.preview.collapsedGapKey;
+    if (!dragExpandedGapKey) return null;
+    const gap = timelineRangeFromKey(dragExpandedGapKey);
+    const minute = drag.preview.startMinute;
+    return gap && minute >= gap.start && minute <= gap.end ? dragExpandedGapKey : null;
+  })();
+  /** 展开过的那一段：松手成功时要把它留在 `expandedGapKeys` 里（§128 的最后半句）。 */
+  const dragExpandedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (hoveredGapKey) {
+      dragExpandedRef.current = hoveredGapKey;
+      beginGapHover(hoveredGapKey);
+      return;
+    }
+    leaveGapHover();
+    setDragExpandedGapKey(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoveredGapKey]);
+  /**
+   * 松手后：提交成功就保留这次临时展开（让用户看到结果），取消则复原。
+   * 判据是状态机的 `commitCount` —— 取消/拖出不会加一。
+   */
+  const commitCountRef = useRef(drag.commitCount);
+  const wasDraggingRef = useRef(false);
+  useEffect(() => {
+    if (drag.phase !== "idle") { wasDraggingRef.current = true; return; }
+    if (!wasDraggingRef.current) { commitCountRef.current = drag.commitCount; return; }
+    wasDraggingRef.current = false;
+    const expanded = dragExpandedRef.current;
+    if (drag.commitCount !== commitCountRef.current && expanded) {
+      setExpandedGapKeys((current) => new Set(current).add(expanded));
+    }
+    setDragExpandedGapKey(null);
+    dragExpandedRef.current = null;
+    commitCountRef.current = drag.commitCount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag.phase, drag.commitCount]);
   // 目标时段的显露（优先级 2）由 CalendarPage 的滚动仲裁统一处理，
   // 这里只负责把聚焦时段并入折叠时间轴的临时显露范围。
-  return <div className="calendar-grid day" style={activeTimeline ? { height: `${activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} index={index} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onGapDragEnter={beginGapHover} onGapDragLeave={leaveGapHover} onClearDragExpansion={clearDragExpansion} onRetainDragExpansion={retainDragExpansion} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={onDragGhost} /></div>;
+  return <div className="calendar-grid day" style={activeTimeline ? { height: `${activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} index={index} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} /></div>;
 }
 
 function CalendarTimeAxis({ timeline }: { timeline?: CalendarTimeline }) {
@@ -1669,31 +1840,28 @@ function CalendarDateDetails({ date, workspace, taskId, projectId, onOpenDay }: 
   return <aside className="calendar-date-details" aria-label={`${date} ${formatLongDate(date)}详情`}><header><div><span className="eyebrow">已选日期</span><h2>{formatLongDate(date)}</h2></div><Button onClick={onOpenDay}>打开日视图</Button></header>{task ? <section className="calendar-task-detail"><span className="eyebrow">截止任务</span><h3>{task.title}</h3><p>{workspace.projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"} · 当前进度 {task.progress}%</p><span className="deadline-chip">截止 {formatShortDate(date)}</span></section> : project ? <section className="calendar-project-detail"><span className="eyebrow">项目</span><h3>{project.title}</h3>{project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={date} /> : <p>没有设置项目截止日期。</p>}<div className="calendar-project-milestones">{workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder).map((milestone) => <article key={milestone.id} className={milestone.targetLocalDate === date ? "on-date" : ""}><Diamond size={14} aria-hidden="true" /><div><strong>{milestone.title}</strong><span>{milestone.targetLocalDate === date ? "今天到期" : `${formatShortDate(milestone.targetLocalDate)}到期`} · {milestoneSummary(milestone, workspace.tasks.filter((item) => item.projectId === project.id))}</span></div></article>)}{workspace.projectMilestones.some((milestone) => milestone.projectId === project.id) || <p className="empty-inline">该项目还没有里程碑。</p>}</div></section> : <><section><h3>重要事实</h3>{summary.deadlines.map((item) => <article key={item.id}><Flag size={14} /><div><strong>{item.title}</strong><span>任务截止 · {item.progress}%</span></div></article>)}{summary.projectDeadlines.map((item) => <article key={`project-${item.id}`}><Flag size={14} /><div><strong>{item.title}</strong><span>项目截止</span></div></article>)}{summary.milestones.map((item) => <article key={`milestone-${item.id}`}><Diamond size={14} /><div><strong>{item.title}</strong><span>里程碑到期</span></div></article>)}{summary.completedTasks.map((item) => <article key={`done-${item.id}`}><Check size={14} /><div><strong>{item.title}</strong><span>当天曾完成 · 当前 {item.progress}%</span></div></article>)}{summary.progressedTasks.map((item) => <article key={`progress-${item.id}`}><ArrowUp size={14} /><div><strong>{item.title}</strong><span>当天有进度变化</span></div></article>)}{summary.missedTasks.map((item) => <article key={`missed-${item.id}`}><Ban size={14} /><div><strong>{item.title}</strong><span>本次未推进</span></div></article>)}{summary.deadlines.length + summary.projectDeadlines.length + summary.milestones.length + summary.completedTasks.length + summary.progressedTasks.length + summary.missedTasks.length === 0 && <p className="empty-inline">当天没有截止、完成或推进事实。</p>}</section><section><h3>当天安排</h3>{sessions.map((session) => <article key={session.id}><Clock3 size={14} /><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.startLocal}–{session.endLocal}</span></div></article>)}{blocks.map((block) => <article key={block.id}><Clock3 size={14} /><div><strong>{block.title}</strong><span>{block.startLocal}–{block.endLocal} · 时间块</span></div></article>)}{sessions.length + blocks.length === 0 && <p className="empty-inline">当天没有执行时段或时间块。</p>}</section></>}</aside>;
 }
 
-function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, concurrencyLimit, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
+function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, concurrencyLimit, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
   date: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date;
-  timeline?: CalendarTimeline; expandedGapKeys?: ReadonlySet<string>; dragExpandedGapKey?: string | null; focusSessionId?: string | null; onToggleGap?: (key: string) => void; onGapDragEnter?: (key: string) => void; onGapDragLeave?: () => void; onClearDragExpansion?: () => void; onRetainDragExpansion?: () => void;
+  /** 只有日视图会传 `timeline`／`expandedGapKeys`／`onToggleGap`：折叠与拖拽悬停展开只属于日视图（D6）。 */
+  timeline?: CalendarTimeline; expandedGapKeys?: ReadonlySet<string>; dragExpandedGapKey?: string | null; focusSessionId?: string | null; onToggleGap?: (key: string) => void;
   concurrencyLimit?: number; selected?: boolean; weekGridTabIndex?: number; weekGridMinute?: number; onWeekGridFocus?: () => void; onWeekGridNavigate?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
-  onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
-  onPlace: (intent: CalendarDropIntent) => Promise<void>;
   onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: (session: ExecutionSession) => Promise<void>; onContinue: (session: ExecutionSession) => void;
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>;
   onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
-  onDragGhost?: (ghost: { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string } | null) => void;
 }) {
-  const [dragPreview, setDragPreview] = useState<null | { taskId: string; sessionId: string; startMinute: number; duration: number; title: string; mode: CalendarDropMode; targetSessionId: string }>(null);
-  const [dragSourceId, setDragSourceId] = useState<string | null>(null);
-  const overlapTimer = useRef<number | null>(null); const overlapTarget = useRef("");
-  useEffect(() => { const clearDrag = () => { setDragPreview(null); setDragSourceId(null); onDragGhost?.(null); endCalendarDrag(); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; }; window.addEventListener("dragend", clearDrag); window.addEventListener("drop", clearDrag); return () => { window.removeEventListener("dragend", clearDrag); window.removeEventListener("drop", clearDrag); clearDrag(); }; }, []);
+  // B2 起列里没有任何拖拽状态：预览、跟手位移、落点全部来自 App 层的那一个状态机。
   const [expandedConcurrency, setExpandedConcurrency] = useState<string | null>(null);
+  /** 并行组里被选中的那一张：视觉浮前 + 左右方向键切换（§176），不改日历顺序。 */
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [blankHoverMinute, setBlankHoverMinute] = useState<number | null>(null);
   const [blankRange, setBlankRange] = useState<{ start: number; end: number } | null>(null);
   const [blankAction, setBlankAction] = useState<"menu" | "new" | "pool" | "block" | null>(null);
   const [blankBusy, setBlankBusy] = useState(false); const [blankError, setBlankError] = useState("");
   const [blankAnchor, setBlankAnchor] = useState<DOMRect | null>(null);
   const [blankTitle, setBlankTitle] = useState(""); const blankSelectionStart = useRef<number | null>(null); const blankBubbleRef = useRef<HTMLElement>(null);
-  const sessions = workspace.executionSessions.filter((item) => item.localDate === date && (item.status === "scheduled" || item.status === "missed"));
+  const sessions = placeableSessions(workspace.executionSessions, date);
   /**
    * 刚刚放开去、写入还没回来的那一份。
    *
@@ -1718,11 +1886,32 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
   const actualRecords = preferences.showActualRecords ? workspace.executionRecords.flatMap((record) => {
     const slice = actualRecordSlice(record, date, now); return slice ? [{ record, ...slice }] : [];
   }) : [];
-  useEffect(() => {
-    const clear = () => { setDragPreview(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; };
-    window.addEventListener("dragend", clear);
-    return () => { window.removeEventListener("dragend", clear); clear(); };
-  }, []);
+  const drag = useDragSessionContext();
+  /**
+   * 拖动中的落点预览。`move`（日历内移动）与 `create`（任务池拉进来新增一次时段）
+   * 共用同一套渲染 —— 列里不再有第二份 preview 状态（B1 的列级 `dragPreview` 已删）。
+   */
+  const activePreview = drag.preview && drag.preview.kind !== "resize" && drag.preview.date === date ? drag.preview : null;
+  /**
+   * §177 重叠区预演：把「松手后会变成什么」提前算出来。
+   *
+   * 只对 overlap 预览算 —— 把被抓的那一份以落点插进当天集合（移动时先摘掉源），
+   * 再用同一个 `concurrentLayouts` 排一遍。预览期间的并排宽度、以及某项会不会被收进
+   * 「另外 N 项」，都与松手后完全一致：同一份纯函数，不另写一套试算。
+   */
+  const previewLayouts = (() => {
+    if (!activePreview || activePreview.mode !== "overlap") return null;
+    const base = drag.sourceId ? sessions.filter((item) => item.id !== drag.sourceId) : sessions;
+    const virtual: ExecutionSession = {
+      id: "__drag-preview__", taskId: "",
+      localDate: date, endLocalDate: placementDateTime(date, activePreview.startMinute + activePreview.duration).date,
+      startLocal: minutesTime(activePreview.startMinute % 1440),
+      endLocal: minutesTime((activePreview.startMinute + activePreview.duration) % 1440),
+      timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled",
+    };
+    return concurrentLayouts([...base, virtual], concurrencyLimit);
+  })();
+  const ghostRef = useRef<HTMLElement>(null);
 
   const minuteAtPointer = (clientY: number, track: HTMLDivElement) => {
     const rect = track.getBoundingClientRect(); if (!rect.height) return 0;
@@ -1730,44 +1919,6 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
     return snapTo(raw, snapMinutesFor(preferences.snapMinutes, false), 0, 1439);
   };
   const pointsAtBlankTrack = (target: EventTarget | null) => !(target as HTMLElement | null)?.closest("button, input, .calendar-session, .calendar-time-block, .calendar-actual-record, .blank-action-bubble, .resize-handle, .session-edit-button");
-  const previewFromDrag = (event: DragEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (!rect.height) return null;
-    // 抓取偏移：鼠标按下时相对源 session 顶部的距离；虚线框顶 = 鼠标 y - 抓取偏移 → 抓哪儿跟哪儿
-    const grabOffsetPx = calendarDragGrabOffset(event.dataTransfer);
-    const pointerOffsetPx = Math.max(0, Math.max(0, event.clientY - rect.top) - grabOffsetPx);
-    const raw = timeline ? timeline.minuteAtOffset(pointerOffsetPx) : (pointerOffsetPx / rect.height) * 1440;
-    const snap = snapMinutesFor(preferences.snapMinutes, event.altKey);
-    // `dragover` 期间 `getData` 是空的（保护模式），必须回落到 dragstart 记下的影子副本，
-    // 否则整个拖拽预览在真实浏览器里都不会出现。
-    const { taskId, sessionId } = calendarDragIds(event.dataTransfer);
-    const task = workspace.tasks.find((item) => item.id === taskId);
-    const session = workspace.executionSessions.find((item) => item.id === sessionId);
-    if (!task && !session) return null;
-    const sourceTask = task ?? workspace.tasks.find((item) => item.id === session?.taskId);
-    const duration = session ? sessionDuration(session) : Math.max(5, task?.sessionMinutes ?? task?.estimatedMinutes ?? 60);
-    let startMinute = snapTo(raw, snap, 0, 1439);
-    let mode: CalendarDropMode = "place"; let targetSessionId = "";
-    const targetCard = (event.target as HTMLElement | null)?.closest<HTMLElement>(".calendar-session:not(.calendar-drag-preview)");
-    const target = sessions.find((item) => item.id === targetCard?.dataset.sessionId && item.id !== sessionId);
-    if (target && targetCard) {
-      targetSessionId = target.id;
-      const targetRect = targetCard.getBoundingClientRect(); const ratio = targetRect.height ? (event.clientY - targetRect.top) / targetRect.height : .5;
-      if (ratio < .25) { mode = "insert-before"; startMinute = timeMinutes(target.startLocal); }
-      else if (ratio > .75) { mode = "insert-after"; startMinute = timeMinutes(target.startLocal) + sessionDuration(target); }
-      else if (dragPreview?.mode === "overlap" && dragPreview.targetSessionId === target.id) { mode = "overlap"; startMinute = timeMinutes(target.startLocal); }
-      if (ratio >= .25 && ratio <= .75 && overlapTarget.current !== target.id) {
-        if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current);
-        overlapTarget.current = target.id;
-        overlapTimer.current = window.setTimeout(() => { setDragPreview((current) => current && current.targetSessionId === target.id ? { ...current, mode: "overlap", startMinute: timeMinutes(target.startLocal) } : current); onDragGhost?.(null); overlapTimer.current = null; }, 500);
-      } else if (ratio < .25 || ratio > .75) {
-        if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = "";
-      }
-    } else if (overlapTimer.current !== null) {
-      window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = "";
-    }
-    return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId };
-  };
   const dayClasses = ["calendar-day", isToday ? "today" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
   /**
    * 周视图**不是**一张表格：7 个日列各自是一条 24 小时连续时间轴，DOM 里没有「行」。
@@ -1783,24 +1934,8 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
       onPointerMove={(event) => { if (event.buttons !== 0) { if (blankSelectionStart.current === null) { setBlankHoverMinute(null); } return; } if (!pointsAtBlankTrack(event.target)) { if (blankSelectionStart.current === null) setBlankHoverMinute(null); return; } const minute = minuteAtPointer(event.clientY, event.currentTarget); if (blankSelectionStart.current === null) setBlankHoverMinute(minute); else { const start = Math.min(blankSelectionStart.current, minute); const end = Math.max(blankSelectionStart.current, minute, start + 5); setBlankRange({ start, end }); } }}
       onPointerUp={(event) => { if (blankSelectionStart.current === null) return; const origin = blankSelectionStart.current; const minute = minuteAtPointer(event.clientY, event.currentTarget); const start = Math.min(origin, minute); const end = minute === origin ? origin + 30 : Math.max(origin, minute, start + 5); blankSelectionStart.current = null; setBlankAnchor(new DOMRect(event.clientX, event.clientY, 0, 0)); setBlankRange({ start, end: Math.min(1440, end) }); setBlankAction("menu"); try { if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ } }}
       onPointerLeave={() => { if (blankSelectionStart.current === null) setBlankHoverMinute(null); }}
-      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = calendarDragTypes(event.dataTransfer).session ? "move" : "copy"; const nextPreview = previewFromDrag(event); setDragPreview(nextPreview); if (onDragGhost) { if (!nextPreview) onDragGhost(null); else { const track = event.currentTarget; const body = track.closest<HTMLElement>(".week-body, .continuous-day-axis"); const trackRect = track.getBoundingClientRect(); const bodyRect = body?.getBoundingClientRect(); if (!body || !bodyRect || !trackRect.height) onDragGhost(null); else { const pxPerHour = trackRect.height / 24; onDragGhost({ leftPx: Math.max(0, trackRect.left - bodyRect.left), topPx: Math.max(0, trackRect.top - bodyRect.top) + (nextPreview.startMinute % 1440) / 60 * pxPerHour, widthPx: trackRect.width, heightPx: Math.max(nextPreview.duration / 60 * pxPerHour, DRAG_TARGET_MIN_PX), mode: nextPreview.mode, targetSessionId: nextPreview.targetSessionId, title: nextPreview.title }); } } } const scroller = event.currentTarget.closest<HTMLElement>(".continuous-day-axis, .calendar-viewport"); const rect = scroller?.getBoundingClientRect(); if (scroller && rect) { scroller.scrollTop = dragEdgeScrollTop({ currentScrollTop: scroller.scrollTop, clientY: event.clientY, viewportTop: rect.top, viewportBottom: rect.bottom }); } }} onDragLeave={(event) => { const target = event.relatedTarget as Node | null; const container = event.currentTarget.closest<HTMLElement>(".calendar-grid.week-body, .continuous-day-axis"); const stillInside = container != null && target != null && container.contains(target); const leftContainer = target != null && !stillInside; if (leftContainer) { setDragPreview(null); onDragGhost?.(null); if (overlapTimer.current !== null) window.clearTimeout(overlapTimer.current); overlapTimer.current = null; overlapTarget.current = ""; } }} onDrop={(event) => {
-      event.preventDefault();
-      const preview = previewFromDrag(event) ?? dragPreview;
-      if (!preview) { onClearDragExpansion?.(); return; }
-      if (preview.mode === "place" && preview.targetSessionId) { setDragPreview(null); onDragGhost?.(null); onClearDragExpansion?.(); return; }
-      setDragPreview(null); onDragGhost?.(null);
-      // 已有卡片换位置：先把落点画出来、源列那一份同时藏起来，
-      // 否则松手后旧位置继续显示，等写入回来才跳走（跨列松手的错位动画）。
-      const movingSession = workspace.executionSessions.find((item) => item.id === preview.sessionId);
-      if (movingSession) {
-        const at = placementDateTime(date, preview.startMinute);
-        const atEnd = placementDateTime(date, preview.startMinute + sessionDuration(movingSession));
-        setPendingPlacement({ sessionId: movingSession.id, localDate: at.date, startLocal: at.time, endLocalDate: atEnd.date, endLocal: atEnd.time });
-      }
-      void onPlace({ date, startMinute: preview.startMinute, taskId: preview.taskId, sessionId: preview.sessionId, mode: preview.mode, targetSessionId: preview.targetSessionId })
-        .then(() => onRetainDragExpansion?.())
-        .catch(() => { setPendingPlacement(null); onClearDragExpansion?.(); });
-    }}>
+      /* 落点、让位与提交全部由 App 层的 `useDragSession` 处理：DOM 上不再挂任何 DnD 处理器（B2）。 */
+      >
       {timeline?.segments.map((segment) => <i key={`map-${segment.start}-${segment.end}`} aria-hidden="true" className="timeline-map-segment" data-start-minute={segment.start} data-end-minute={segment.end} data-collapsed={segment.collapsed} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} />)}
       {Array.from({ length: 24 }, (_, hour) => { const minute = hour * 60; const segment = timeline?.segments.find((item) => minute >= item.start && minute < item.end); return segment?.collapsed ? null : <div key={hour} className="hour-line" style={{ top: timeline ? `${timeline.offsetAtMinute(minute)}px` : `${hour / 24 * 100}%` }} />; })}
       {timeline?.segments.filter((segment) => segment.collapsed).map((segment) => {
@@ -1808,16 +1943,16 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
         const label = effectiveDay ? (segment.start === 0 ? "凌晨" : segment.start >= 1380 ? "深夜" : "非活跃时段") : `${boundaryTime(segment.start)}–${boundaryTime(segment.end)}`;
         const summary = effectiveDay ? "无安排" : `${count} 项安排`;
         const description = effectiveDay ? `${label} ${boundaryTime(segment.start)}–${boundaryTime(segment.end)} · ${summary}` : `${boundaryTime(segment.start)}–${boundaryTime(segment.end)} · ${summary}`;
-        return <div key={`${segment.start}-${segment.end}`} className={`collapsed-time-gap ${effectiveDay ? "effective-day-gap" : ""}`.trim()} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} onDragEnter={() => segment.gapKey && onGapDragEnter?.(segment.gapKey)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onGapDragLeave?.(); }} onDragOver={(event) => event.preventDefault()}>
+        return <div key={`${segment.start}-${segment.end}`} className={`collapsed-time-gap ${effectiveDay ? "effective-day-gap" : ""}`.trim()} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} data-gap-key={segment.gapKey ?? undefined}>
           <button type="button" className="collapsed-gap-main" aria-label={description} onClick={() => segment.gapKey && onToggleGap?.(segment.gapKey)}>{label}<span>{summary}</span></button>
           {effectiveDay && segment.gapKey === firstCollapsedGapKey && <button type="button" className="effective-day-expand" aria-label="展开整天" onClick={() => timeline.gaps.forEach((gap) => { if (!expandedGapKeys?.has(gap.key)) onToggleGap?.(gap.key); })}>展开整天</button>}
         </div>;
       })}
-      {dragExpandedGapKey && timeline && (() => { const gap = timelineRangeFromKey(dragExpandedGapKey); return gap ? <div aria-hidden="true" className="drag-expanded-region" style={{ top: `${timeline.offsetAtMinute(gap.start)}px`, height: `${timeline.offsetAtMinute(gap.end) - timeline.offsetAtMinute(gap.start)}px` }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onClearDragExpansion?.(); }} /> : null; })()}
+      {dragExpandedGapKey && timeline && (() => { const gap = timelineRangeFromKey(dragExpandedGapKey); return gap ? <div aria-hidden="true" className="drag-expanded-region" style={{ top: `${timeline.offsetAtMinute(gap.start)}px`, height: `${timeline.offsetAtMinute(gap.end) - timeline.offsetAtMinute(gap.start)}px` }} /> : null; })()}
       {[...(expandedGapKeys ?? [])].map((key) => { const gap = timelineRangeFromKey(key); return gap && timeline ? <button key={key} className="expanded-gap-toggle" aria-label={`收起 ${boundaryTime(gap.start)}–${boundaryTime(gap.end)}`} style={{ top: `${timeline.offsetAtMinute(gap.start)}px` }} onClick={() => onToggleGap?.(key)}>{effectiveDay ? (gap.start === 0 ? "收起凌晨" : gap.start >= 1380 ? "收起深夜" : "收起非默认时段") : "收起非默认时段"}</button> : null; })}
       {isToday && <><div className="calendar-past-region" aria-hidden="true" style={timeline ? { height: `${timeline.offsetAtMinute(nowMinute)}px` } : { height: `${nowMinute / 1440 * 100}%` }} /><div className="calendar-now-line" data-now-marker style={timeline ? { top: `${timeline.offsetAtMinute(nowMinute)}px` } : { top: `${nowMinute / 1440 * 100}%` }}><time>{formatLocalClock(now)}</time></div></>}
       {defaultSlots.map((slot) => { const style = timeline ? timeline.positionForRange(slot.start, slot.end) : positionStyle(slot.start, slot.end); return style ? <div key={slot.id} className="default-slot" style={style}><span>{slot.label}</span></div> : null; })}
-      {blankHoverMinute !== null && !blankRange && !dragPreview && <div className="blank-hover-cue" aria-hidden="true" style={{ top: timeline ? `${timeline.offsetAtMinute(blankHoverMinute)}px` : `${blankHoverMinute / 1440 * 100}%` }}><Plus size={14} /><time>{minutesTime(blankHoverMinute)}</time></div>}
+      {blankHoverMinute !== null && !blankRange && !activePreview && <div className="blank-hover-cue" aria-hidden="true" style={{ top: timeline ? `${timeline.offsetAtMinute(blankHoverMinute)}px` : `${blankHoverMinute / 1440 * 100}%` }}><Plus size={14} /><time>{minutesTime(blankHoverMinute)}</time></div>}
       {blankRange && <div className="blank-range-preview" aria-label={`已选择 ${minutesTime(blankRange.start)} 至 ${minutesTime(blankRange.end % 1440)}`} style={timeline ? { top: `${timeline.offsetAtMinute(blankRange.start)}px`, height: `${Math.max(6, timeline.offsetAtMinute(blankRange.end) - timeline.offsetAtMinute(blankRange.start))}px` } : { top: `${blankRange.start / 1440 * 100}%`, height: `${(blankRange.end - blankRange.start) / 1440 * 100}%` }} />}
       {blankRange && blankAction && <FloatingPanel label="空白时段操作" kind="action" anchor={blankAnchor} onClose={() => { setBlankAction(null); setBlankRange(null); }} closeOnOutsideClick><section ref={blankBubbleRef} aria-busy={blankBusy} className="blank-action-bubble" onPointerDown={(event) => event.stopPropagation()}>
         <header><strong>{minutesTime(blankRange.start)}–{minutesTime(blankRange.end % 1440)}</strong><button disabled={blankBusy} aria-label="关闭空白时段操作" onClick={() => { setBlankAction(null); setBlankRange(null); }}><X size={13} /></button></header>
@@ -1826,13 +1961,26 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
         {blankAction === "pool" && <div className="blank-task-picker">{workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit").map((task) => <button disabled={blankBusy} key={task.id} onClick={() => { if (blankBusy) return; setBlankBusy(true); setBlankError(""); void onSchedule(task, date, minutesTime(blankRange.start)).then(() => { setBlankAction(null); setBlankRange(null); }).catch((reason) => setBlankError(readError(reason))).finally(() => setBlankBusy(false)); }}><span className="blank-task-icon" aria-hidden="true"><Inbox size={14} /></span><span className="blank-task-text"><strong>{task.title}</strong><small>{task.sessionMinutes ?? task.estimatedMinutes ?? 60} 分钟</small></span></button>)}{!workspace.tasks.some((task) => task.status === "active" && task.kind !== "habit") && <span className="empty-inline">任务池暂无可安排任务</span>}</div>}
         {blankError && <p role="alert">{blankError}</p>}
       </section></FloatingPanel>}
-      {dragPreview && (() => {
-        // 虚线框跟鼠标 y 轴（snap 到 15 分钟格线 = drop 落点指示）；占位符（source 半透明）静止在原位置
-        const start = minutesTime(dragPreview.startMinute % 1440); const end = minutesTime((dragPreview.startMinute + dragPreview.duration) % 1440);
+      {activePreview && (() => {
+        // 虚线框按吸附后的落点绘制；拖动中的真卡由 `useDragSession` 两轴跟手。
+        const start = minutesTime(activePreview.startMinute % 1440); const end = minutesTime((activePreview.startMinute + activePreview.duration) % 1440);
         const previewStyle = timeline ? timeline.positionForRange(start, end) : positionStyle(start, end);
-        const label = dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after" ? "插入并后移" : dragPreview.mode === "overlap" ? "同时安排" : dragPreview.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置";
-        const shifted = dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after" ? insertionChanges(sessions, dragPreview.sessionId, dragPreview.targetSessionId, dragPreview.mode === "insert-before" ? "before" : "after", dragPreview.duration) : [];
-        return <>{previewStyle && (!onDragGhost || dragPreview.mode !== "place") && <article className={`calendar-drag-preview ${dragPreview.mode}`} role="status" aria-label="拖拽排程预览" style={previewStyle}><span>{label}</span></article>}{(dragPreview.mode === "insert-before" || dragPreview.mode === "insert-after") && <div className="calendar-insert-line" aria-label="插入位置" style={{ top: timeline ? `${timeline.offsetAtMinute(dragPreview.startMinute)}px` : `${dragPreview.startMinute / 1440 * 100}%` }}><span>插入并后移</span></div>}{shifted.map((change) => { const shiftedStart = minutesTime(change.startMinute % 1440); const shiftedEnd = minutesTime((change.startMinute + sessionDuration(change.session)) % 1440); const shiftedStyle = timeline ? timeline.positionForRange(shiftedStart, shiftedEnd) : positionStyle(shiftedStart, shiftedEnd); return shiftedStyle ? <article key={`shift-${change.session.id}`} className="calendar-shift-preview" style={shiftedStyle}><strong>{taskTitle(workspace, change.session.taskId)}</strong><time>{shiftedStart}–{shiftedEnd}</time></article> : null; })}</>;
+        // §185 时间块的文案与任务重叠区分开；§177 重叠预演里若这一张会被收进「另外 N 项」，
+        // 虚线框就不画了 —— 该展示的是汇总卡上的新计数，不是一格看不见的框。
+        const label = activePreview.blockId ? "与时间块同时安排"
+          : activePreview.mode === "insert-before" || activePreview.mode === "insert-after" ? "插入并后移"
+            : activePreview.mode === "overlap" ? (activePreview.targetSessionId ? "同时安排" : "与时间块同时安排")
+              : activePreview.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置";
+        const ghostLayout = previewLayouts?.get("__drag-preview__") ?? null;
+        const ghostStyle = previewStyle && ghostLayout
+          ? { ...previewStyle, left: `calc(${ghostLayout.left}% + 4px)`, right: "auto", width: `calc(${ghostLayout.width}% - 8px)` }
+          : previewStyle;
+        return <>
+          {ghostStyle && !ghostLayout?.hidden && <article ref={ghostRef} className={`calendar-drag-preview ${activePreview.mode}${activePreview.blockId ? " block-overlap" : ""}`} role="status" aria-label="拖拽排程预览" style={ghostStyle}><span>{label}</span></article>}
+          {activePreview.mode === "insert-before" || activePreview.mode === "insert-after" ? <div className="calendar-insert-line" aria-label="插入位置" style={{ top: timeline ? `${timeline.offsetAtMinute(activePreview.startMinute)}px` : `${activePreview.startMinute / 1440 * 100}%` }}><span>插入并后移</span></div> : null}
+          {/* 从任务池拖进来的那一份没有源卡片，读数就挂在落点框上（§166/168 的「持续显示精确起止」）。 */}
+          {drag.kind === "create" && <DragTimePreview active anchorRef={ghostRef} label="拖动时间预览" followKey={`${start}-${end}`}>{start}–{end} · {activePreview.duration} 分钟</DragTimePreview>}
+        </>;
       })()}
       {blocks.map((block) => {
         const baseStyle = timeline ? timeline.positionForRange(block.startLocal, block.endLocal) : positionStyle(block.startLocal, block.endLocal);
@@ -1845,11 +1993,21 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
         // 落点覆盖：目标列先用落点时间画这一份（布局分栏等写入回来再算）。
         const landing = pendingPlacement?.sessionId === session.id ? pendingPlacement : null;
         const shown = landing ? { ...session, ...landing } : session;
-        const baseStyle = timeline ? timeline.positionForRange(shown.startLocal, shown.endLocal) : positionStyle(shown.startLocal, shown.endLocal); const layout = landing ? undefined : concurrency.get(session.id);
+        // §171 真卡片让位：插入预览期间把被推后的卡片移到新位置，靠 `.calendar-session`
+        // 既有的 top 过渡平滑滑过去；松手前不提交，拖出有效区域时预览清空、自动复原。
+        const yielding = landing ? undefined : activePreview?.shifted.find((change) => change.session.id === session.id);
+        const displayed = yielding
+          ? { ...shown, startLocal: minutesTime(yielding.startMinute % 1440), endLocal: minutesTime((yielding.startMinute + sessionDuration(session)) % 1440) }
+          : shown;
+        // 重叠预演期间读试算出来的那套分栏：松手前就能看到「会变多宽 / 谁会被收进汇总」。
+        const baseStyle = timeline ? timeline.positionForRange(displayed.startLocal, displayed.endLocal) : positionStyle(displayed.startLocal, displayed.endLocal);
+        const layout = landing ? undefined : previewLayouts?.get(session.id) ?? concurrency.get(session.id);
         if (!task || !baseStyle || layout?.hidden) return null;
         const style = layout ? { ...baseStyle, left: `calc(${layout.left}% + 4px)`, right: "auto", width: `calc(${layout.width}% - 8px)` } : baseStyle;
-        const isDraggingSource = dragSourceId === session.id;
-        return <CalendarSession key={session.id} style={style} categoryColor={calendarProjectColor(workspace.projects, task.projectId)} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} sessionRecords={index.recordsBySessionId.get(shown.id) ?? []} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
+        const groupSiblings = (concurrency.get(session.id)?.groupId ?? "") !== ""
+          ? sessions.filter((item) => concurrency.get(item.id)?.groupId === concurrency.get(session.id)?.groupId).sort((a, b) => timeMinutes(a.startLocal) - timeMinutes(b.startLocal) || a.id.localeCompare(b.id))
+          : [];
+        return <CalendarSession key={session.id} style={style} categoryColor={calendarProjectColor(workspace.projects, task.projectId)} landing={landing !== null} yielding={Boolean(yielding)} targeted={session.id === focusSessionId} overlapTargeted={activePreview?.mode === "overlap" && activePreview.targetSessionId === session.id} selected={selectedSessionId === session.id} onSelect={() => setSelectedSessionId(session.id)} groupSize={groupSiblings.length} onCycleGroup={(direction) => { const index = groupSiblings.findIndex((item) => item.id === session.id); if (index < 0) return; const next = groupSiblings[(index + direction + groupSiblings.length) % groupSiblings.length]; setSelectedSessionId(next.id); document.querySelector<HTMLElement>(`.calendar-session[data-session-id="${next.id}"]`)?.focus(); }} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} sessionRecords={index.recordsBySessionId.get(shown.id) ?? []} showActualRecords={preferences.showActualRecords} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
       })}
       {expandedConcurrency && (() => {
         const groupSessions = sessions.filter((session) => concurrency.get(session.id)?.groupId === expandedConcurrency);
@@ -1996,7 +2154,7 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   return <>
     {dropStyle && <div aria-hidden="true" className="calendar-time-block-drop" style={dropStyle} />}
     {resize !== null && resize.edge === "move" && <div aria-hidden="true" className="calendar-time-block-origin" style={baseStyle} />}
-    <article ref={articleRef} className={classes} style={displayStyle} onPointerDown={startMove} data-resize-edge={resize?.edge} data-landed={landed !== null ? "true" : undefined}>
+    <article ref={articleRef} className={classes} style={displayStyle} onPointerDown={startMove} data-block-id={block.id} data-resize-edge={resize?.edge} data-landed={landed !== null ? "true" : undefined}>
       <button className="time-block-handle time-block-handle-top" aria-label={`调整 ${block.title} 开始时间`} onPointerDown={(e) => startEdgeResize(e, "top")} />
       <time>{liveStartStr}–{liveEndStr}</time>
       <strong>{block.title}</strong>
@@ -2007,16 +2165,17 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   </>;
 }
 
-function CalendarSession({ style, categoryColor, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
-  style?: CSSProperties; categoryColor?: string; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
-  session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; /** 只传该时段自己的执行记录，避免每行扫描全量历史。 */ sessionRecords: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
-  onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
-  onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
+function CalendarSession({ style, categoryColor, landing = false, yielding = false, targeted = false, overlapTargeted = false, selected = false, onSelect, groupSize = 0, onCycleGroup, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay }: {
+  style?: CSSProperties; categoryColor?: string; landing?: boolean; yielding?: boolean; targeted?: boolean; overlapTargeted?: boolean;
+  /** §176：并行组里被选中时视觉浮前（不改日历顺序），左右方向键在同组之间切换。 */
+  selected?: boolean; onSelect?: () => void; groupSize?: number; onCycleGroup?: (direction: -1 | 1) => void;
+  session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; /** 只传该时段自己的执行记录，避免每行扫描全量历史。 */ sessionRecords: ExecutionRecord[]; showActualRecords: boolean;
+  onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   overlay?: ReactNode;
 }) {
   const articleRef = useRef<HTMLElement>(null);
+  const drag = useDragSessionContext();
   const [progressOpen, setProgressOpen] = useState(false);
-  const [resize, setResize] = useState<number | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const current = sessionContains(session, now);
   const pendingReview = isPendingReview(session, task, sessionRecords, now);
@@ -2065,32 +2224,38 @@ function CalendarSession({ style, categoryColor, landing = false, targeted = fal
         : isTaskCompleted(task) || task.progress === 100 ? { icon: <Check size={12} />, label: "已完成" }
           : null;
   const nextDeadline = task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 ? task.deadlineLocal : null;
+  const isDragSource = drag.sourceId === session.id && drag.phase !== "idle";
+  const isMoving = isDragSource && drag.kind === "move" && drag.phase === "dragging";
+  const resizeDuration = isDragSource && drag.kind === "resize" && drag.preview ? drag.preview.duration : null;
+  const isResizing = resizeDuration !== null;
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault(); event.stopPropagation();
     onResizeStart?.();
     setReviewOpen(false);
-    const originY = event.clientY;
-    const initial = sessionDuration(session);
-    const pixelsPerMinute = hourHeight / 60;
-    const rounded = (next: PointerEvent) => {
-      const snap = snapMinutesFor(snapMinutes, next.altKey);
-      const deltaMinutes = (next.clientY - originY) / pixelsPerMinute;
-      return Math.max(snap, Math.min(1440, initial + snapDelta(deltaMinutes, snap)));
-    };
-    const move = (next: PointerEvent) => setResize(rounded(next));
-    const up = (next: PointerEvent) => {
-      const duration = rounded(next);
-      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-      setResize(null);
-      void onResize(duration);
-    };
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up, { once: true });
+    drag.beginResize(event, session);
   };
-  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", isTaskCompleted(task) || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", landing ? "is-landed" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
-  const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
-  const cardStyle = categoryColor ? { ...displayStyle, "--session-category": categoryColor } as CSSProperties : displayStyle;
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} title={task.title} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={cardStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
-    <DragTimePreview active={resize !== null} anchorRef={articleRef} label="调整时长预览" followKey={resize}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize!) % 1440)} · {resize} 分钟</DragTimePreview>
+  const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", selected ? "is-selected" : "", isTaskCompleted(task) || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", isMoving ? "is-dragging-source" : "", landing ? "is-landed" : "", yielding ? "is-yielding" : "", isResizing ? "is-resizing" : ""].filter(Boolean).join(" ");
+  const baseStyle = style ?? positionStyle(session.startLocal, session.endLocal);
+  const displayStyle = resizeDuration === null ? baseStyle : { ...baseStyle, height: `${resizeDuration / 60 * hourHeight}px` };
+  const cardStyle = {
+    ...displayStyle,
+    ...(categoryColor ? { "--session-category": categoryColor } : {}),
+    ...(isMoving ? { transform: `translate(${drag.delta.x}px, ${drag.delta.y}px)` } : {}),
+  } as CSSProperties;
+  const readoutStart = isResizing ? session.startLocal : drag.preview?.kind === "move" ? minutesTime(drag.preview.startMinute % 1440) : null;
+  const readoutEnd = isResizing && resizeDuration !== null ? minutesTime((timeMinutes(session.startLocal) + resizeDuration) % 1440)
+    : drag.preview?.kind === "move" ? minutesTime((drag.preview.startMinute + drag.preview.duration) % 1440) : null;
+  const readoutDuration = isResizing ? resizeDuration : drag.preview?.kind === "move" ? drag.preview.duration : null;
+  const readoutActive = isResizing || (isMoving && Boolean(drag.preview));
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} data-dragging={isMoving ? "true" : undefined} data-resizing={isResizing ? "true" : undefined} data-yielding={yielding ? "true" : undefined} title={task.title} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={cardStyle} onClick={(event) => { if (drag.suppressClick(session.id)) return; if ((event.target as HTMLElement).closest("button")) return; onSelect?.(); if (pendingReview) setReviewOpen(true); }} onFocus={() => onSelect?.()} onKeyDown={(event) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === "Enter") { event.preventDefault(); onEdit(articleRef.current); return; }
+      // §176：并行组内的左右方向键只在组内切换选中，不改日历顺序、也不移动卡片。
+      if (groupSize > 1 && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        onCycleGroup?.(event.key === "ArrowLeft" ? -1 : 1);
+      }
+    }} onPointerDown={(event) => { if (event.button !== 0) return; if ((event.target as HTMLElement).closest("button, input, .session-task-progress, .session-elapsed, .concurrent-summary, .simultaneous-count")) return; drag.beginMove(event, session); }}>
     <time className="session-time">{session.startLocal}–{session.endLocal}</time><strong>{task.title}</strong>
     {(status || nextDeadline) && <span className="session-state">{status && (pendingReview
       ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}<span>{status.label}</span></button>
@@ -2104,6 +2269,11 @@ function CalendarSession({ style, categoryColor, landing = false, targeted = fal
     <button className="session-edit-button" data-session-edit-button data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={(event) => onEdit(event.currentTarget)}><Pencil size={12} /></button>
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
   </article>
+  {/* 读数必须挂在**卡片外面**：`.calendar-session` 有 `container-type: size`（contain: layout），
+      而拖动中的跟手卡又带 `transform` —— 两者任一个都会让 `position: fixed` 的后代改以这张卡
+      为包含块，读数于是按「卡片内的坐标」摆放，实测偏到列外（851/676 vs 卡片 425/310）。
+      与 `CalendarTimeBlock` 的写法一致：锚点是这张卡，DOM 上是兄弟。 */}
+  <DragTimePreview active={readoutActive} anchorRef={articleRef} label={isResizing ? "调整时长预览" : "拖动时间预览"} followKey={`${readoutStart}-${readoutEnd}`}>{readoutStart}–{readoutEnd} · {readoutDuration} 分钟</DragTimePreview>
   {reviewActions}
   </>;
 }

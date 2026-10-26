@@ -208,7 +208,7 @@ describe("phase 1 manual alpha", () => {
     expect(document.querySelectorAll(".time-axis-track > span")).toHaveLength(24);
   });
 
-  it("previews an exact dragged task before writing and lets Alt reverse snapping", async () => {
+  it("previews a pool drag before writing and lets Alt reverse snapping", async () => {
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -219,49 +219,63 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     await user.click(await screen.findByRole("button", { name: "显示更多日历选项" }));
     expect(await screen.findByRole("button", { name: "吸附 15 分钟" })).toHaveAttribute("aria-pressed", "true");
+    // 「显示 ⋯」气泡是模态（背景 inert）：不关掉它，日历里的落点框连 aria 都读不到。
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "日历显示选项" })).not.toBeInTheDocument());
+    const row = (await screen.findByText("拖拽任务", { selector: ".task-card strong" })).closest<HTMLElement>(".task-card")!;
     const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
     vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
-    const dataTransfer = { types: ["application/x-daymark-task"], dropEffect: "none", getData: (type: string) => type === "application/x-daymark-task" ? "task-drag" : "" };
-    const snapped = createEvent.dragOver(track, { dataTransfer }); Object.defineProperty(snapped, "clientY", { value: 607 }); fireEvent(track, snapped);
-    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("松开放置");
-    expect(native.createExecutionSession).not.toHaveBeenCalled();
-    const free = createEvent.dragOver(track, { dataTransfer }); Object.defineProperties(free, { clientY: { value: 607 }, altKey: { value: true } }); fireEvent(track, free);
-    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toBeVisible();
-    expect(native.createExecutionSession).not.toHaveBeenCalled();
+
+    // B2：池 → 日历走 pointer，新增一次执行时段；拖动中只渲染落点，不写库。
+    fireEvent.pointerDown(row, { button: 0, clientX: 30, clientY: 10 });
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 607 }));
+    const ghost = screen.getByRole("status", { name: "拖拽排程预览" });
+    expect(ghost).toHaveTextContent("松开放置");
+    expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
+    const snappedTop = (ghost as HTMLElement).style.top;
+
+    // Alt 临时反转吸附：607 分钟不再贴到 600，落点框跟着挪。
+    const free = createEvent.pointerMove(window, { clientX: 30, clientY: 607 });
+    Object.defineProperty(free, "altKey", { value: true });
+    fireEvent(window, free);
+    expect((screen.getByRole("status", { name: "拖拽排程预览" }) as HTMLElement).style.top).not.toBe(snappedTop);
+    expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 607 }));
   });
 
-  it("keeps the drop preview alive while dragover hides the dragged payload", async () => {
-    // 真实浏览器在 dragenter/dragover 期间处于保护模式：`types` 可读，`getData` 一律空串。
-    // 预览必须靠 `dragstart` 记下的影子副本，否则日历在真实拖拽里全程没有任何反馈。
+  it("starts a pool drag only past the 5px threshold and leaves the row's own buttons alone", async () => {
+    // 回归红线：池行的单击／双击／多选与自身按钮不受 pointer 拾起影响（UI-SPEC §90/§91）。
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
-      tasks: [{ id: "task-shadow", projectId: null, title: "影子负载", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
-      executionSessions: [{ id: "session-shadow", taskId: "task-shadow", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+      tasks: [{ id: "task-gate", projectId: null, title: "阈值任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
     };
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
-    const card = await screen.findByText("影子负载", { selector: ".calendar-session strong" });
-    const source = card.closest<HTMLElement>(".calendar-session")!;
-    // dragstart 阶段 dataTransfer 可信：应用在这一刻把负载记进影子副本。
-    fireEvent.dragStart(source, { dataTransfer: { types: [], effectAllowed: "none", setData: () => undefined, getData: () => "" } });
-
-    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-06"] .day-track')!;
+    const row = (await screen.findByText("阈值任务", { selector: ".task-card strong" })).closest<HTMLElement>(".task-card")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
     vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
-    const hidden = { types: ["application/x-daymark-session"], dropEffect: "none", getData: () => "" };
-    const over = createEvent.dragOver(track, { dataTransfer: hidden });
-    Object.defineProperty(over, "clientY", { value: 400 });
-    fireEvent(track, over);
-    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("松开放置");
 
-    // 外部拖拽（没有日历自己的类型）不该借用影子副本凭空造出预览。
-    fireEvent(window, createEvent.dragEnd(source, { dataTransfer: hidden }));
-    const foreign = createEvent.dragOver(track, { dataTransfer: { types: ["Files"], dropEffect: "none", getData: () => "" } });
-    Object.defineProperty(foreign, "clientY", { value: 400 });
-    fireEvent(track, foreign);
+    // 卡身上的按钮只执行自己的操作。
+    const progressButton = screen.getByRole("button", { name: /调整进度 阈值任务/ });
+    fireEvent.pointerDown(progressButton, { button: 0, clientX: 30, clientY: 10 });
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 607 }));
     expect(screen.queryByRole("status", { name: "拖拽排程预览" })).not.toBeInTheDocument();
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 607 }));
+
+    // 3px 位移仍在阈值内：停在 picked，不产生落点（click 照常派发）。
+    fireEvent.pointerDown(row, { button: 0, clientX: 30, clientY: 10 });
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 31, clientY: 12 }));
+    expect(document.querySelector(".calendar-page")).toHaveAttribute("data-drag-phase", "picked");
+    expect(screen.queryByRole("status", { name: "拖拽排程预览" })).not.toBeInTheDocument();
+
+    // 越过 5px 才进入 dragging，并且开始显示落点。
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 607 }));
+    expect(document.querySelector(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
+    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toBeInTheDocument();
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 607 }));
   });
 
-  it("previews edge insertion, shifts later sessions, and commits the whole drop once", async () => {
+  it("previews edge insertion from the pool, shifts later sessions, and commits the whole drop once", async () => {
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -276,16 +290,18 @@ describe("phase 1 manual alpha", () => {
       ],
     };
     const native = createNativeApi(initial); render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const row = (await screen.findByText("插入任务", { selector: ".task-card strong" })).closest<HTMLElement>(".task-card")!;
     const target = (await screen.findByText("目标任务", { selector: ".calendar-session strong" })).closest<HTMLElement>(".calendar-session")!;
     const track = target.closest<HTMLElement>(".day-track")!;
     vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 200, bottom: 660, width: 200, height: 60, toJSON: () => ({}) });
-    const dataTransfer = { types: ["application/x-daymark-task"], dropEffect: "none", getData: (type: string) => type === "application/x-daymark-task" ? "task-drag" : "" };
-    const over = createEvent.dragOver(target, { dataTransfer }); Object.defineProperty(over, "clientY", { value: 605 }); fireEvent(target, over);
+
+    fireEvent.pointerDown(row, { button: 0, clientX: 30, clientY: 10 });
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 605 }));
     expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("插入并后移");
     expect(screen.getByLabelText("插入位置")).toBeVisible();
     expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
-    const drop = createEvent.drop(target, { dataTransfer }); Object.defineProperty(drop, "clientY", { value: 605 }); fireEvent(target, drop);
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 605 }));
     await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalledOnce());
     expect(native.applyExecutionSessionChanges).toHaveBeenCalledWith(expect.objectContaining({
       create: [expect.objectContaining({ taskId: "task-drag", startLocal: "10:00" })],
@@ -293,7 +309,7 @@ describe("phase 1 manual alpha", () => {
     }));
   });
 
-  it("switches a center hover to simultaneous scheduling after 500 ms", async () => {
+  it("switches a pool drop hovered at a card centre to simultaneous scheduling after 500 ms", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const backend = new MemorySettingsBackend(); backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -302,14 +318,18 @@ describe("phase 1 manual alpha", () => {
     };
     const native = createNativeApi(initial); render(<App settings={new SettingsRepository(backend)} native={native} />);
     try {
+      const row = (await screen.findByText("并行任务", { selector: ".task-card strong" })).closest<HTMLElement>(".task-card")!;
       const target = (await screen.findByText("已有任务", { selector: ".calendar-session strong" })).closest<HTMLElement>(".calendar-session")!; const track = target.closest<HTMLElement>(".day-track")!;
       vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
       vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 200, bottom: 660, width: 200, height: 60, toJSON: () => ({}) });
-      const dataTransfer = { types: ["application/x-daymark-task"], dropEffect: "none", getData: (type: string) => type === "application/x-daymark-task" ? "task-drag" : "" };
-      const over = createEvent.dragOver(target, { dataTransfer }); Object.defineProperty(over, "clientY", { value: 630 }); fireEvent(target, over);
-      expect(screen.getByRole("status", { name: "拖拽排程预览" })).not.toHaveClass("overlap");
+      fireEvent.pointerDown(row, { button: 0, clientX: 30, clientY: 10 });
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 630 }));
+      expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("悬停 0.5 秒以同时安排");
       act(() => vi.advanceTimersByTime(500));
       expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveClass("overlap");
+      // §177：重叠预览期间并排结果提前算出来 —— 两张卡各占一半宽。
+      expect(target.style.width).toContain("50%");
+      fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 630 }));
     } finally { vi.useRealTimers(); }
   });
 
@@ -661,6 +681,7 @@ describe("phase 1 manual alpha", () => {
       tasks: [
         { id: "task-current", projectId: null, title: "当前窗口任务", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: 30, sortOrder: 0 },
         { id: "task-folded", projectId: null, title: "折叠区任务", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+        { id: "task-drop", projectId: null, title: "拖入折叠区", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 2 },
       ],
       executionSessions: [
         { id: "session-current", taskId: "task-current", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "06:30", endLocal: "08:30", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
@@ -670,6 +691,27 @@ describe("phase 1 manual alpha", () => {
     };
     const native = createNativeApi(initial);
     render(<App settings={new SettingsRepository(backend)} native={native} />);
+    /**
+     * 折叠条在 jsdom 里没有布局：命中判定读的是 `getBoundingClientRect`，所以这里逐元素
+     * 打桩（每次重新取当前 DOM 上的那一条 —— 展开／收起会换掉它）。
+     */
+    const stubRect = (element: Element | null, rect: { top: number; bottom: number; height: number; right?: number }) => {
+      if (!element) throw new Error("折叠条必须存在");
+      Object.defineProperty(element, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({ x: 0, y: rect.top, top: rect.top, left: 0, right: rect.right ?? 200, bottom: rect.bottom, width: 200, height: rect.height, toJSON: () => ({}) }),
+      });
+    };
+    /**
+     * 手指要点到「09:00–19:00」那一条：三日缓冲里前一天／后一天也有折叠条，
+     * 而同一天还另有一条 00:00–09:00 —— 展开错哪一条都看不到 10:00 的安排。
+     */
+    const stubGap = () => {
+      const gaps = Array.from(document.querySelectorAll<HTMLElement>('[data-calendar-date="2026-08-05"] .collapsed-time-gap'));
+      const target = gaps.find((gap) => (gap.dataset.gapKey ?? "").endsWith("-1140"));
+      if (!target) throw new Error("09:00–19:00 的折叠条必须存在");
+      stubRect(target, { top: 100, bottom: 144, height: 44 });
+    };
     try {
       expect(await screen.findByRole("button", { name: "默认时段" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByText("当前窗口任务", { selector: ".calendar-session strong" })).toBeVisible();
@@ -680,25 +722,37 @@ describe("phase 1 manual alpha", () => {
       expect(backend.value).toMatchObject({ calendarDayMode: "defaultSlots" });
       await user.click(screen.getByRole("button", { name: "收起 09:00–19:00" }));
       expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument();
-      fireEvent.dragEnter(screen.getByRole("button", { name: "09:00–19:00 · 2 项安排" }));
+
+      const row = screen.getByText("拖入折叠区", { selector: ".task-card strong" }).closest<HTMLElement>(".task-card")!;
+      stubRect(document.querySelector('[data-calendar-date="2026-08-05"] .day-track'), { top: 0, bottom: 1440, height: 1440 });
+
+      // ① 悬停不足半秒就离开：不展开（计时被取消）。
+      stubGap();
+      fireEvent.pointerDown(row, { button: 0, clientX: 30, clientY: 10 });
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 120 }));
       act(() => vi.advanceTimersByTime(250));
-      fireEvent.dragLeave(screen.getByRole("button", { name: "09:00–19:00 · 2 项安排" }));
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 600, clientY: 120 }));
       act(() => vi.advanceTimersByTime(300));
       expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument();
-      fireEvent.dragEnter(screen.getByRole("button", { name: "09:00–19:00 · 2 项安排" }));
+
+      // ② 悬停满半秒：展开；回到折叠条范围外：恢复原状。
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 120 }));
       act(() => vi.advanceTimersByTime(499));
       expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1));
       expect(screen.getByText("折叠区任务", { selector: ".calendar-session strong" })).toBeVisible();
-      fireEvent.dragEnd(window);
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 600, clientY: 120 }));
       expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument();
-      fireEvent.dragEnter(screen.getByRole("button", { name: "09:00–19:00 · 2 项安排" }));
+
+      // ③ 再展开一次后松手，但写入失败：临时展开必须撤掉，卡片回到折叠态。
+      stubGap();
+      fireEvent(window, createEvent.pointerMove(window, { clientX: 30, clientY: 120 }));
       act(() => vi.advanceTimersByTime(500));
+      expect(screen.getByText("折叠区任务", { selector: ".calendar-session strong" })).toBeVisible();
       (native.applyExecutionSessionChanges as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("写入失败"));
-      const track = document.querySelector<HTMLElement>('[data-calendar-date="2026-08-05"] .day-track');
-      expect(track).not.toBeNull();
-      fireEvent.drop(track!, { clientY: 100, dataTransfer: { getData: (type: string) => type === "application/x-daymark-task" ? "task-folded" : "" } });
+      fireEvent(window, createEvent.pointerUp(window, { clientX: 30, clientY: 120 }));
       await waitFor(() => expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument());
+
       await user.click(screen.getByRole("button", { name: "全天" }));
       expect(screen.getByText("折叠区任务", { selector: ".calendar-session strong" })).toBeVisible();
       await waitFor(() => expect(backend.value).toMatchObject({ calendarDayMode: "fullDay" }));
@@ -1485,7 +1539,8 @@ describe("phase 1 manual alpha", () => {
     await user.click(await screen.findByRole("button", { name: "重新选择时间" }));
     expect(await screen.findByRole("region", { name: "日历时间网格" })).toBeVisible();
     await waitFor(() => expect(document.querySelector(".calendar-session.pending-review")).toHaveTextContent("恢复行动待回顾"));
-    expect(document.querySelector(".calendar-session.pending-review")).toHaveAttribute("draggable", "true");
+    // B1 起卡片移动改 pointer 自绘，不再挂原生 `draggable`；卡片仍可点开待回顾。
+    expect(document.querySelector(".calendar-session.pending-review")).toHaveAttribute("data-session-id");
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
@@ -2155,7 +2210,7 @@ describe("phase 1 manual alpha", () => {
     expect(parseFloat(dragging.style.height)).toBeCloseTo(60 / 1440 * 100, 3);
   });
 
-  it("shows a moved session at its landed slot while the write is in flight", async () => {
+  it("moves a session with a pointer, shows the exact readout, and lands it while the write is in flight", async () => {
     const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -2167,13 +2222,17 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     const card = await screen.findByText("跨列移动", { selector: ".calendar-session strong" });
     const source = card.closest<HTMLElement>(".calendar-session")!;
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 100, bottom: 660, width: 100, height: 60, toJSON: () => ({}) });
     const targetTrack = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-06"] .day-track')!;
-    vi.spyOn(targetTrack, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+    vi.spyOn(targetTrack, "getBoundingClientRect").mockReturnValue({ x: 200, y: 0, top: 0, left: 200, right: 400, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
 
-    const transfer = { types: ["application/x-daymark-session"], dropEffect: "none", getData: (type: string) => type === "application/x-daymark-session" ? "session-move" : "其他" };
-    fireEvent.dragStart(source, { dataTransfer: { types: [], effectAllowed: "none", setData: () => undefined, getData: () => "" } });
-    const over = createEvent.dragOver(targetTrack, { dataTransfer: transfer }); Object.defineProperty(over, "clientY", { value: 500 }); fireEvent(targetTrack, over);
-    const drop = createEvent.drop(targetTrack, { dataTransfer: transfer }); Object.defineProperty(drop, "clientY", { value: 500 }); fireEvent(targetTrack, drop);
+    fireEvent(source, createEvent.pointerDown(source, { button: 0, clientX: 50, clientY: 600 }));
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 300, clientY: 500 }));
+    // 拖动中：真卡两轴跟手 + 贴卡精确读数（4 小时内不 latch）。
+    expect(source).toHaveAttribute("data-dragging", "true");
+    expect(source.style.transform).toContain("translate(250px, -100px)");
+    expect(screen.getByRole("status", { name: "拖动时间预览" })).toHaveTextContent("08:15–09:15 · 60 分钟");
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 300, clientY: 500 }));
     await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalled());
 
     // 源列那一份必须让位，否则松手后旧位置继续显示、数据回来才跳走 —— 就是跨列松手的错位动画。
@@ -2184,6 +2243,173 @@ describe("phase 1 manual alpha", () => {
     expect(landed).toHaveTextContent("跨列移动");
     // 500 分钟吸附到 495（08:15）并落在目标列，而不是停回旧列旧时间。
     expect(parseFloat(landed.style.top)).toBeCloseTo(495 / 1440 * 100, 3);
+    // 提交与预览同口径：落库时间就是预览显示的时间。
+    expect(native.applyExecutionSessionChanges).toHaveBeenCalledWith(expect.objectContaining({
+      update: [expect.objectContaining({ id: "session-move", localDate: "2026-08-06", startLocal: "08:15", endLocal: "09:15" })],
+    }));
+  });
+
+  it("converts the pointer through the scrolled track's own top edge", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-scrolled", projectId: null, title: "滚动轨道", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "session-scrolled", taskId: "task-scrolled", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const source = (await screen.findByText("滚动轨道", { selector: ".calendar-session strong" })).closest<HTMLElement>(".calendar-session")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    // 轨道上半截已滚出视口：clientY 与轨道内偏移差 200px，指针换算是两者的差。
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue({ x: 0, y: 400, top: 400, left: 0, right: 100, bottom: 500, width: 100, height: 100, toJSON: () => ({}) });
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: -200, top: -200, left: 0, right: 200, bottom: 1240, width: 200, height: 1440, toJSON: () => ({}) });
+
+    fireEvent(source, createEvent.pointerDown(source, { button: 0, clientX: 50, clientY: 404 }));
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 50, clientY: 704 }));
+    expect(screen.getByRole("status", { name: "拖动时间预览" })).toHaveTextContent("15:00–16:00 · 60 分钟");
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 50, clientY: 704 }));
+  });
+
+  it("yields real cards during an edge insert and restores them when the pointer leaves", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-source", projectId: null, title: "移动源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-target", projectId: null, title: "目标任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+        { id: "task-next", projectId: null, title: "后续任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 2 },
+      ],
+      executionSessions: [
+        { id: "session-source", taskId: "task-source", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-target", taskId: "task-target", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-next", taskId: "task-next", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:00", endLocal: "12:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const sourceText = await screen.findByText("移动源", { selector: ".calendar-session strong" });
+    const source = sourceText.closest<HTMLElement>(".calendar-session")!;
+    const target = screen.getByText("目标任务", { selector: ".calendar-session strong" }).closest<HTMLElement>(".calendar-session")!;
+    const next = screen.getByText("后续任务", { selector: ".calendar-session strong" }).closest<HTMLElement>(".calendar-session")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue({ x: 0, y: 840, top: 840, left: 0, right: 100, bottom: 900, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 100, bottom: 660, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(next, "getBoundingClientRect").mockReturnValue({ x: 0, y: 660, top: 660, left: 0, right: 100, bottom: 720, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+
+    fireEvent(source, createEvent.pointerDown(source, { button: 0, clientX: 50, clientY: 840 }));
+    // 目标卡上缘（ratio < .25）→ 插入并后移：目标与后续的真卡在拖动中就移到新位置。
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 50, clientY: 605 }));
+    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("插入并后移");
+    expect(target).toHaveAttribute("data-yielding", "true");
+    expect(next).toHaveAttribute("data-yielding", "true");
+    expect(parseFloat(target.style.top)).toBeCloseTo(660 / 1440 * 100, 3);
+    expect(parseFloat(next.style.top)).toBeCloseTo(720 / 1440 * 100, 3);
+
+    // 拖出有效区域：真卡复原，且不写库。
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 600, clientY: 100 }));
+    expect(target).not.toHaveAttribute("data-yielding");
+    expect(parseFloat(target.style.top)).toBeCloseTo(600 / 1440 * 100, 3);
+    expect(screen.queryByRole("status", { name: "拖拽排程预览" })).not.toBeInTheDocument();
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 600, clientY: 100 }));
+    expect(native.applyExecutionSessionChanges).not.toHaveBeenCalled();
+  });
+
+  it("commits the same edge insert the preview showed after the target cards yielded", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-source", projectId: null, title: "插入源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-target", projectId: null, title: "插入目标", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+        { id: "task-next", projectId: null, title: "插入邻位", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 2 },
+      ],
+      executionSessions: [
+        { id: "session-source", taskId: "task-source", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-target", taskId: "task-target", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-next", taskId: "task-next", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "11:00", endLocal: "12:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const source = (await screen.findByText("插入源", { selector: ".calendar-session strong" })).closest<HTMLElement>(".calendar-session")!;
+    const target = screen.getByText("插入目标", { selector: ".calendar-session strong" }).closest<HTMLElement>(".calendar-session")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue({ x: 0, y: 840, top: 840, left: 0, right: 100, bottom: 900, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 100, bottom: 660, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+
+    fireEvent(source, createEvent.pointerDown(source, { button: 0, clientX: 50, clientY: 840 }));
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 50, clientY: 605 }));
+    expect(target).toHaveAttribute("data-yielding", "true");
+    // 目标卡已被预览推走，指针下只剩虚线框：松手仍要按刚才预览的「插入前」提交。
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 50, clientY: 605 }));
+    await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalled());
+    const updates = (native.applyExecutionSessionChanges as ReturnType<typeof vi.fn>).mock.calls[0][0].update;
+    expect(updates.map((session: { id: string; startLocal: string }) => [session.id, session.startLocal])).toEqual([
+      ["session-source", "10:00"], ["session-target", "11:00"], ["session-next", "12:00"],
+    ]);
+    expect(screen.getByRole("button", { name: /撤销插入排程/ })).toBeVisible();
+  });
+
+  it("commits an overlap when the pointer is released in a card centre before the 500 ms latch", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "task-source", projectId: null, title: "中央源", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-target", projectId: null, title: "中央目标", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "session-source", taskId: "task-source", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "session-target", taskId: "task-target", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    const source = (await screen.findByText("中央源", { selector: ".calendar-session strong" })).closest<HTMLElement>(".calendar-session")!;
+    const target = screen.getByText("中央目标", { selector: ".calendar-session strong" }).closest<HTMLElement>(".calendar-session")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue({ x: 0, y: 840, top: 840, left: 0, right: 100, bottom: 900, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({ x: 0, y: 600, top: 600, left: 0, right: 100, bottom: 660, width: 100, height: 60, toJSON: () => ({}) });
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+
+    fireEvent(source, createEvent.pointerDown(source, { button: 0, clientX: 50, clientY: 840 }));
+    fireEvent(window, createEvent.pointerMove(window, { clientX: 50, clientY: 630 }));
+    // 半秒未到：预览只提示「悬停 0.5 秒以同时安排」。
+    expect(screen.getByRole("status", { name: "拖拽排程预览" })).toHaveTextContent("悬停 0.5 秒以同时安排");
+    fireEvent(window, createEvent.pointerUp(window, { clientX: 50, clientY: 630 }));
+    await waitFor(() => expect(native.applyExecutionSessionChanges).toHaveBeenCalledOnce());
+    // D5：中央松手直接按 overlap 提交（不再静默丢弃），目标卡不动。
+    expect(native.applyExecutionSessionChanges).toHaveBeenCalledWith(expect.objectContaining({
+      update: [expect.objectContaining({ id: "session-source", localDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00" })],
+    }));
+    expect(target.closest(".calendar-session")).not.toBeNull();
+  });
+
+  it("resizes a session from its bottom handle with the shared pointer session", async () => {
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" }, calendarScale: { day: 48, week: 48, month: 120 } };
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "task-resize", projectId: null, title: "改时长", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "session-resize", taskId: "task-resize", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    const native = createNativeApi(initial);
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    await screen.findByText("改时长", { selector: ".calendar-session strong" });
+    expect(document.querySelector(".calendar-page")).toHaveAttribute("data-calendar-scale", "48");
+    const handle = screen.getByRole("button", { name: "调整 改时长 时长" });
+    const source = handle.closest<HTMLElement>(".calendar-session")!;
+    const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
+    vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
+
+    fireEvent(handle, createEvent.pointerDown(handle, { button: 0, clientY: 600 }));
+    // 48px/小时：96px = 120 分钟，吸附 15 分钟 → 180 分钟。
+    fireEvent(window, createEvent.pointerMove(window, { clientY: 696 }));
+    expect(screen.getByRole("status", { name: "调整时长预览" })).toHaveTextContent("10:00–13:00 · 180 分钟");
+    expect(source).toHaveAttribute("data-resizing", "true");
+    fireEvent(window, createEvent.pointerUp(window, { clientY: 696 }));
+    await waitFor(() => expect(native.updateExecutionSession).toHaveBeenCalledWith(expect.objectContaining({ id: "session-resize", startLocal: "10:00", endLocal: "13:00", localDate: "2026-08-05" })));
   });
 
   it("deletes a lightweight time block from the calendar", async () => {

@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  CALENDAR_SAMPLE_SETTLE_MS, dragEdgeScrollTop, firstDefaultSlotMinute, initialCalendarMinute, pickTrackForPosition,
+  CALENDAR_SAMPLE_SETTLE_MS, dragEdgeScrollVelocity, firstDefaultSlotMinute, initialCalendarMinute, pickTrackForPosition,
   readCalendarPositions, resetCalendarPositions, sampleCalendarPosition, scrollTopForCalendarPosition, seedCalendarPositions,
   useCalendarViewport, type CalendarPosition, type CalendarViewportApi, type TimelineView, type TrackGeometry,
 } from "./useCalendarViewport";
@@ -98,10 +98,24 @@ describe("calendar viewport geometry", () => {
     expect(firstDefaultSlotMinute([{ id: "late", label: "跨夜", start: "23:00", end: "02:00", weekdays: [3] }], 3)).toBe(1380);
   });
 
-  it("scrolls only inside the drag edge band", () => {
-    expect(dragEdgeScrollTop({ currentScrollTop: 300, clientY: 170, viewportTop: 100, viewportBottom: 700 })).toBe(300);
-    expect(dragEdgeScrollTop({ currentScrollTop: 300, clientY: 120, viewportTop: 100, viewportBottom: 700 })).toBe(291);
-    expect(dragEdgeScrollTop({ currentScrollTop: 300, clientY: 690, viewportTop: 100, viewportBottom: 700 })).toBe(312);
+  it("only scrolls inside the drag edge band", () => {
+    expect(dragEdgeScrollVelocity({ clientY: 170, viewportTop: 100, viewportBottom: 700 })).toBe(0);
+    expect(dragEdgeScrollVelocity({ clientY: 400, viewportTop: 100, viewportBottom: 700 })).toBe(0);
+    expect(dragEdgeScrollVelocity({ clientY: 120, viewportTop: 100, viewportBottom: 700 })).toBeLessThan(0);
+    expect(dragEdgeScrollVelocity({ clientY: 690, viewportTop: 100, viewportBottom: 700 })).toBeGreaterThan(0);
+  });
+
+  it("speeds up monotonically as the pointer gets closer to an edge (B2 / UI-SPEC §197)", () => {
+    // 上边缘：越靠近 100 越快（负值绝对值单调不减），贴到边缘时最大。
+    const upward = [155, 145, 135, 125, 115, 105, 100].map((clientY) => Math.abs(dragEdgeScrollVelocity({ clientY, viewportTop: 100, viewportBottom: 700 })));
+    for (let index = 1; index < upward.length; index += 1) expect(upward[index]).toBeGreaterThanOrEqual(upward[index - 1]);
+    expect(upward.at(-1)).toBeGreaterThan(upward[0]);
+    // 下边缘同理，且两个方向的量级对称。
+    const downward = [645, 655, 665, 675, 685, 695, 700].map((clientY) => dragEdgeScrollVelocity({ clientY, viewportTop: 100, viewportBottom: 700 }));
+    for (let index = 1; index < downward.length; index += 1) expect(downward[index]).toBeGreaterThanOrEqual(downward[index - 1]);
+    expect(downward).toEqual(upward);
+    // 回到中央立刻停：不是渐减到 0，而是直接 0。
+    expect(dragEdgeScrollVelocity({ clientY: 400, viewportTop: 100, viewportBottom: 700 })).toBe(0);
   });
 });
 
@@ -342,16 +356,19 @@ describe("useCalendarViewport", () => {
     expect(layout.read()).toBe(900);
   });
 
-  it("defers a lower-priority restore until the drag ends", async () => {
-    render(<Harness view="week" onApi={() => undefined} />);
+  it("defers a lower-priority restore until the pointer drag ends", async () => {
+    // B2 起应用内没有 HTML5 DnD：拖动由 `useDragSession` 调 `beginDrag()`／`endDrag()` 显式告知，
+    // 所以这里也走同一条入口（原先派发 window 的 dragstart／dragend 已经不成立）。
+    const holder: { api: CalendarViewportApi | null } = { api: null };
+    render(<Harness view="week" onApi={(value) => { holder.api = value; }} />);
     const scroller = document.querySelector<HTMLElement>(".calendar-viewport")!;
     for (let index = 0; index < 8; index += 1) await nextFrame();
     const layout = installLayout(scroller, weekSpecs(document));
-    act(() => { window.dispatchEvent(new Event("dragstart")); });
+    act(() => { holder.api?.beginDrag(); });
     act(() => { fireResize(); });
     await nextFrame(); await nextFrame();
     expect(layout.read()).toBe(0);
-    act(() => { window.dispatchEvent(new Event("dragend")); });
+    act(() => { holder.api?.endDrag(); });
     await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
   });
 
