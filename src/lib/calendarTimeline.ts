@@ -1,6 +1,25 @@
 import type { CalendarDayMode, DefaultTimeSlot } from "./settings";
 
+/**
+ * 折叠条在 100% 界面缩放下的基准高度。
+ *
+ * A6 起由 `preferences.scale` 推出唯一来源（`collapsedGapHeight`），CSS 与映射共用
+ * 同一个像素值；不再追求 rem 纯度 —— 44px 与 2.75rem 在 200% 下会分叉成 44 与 88。
+ */
 export const COLLAPSED_GAP_HEIGHT = 44;
+
+export function collapsedGapHeight(scale: number) {
+  return Math.round(COLLAPSED_GAP_HEIGHT * scale / 100);
+}
+
+/**
+ * 全天模式的「有效日」折叠边界：凌晨与深夜。只有该段完全没有安排／时间块／记录、
+ * 当前时间也不在其中时才折成 44px 带；用户仍可通过折叠条或「展开整天」临时展开。
+ */
+export const FULL_DAY_FOLD_RANGES = [
+  { start: 0, end: 360, key: "0-360" },
+  { start: 1380, end: 1440, key: "1380-1440" },
+] as const;
 
 export interface TimelineRange {
   start: number;
@@ -73,25 +92,52 @@ export function clockMinutes(value: string) {
   return Math.max(0, Math.min(1440, hours * 60 + minutes));
 }
 
-export function createCalendarTimeline({ mode, slots, expandedGapKeys, currentMinute, revealedRanges = [], pixelsPerHour }: {
+/** 全天模式的有效日：把没有内容、当前时间也不在其中的凌晨／深夜从 24 小时里减掉。 */
+export function fullDayEffectiveRanges({ occupiedRanges, currentMinute }: {
+  occupiedRanges: TimelineRange[];
+  currentMinute: number | null;
+}): TimelineRange[] {
+  let ranges: TimelineRange[] = [{ start: 0, end: 1440 }];
+  for (const fold of FULL_DAY_FOLD_RANGES) {
+    const occupied = occupiedRanges.some((range) => range.start < fold.end && range.end > fold.start);
+    const nowInside = currentMinute !== null && currentMinute >= fold.start && currentMinute < fold.end;
+    if (occupied || nowInside) continue;
+    ranges = ranges.flatMap((range) => subtractRange(range, fold));
+  }
+  return ranges;
+}
+
+function subtractRange(range: TimelineRange, cut: TimelineRange): TimelineRange[] {
+  if (cut.end <= range.start || cut.start >= range.end) return [range];
+  const pieces: TimelineRange[] = [];
+  if (range.start < cut.start) pieces.push({ start: range.start, end: cut.start });
+  if (cut.end < range.end) pieces.push({ start: cut.end, end: range.end });
+  return pieces;
+}
+
+export function createCalendarTimeline({ mode, slots, expandedGapKeys, currentMinute, revealedRanges = [], fullDayRanges, pixelsPerHour, collapsedGapPx = COLLAPSED_GAP_HEIGHT }: {
   mode: CalendarDayMode;
   slots: Array<Pick<DefaultTimeSlot, "start" | "end">>;
   expandedGapKeys: ReadonlySet<string>;
   currentMinute: number | null;
   revealedRanges?: TimelineRange[];
+  /** 全天模式的有效日范围；缺省为完整 24 小时。默认时段模式不读取它。 */
+  fullDayRanges?: TimelineRange[];
   pixelsPerHour: number;
+  /** 折叠条高度；由界面缩放推出的单一来源，缺省 = 100% 的 44px。 */
+  collapsedGapPx?: number;
 }): CalendarTimeline {
-  const defaultRanges = mode === "fullDay" ? [{ start: 0, end: 1440 }] : mergeRanges(slots.flatMap(slotRanges));
+  const defaultRanges = mode === "fullDay" ? (fullDayRanges ?? [{ start: 0, end: 1440 }]) : mergeRanges(slots.flatMap(slotRanges));
   const gaps = complement(defaultRanges).map((range) => ({ ...range, key: `${range.start}-${range.end}` }));
   const currentRange = currentMinute === null ? [] : [{ start: Math.max(0, currentMinute - 60), end: Math.min(1440, currentMinute + 60) }];
   const temporaryRanges = [...expandedGapKeys].flatMap((key) => {
     const range = timelineRangeFromKey(key);
     return range && gaps.some((gap) => range.start >= gap.start && range.end <= gap.end) ? [range] : [];
   });
-  const expandedRanges = mode === "fullDay" ? defaultRanges : mergeRanges([
+  const expandedRanges = mergeRanges([
     ...defaultRanges,
     ...temporaryRanges,
-    ...currentRange,
+    ...(mode === "defaultSlots" ? currentRange : []),
     ...revealedRanges,
   ]);
   const rawSegments: Array<Omit<TimelineSegment, "top" | "height">> = [];
@@ -106,7 +152,7 @@ export function createCalendarTimeline({ mode, slots, expandedGapKeys, currentMi
 
   let top = 0;
   const segments = rawSegments.map((segment) => {
-    const height = segment.collapsed ? COLLAPSED_GAP_HEIGHT : (segment.end - segment.start) / 60 * pixelsPerHour;
+    const height = segment.collapsed ? collapsedGapPx : (segment.end - segment.start) / 60 * pixelsPerHour;
     const positioned = { ...segment, top, height };
     top += height;
     return positioned;

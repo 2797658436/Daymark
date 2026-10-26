@@ -52,7 +52,8 @@ test("draft cancellation never saves and a floating editor blocks a second calen
   await expect(trigger).toBeFocused();
   await page.reload(); await expect(trigger).toBeVisible();
   await page.getByRole("button", { name: "日历", exact: true }).click();
-  await page.getByRole("button", { name: "时间块", exact: true }).click();
+  await page.getByRole("button", { name: "显示更多日历选项" }).click();
+  await page.getByRole("dialog", { name: "日历显示选项" }).getByRole("button", { name: "时间块", exact: true }).click();
   const block = page.getByRole("dialog", { name: "添加时间块" });
   await expect(block).toBeVisible();
   const background = page.locator(".day-track").first();
@@ -85,7 +86,7 @@ test("the month grid keeps all seven columns visible when the day details are op
   await expect(headers).toHaveCount(7);
   // 排程结果必须出现在月历格子里，而不是只在右侧详情里看得到。
   const cell = page.getByRole("gridcell", { name: /2026-09-15/ });
-  await expect(cell).toContainText("安排 1 项 · 19:00 起");
+  await expect(cell).toContainText("安排 1");
   await cell.click();
   const detail = page.getByRole("complementary", { name: /2026-09-15.*详情/ });
   await expect(detail).toBeVisible();

@@ -377,9 +377,9 @@ function actualRecordWorkspace() {
  *      位置覆盖掉；
  *   2. 周视图的日期头 + 全天区是**吸顶**的（`.week-sticky-header`，z-index 12），叠加层
  *      z-index 只有 7 —— 滚到「滚动窗口上三分之一」仍然被它盖住，截图只会拍到一片纯色；
- *   3. 日视图有三块连续日面板，`scroller.querySelector(".continuous-day-separator")` 拿到的是
- *      **第一块**面板的分隔条；叠加层在第二块里，拿它当锚点会一路滚过头。锚点必须取叠加层
- *      **自己那块面板**的分隔条。
+ *   3. 日视图有三块连续日面板，`scroller.querySelector(".calendar-day-band")` 拿到的是
+ *      **第一块**面板的日期带；叠加层在第二块里，拿它当锚点会一路滚过头。锚点必须取叠加层
+ *      **自己那块面板**的日期带。
  */
 const measureActualRecord = (nudge) => {
   const overlay = document.querySelector(".calendar-actual-record");
@@ -392,11 +392,8 @@ const measureActualRecord = (nudge) => {
   }
   if (!scroller) return { ok: false, reason: "no-scroller" };
   const header = scroller.querySelector(".week-sticky-header")
-    // 日视图：真正压在上面的是**日期头**（`top: 40px`，在 40px 高的分隔条下面），
-    // 不是分隔条。P4-12 只避让了分隔条，于是叠加层的顶行（「实际」标签）一直被日期头
-    // 盖着 —— 近景截图的头几十像素拍到的其实是日期头。P4-13 起以日期头为准。
-    ?? overlay.closest(".continuous-day-panel")?.querySelector(".calendar-day > header")
-    ?? overlay.closest(".continuous-day-panel")?.querySelector(".continuous-day-separator")
+    // 日视图：A4 起分隔条与日期头合并成**一条 44px 吸顶日期带**，压在上面的就是它。
+    ?? overlay.closest(".continuous-day-panel")?.querySelector(".calendar-day-band")
     ?? null;
   const scrollerRect = scroller.getBoundingClientRect();
   const safeTop = header ? header.getBoundingClientRect().bottom : scrollerRect.top;
@@ -404,7 +401,7 @@ const measureActualRecord = (nudge) => {
   const ok = rect.top >= safeTop + 8 && rect.bottom <= scrollerRect.bottom - 8;
   if (!ok && nudge) scroller.scrollTop += rect.top - safeTop - 24;
   return {
-    ok, reason: header ? (scroller.querySelector(".week-sticky-header") ? "week-header" : "day-separator") : "scroller-top",
+    ok, reason: header ? (scroller.querySelector(".week-sticky-header") ? "week-header" : "day-band") : "scroller-top",
     overlayTop: Math.round(rect.top), overlayBottom: Math.round(rect.bottom),
     safeTop: Math.round(safeTop), scrollerBottom: Math.round(scrollerRect.bottom),
     scrollTop: Math.round(scroller.scrollTop),
@@ -426,8 +423,9 @@ async function frameActualRecord(page) {
 }
 
 /**
- * P4-13 §1 的取景：把**日视图的吸顶日期头**（含「今天」药丸）与一段实际记录同时留在视口里，
- * 并且让记录**压在吸顶头部带下方** —— 这样「谁画在上面」才会出现在这一张图里。
+ * P4-13 §1 的取景（A4 起：吸顶日期头 → 44px 吸顶日期带）：把**日视图的吸顶日期带**（含「今天」
+ * 药丸）与一段实际记录同时留在视口里，并且让记录**压在日期带下方** —— 这样「谁画在上面」才会
+ * 出现在这一张图里。
  *
  * 与 `frameActualRecord` 相反：那个是把叠加层滚到吸顶头**下面**的空白区（为了拍清楚字形），
  * 这个是把叠加层滚到吸顶头**底下**（为了拍遮挡）。收敛重试的理由同上：应用进入视图后还会
@@ -435,21 +433,23 @@ async function frameActualRecord(page) {
  */
 const measureTodayPill = (nudge) => {
   const scroller = document.querySelector(".continuous-day-axis");
-  const day = scroller?.querySelector(".calendar-day.today");
-  const header = day?.querySelector("header");
-  const overlay = day?.closest(".continuous-day-panel")?.querySelector(".calendar-actual-record")
-    ?? scroller?.querySelector(".calendar-actual-record");
-  if (!scroller || !day || !header || !overlay) return { ok: false, reason: "missing-element" };
+  const panel = Array.from(scroller?.querySelectorAll(".continuous-day-panel") ?? [])
+    .find((item) => item.querySelector(".calendar-day-band-today"));
+  const band = panel?.querySelector(".calendar-day-band");
+  const pill = band?.querySelector(".calendar-day-band-today");
+  const overlay = panel?.querySelector(".calendar-actual-record") ?? scroller?.querySelector(".calendar-actual-record");
+  if (!scroller || !band || !pill || !overlay) return { ok: false, reason: "missing-element" };
   const scrollerRect = scroller.getBoundingClientRect();
-  const headerRect = header.getBoundingClientRect();
+  const bandRect = band.getBoundingClientRect();
+  const pillRect = pill.getBoundingClientRect();
   const overlayRect = overlay.getBoundingClientRect();
-  const headerInView = headerRect.top >= scrollerRect.top - 1 && headerRect.bottom <= scrollerRect.bottom;
-  const overlaps = overlayRect.top < headerRect.bottom && overlayRect.bottom > headerRect.top;
-  if (!(headerInView && overlaps) && nudge) scroller.scrollTop += (overlayRect.top - scrollerRect.top) - 50;
+  const bandInView = bandRect.top >= scrollerRect.top - 1 && bandRect.bottom <= scrollerRect.bottom;
+  const overlaps = overlayRect.top < bandRect.bottom && overlayRect.bottom > bandRect.top;
+  if (!(bandInView && overlaps) && nudge) scroller.scrollTop += (overlayRect.top - scrollerRect.top) - 22;
   return {
-    ok: headerInView && overlaps,
-    overlayTop: Math.round(overlayRect.top), headerTop: Math.round(headerRect.top),
-    headerBottom: Math.round(headerRect.bottom), scrollerTop: Math.round(scrollerRect.top),
+    ok: bandInView && overlaps,
+    overlayTop: Math.round(overlayRect.top), pillTop: Math.round(pillRect.top),
+    headerTop: Math.round(bandRect.top), headerBottom: Math.round(bandRect.bottom), scrollerTop: Math.round(scrollerRect.top),
     scrollTop: Math.round(scroller.scrollTop),
   };
 };
@@ -465,7 +465,7 @@ async function frameTodayPill(page) {
       last = confirm;
     }
   }
-  throw new Error(`吸顶日期头与实际记录没能同时取到（${JSON.stringify(last)}）`);
+  throw new Error(`吸顶日期带与实际记录没能同时取到（${JSON.stringify(last)}）`);
 }
 
 // ---------------------------------------------------------------- 场景
@@ -484,8 +484,7 @@ async function frameBelowHeader(locator) {
     if (!scroller) return;
     const panel = element.closest(".continuous-day-panel");
     const header = scroller.querySelector(".week-sticky-header")
-      ?? panel?.querySelector(".calendar-day > header")
-      ?? panel?.querySelector(".continuous-day-separator")
+      ?? panel?.querySelector(".calendar-day-band")
       ?? null;
     if (!header || header === element || header.contains(element)) return;
     const scrollerRect = scroller.getBoundingClientRect();
@@ -724,11 +723,11 @@ function scenarios(port) {
         await frameActualRecord(page);
       },
     })))),
-    // P4-13 §1：日视图吸顶日期头（含「今天」药丸）与实际记录**同时**入镜，且记录压在吸顶头
-    // 底下 —— 改前药丸被盖住、改后药丸在最上面。近景取日期头本身。
+    // P4-13 §1（A4 起改为吸顶日期带）：日视图吸顶日期带（含「今天」药丸）与实际记录**同时**
+    // 入镜，且记录压在日期带底下 —— 改前药丸被盖住、改后药丸在最上面。近景取这条带本身。
     ...["day"].flatMap((view) => ["light", "dark"].flatMap((appearance) => [100, 200].map((scale) => ({
       name: `today-pill-${view}-1200-${scale}-${appearance}`,
-      crop: ".calendar-day.today > header",
+      crop: ".calendar-day-band:has(.calendar-day-band-today)",
       seed: {
         // 900 高而不是 P4-12 的 760：200% 缩放下日视图的可视窗口只有约 216px，
         // 2 小时的叠加层（144px）放不进「日期头下方的安全区」；加高窗口才能让改前／改后

@@ -1,6 +1,6 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
-  Clock3, Copy, Database, Diamond, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
+  Clock3, Copy, Database, Diamond, Ellipsis, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw,
   Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react";
@@ -36,10 +36,10 @@ import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem, type Sch
 import { scheduleUnscheduledText } from "./lib/scheduleReasons";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
-import { createCalendarTimeline, defaultSlotSlicesForWeekday, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
+import { collapsedGapHeight, createCalendarTimeline, defaultSlotSlicesForWeekday, fullDayEffectiveRanges, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { concurrentLayouts, insertionChanges, type CalendarDropMode } from "./lib/calendarPlacement";
 import { beginCalendarDrag, calendarDragGrabOffset, calendarDragIds, calendarDragTypes, endCalendarDrag, grabOffsetWithin } from "./lib/calendarDrag";
-import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel } from "./lib/calendarSummary";
+import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel, formatCompactMinutes, type CalendarMarker, type DeadlineUrgency } from "./lib/calendarSummary";
 import {
   createNativeApi, EMPTY_WORKSPACE, type BackupInfo, type BackupPreview, type BilibiliVideo, type CompletionImage, type CompletionRecord, type CompletionRecordSummary,
   type ExecutionRecord, type ExecutionSession,
@@ -152,6 +152,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   completionTargetRef.current = completionTarget;
   const [projectFocus, setProjectFocus] = useState<ProjectFocusRequest | null>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  // 周视图「假想停靠后」的网格可用宽。只由外壳、侧栏、页内边距与池宽决定，
+  // 不读当前日历视口：池子转覆盖后视口会变宽，读它会让判据在阈值两侧来回跳。
+  const [weekGridAvailableWidth, setWeekGridAvailableWidth] = useState<number | null>(null);
   // 稳定索引在快照变更时重建一次（规格 §8）：列表渲染不再逐行扫描全量数组。
   const workspaceIndex = useMemo(() => createWorkspaceIndex(workspace), [workspace]);
   const workspaceRef = useRef(workspace); const preferencesRef = useRef(preferences);
@@ -162,6 +166,23 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const retryAction = useRef<null | (() => Promise<void>)>(null);
   const markingRescue = useRef(new Set<string>());
   const poolResize = useRef<{ startX: number; startWidth: number } | null>(null);
+  useLayoutEffect(() => {
+    const shell = shellRef.current; const main = mainRef.current;
+    const sidebar = shell?.querySelector<HTMLElement>(".sidebar");
+    if (!shell || !main || !sidebar) return;
+    const measure = () => {
+      const shellWidth = shell.clientWidth; const sidebarWidth = sidebar.getBoundingClientRect().width;
+      const mainStyle = getComputedStyle(main);
+      const horizontalPadding = parseFloat(mainStyle.paddingLeft) + parseFloat(mainStyle.paddingRight);
+      const poolWidth = parseFloat(getComputedStyle(shell).getPropertyValue("--pool-width")) || 320;
+      setWeekGridAvailableWidth(shellWidth > 0 && sidebarWidth > 0 ? shellWidth - sidebarWidth - horizontalPadding - poolWidth - 6 : null);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(shell);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [page, preferences.calendarView, preferences.scale, preferences.taskPoolWidth]);
 
   const reload = useCallback(async () => {
     try { setLoadError(null); setWorkspace(await native.getWorkspace()); }
@@ -339,17 +360,6 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     window.addEventListener("keydown", handle); return () => window.removeEventListener("keydown", handle);
   }, [undo]);
 
-  useEffect(() => {
-    if (!taskPoolOpen) return;
-    const closeOverlay = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !document.querySelector('[role="dialog"]') && window.matchMedia("(max-width: 1199px)").matches) {
-        setTaskPoolOpen(false);
-      }
-    };
-    window.addEventListener("keydown", closeOverlay);
-    return () => window.removeEventListener("keydown", closeOverlay);
-  }, [taskPoolOpen]);
-
   const createTask = async (title: string, extras: Partial<Task> = {}) => {
     const task: Task = {
       id: crypto.randomUUID(), projectId: null, title: title.trim(), progress: 0, status: "active",
@@ -508,6 +518,29 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     await commit(() => native.setHabitOccurrence(occurrence));
   };
 
+  const hasTaskPool = page === "today" || page === "calendar";
+  // A5：首列随界面缩放长大（3.625rem），只有列下限与余量按 --calendar-ui-factor 倒数收缩。
+  // 100% = 58 + 7×112 + 60 = 902；200% = 116 + 7×56 + 30 = 538（旧口径 451）。
+  const weekGridDesignWidth = 58 * preferences.scale / 100 + 844 * (100 / preferences.scale);
+  // 只有周视图参与「网格可用宽不足就转覆盖」；日视图维持 960–1199 的静态侧栏例外。
+  const weekPoolNeedsOverlay = page === "calendar" && preferences.calendarView === "week" && weekGridAvailableWidth !== null && weekGridAvailableWidth < weekGridDesignWidth;
+  const poolUsesOverlay = (narrowWindow && !(page === "calendar" && preferences.calendarView === "day")) || weekPoolNeedsOverlay;
+  const showTaskPool = hasTaskPool && (poolUsesOverlay ? poolOverlayOpen : taskPoolOpen);
+  // 日视图单列太宽：窄窗口时也让任务池保持侧栏形态，而不是转浮层
+  const dayViewPool = page === "calendar" && preferences.calendarView === "day";
+  // 覆盖面板的 Esc：只关覆盖态；宽窗口的静态侧栏仍用面板自己的关闭按钮。
+  // 必须放在 loading 提前返回之前 —— 否则加载完成时 Hook 顺序会变。
+  useEffect(() => {
+    if (!showTaskPool) return;
+    const closeOverlay = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || document.querySelector('[role="dialog"]')) return;
+      if (poolUsesOverlay) setPoolOverlayOpen(false);
+      else if (narrowWindow) setTaskPoolOpen(false);
+    };
+    window.addEventListener("keydown", closeOverlay);
+    return () => window.removeEventListener("keydown", closeOverlay);
+  }, [narrowWindow, poolUsesOverlay, showTaskPool]);
+
   if (loading) return <main className="loading-screen" aria-busy="true"><span className="spinner" aria-hidden="true" />正在恢复本地计划…</main>;
 
   const activeTasks = workspace.tasks.filter((task) => task.status === "active" && task.kind !== "habit");
@@ -520,11 +553,6 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
     : workspace.tasks.filter((task) => task.kind !== "habit" && (task.status === "active" || heldCompletionIds.has(task.id)));
   const heldTasks = workspace.tasks.filter((task) => heldCompletionIds.has(task.id));
   const running = workspace.executionRecords.find((record) => !record.actualEndUtc) ?? null;
-  const hasTaskPool = page === "today" || page === "calendar";
-  const poolUsesOverlay = narrowWindow && !(page === "calendar" && preferences.calendarView === "day");
-  const showTaskPool = hasTaskPool && (poolUsesOverlay ? poolOverlayOpen : taskPoolOpen);
-  // 日视图单列太宽：窄窗口时也让任务池保持侧栏形态，而不是转浮层
-  const dayViewPool = page === "calendar" && preferences.calendarView === "day";
 
   const startPoolResize = (event: React.PointerEvent<HTMLDivElement>) => {
     const pool = document.getElementById("task-pool");
@@ -556,7 +584,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
 
   const saveLabel = saveState === "saved" ? "已保存到本机" : saveState === "saving" ? "正在保存…" : "未保存，点击重试";
   return (
-    <div className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"} ${dayViewPool && showTaskPool ? "day-view-pool" : ""}`} style={preferences.taskPoolWidth ? ({ "--pool-width": `${preferences.taskPoolWidth}px` } as CSSProperties) : undefined}>
+    <div ref={shellRef} className={`app-shell ${showTaskPool ? "with-task-pool" : "without-task-pool"} ${dayViewPool && showTaskPool ? "day-view-pool" : ""} ${poolUsesOverlay ? "pool-overlay" : ""}`} style={preferences.taskPoolWidth ? ({ "--pool-width": `${preferences.taskPoolWidth}px` } as CSSProperties) : undefined}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="sidebar">
         <div className="brand" aria-label="Daymark"><span className="brand-mark">D</span><strong>Daymark</strong></div>
@@ -697,8 +725,13 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   );
 }
 
-function PageHeader({ eyebrow, title, actions }: { eyebrow: string; title: string; actions?: ReactNode }) {
-  return <header className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div><div className="header-actions">{actions}</div></header>;
+function PageHeader({ eyebrow, title, actions, className, titleId, titleLabel, titleLive }: {
+  eyebrow?: string; title: ReactNode; actions?: ReactNode; className?: string; titleId?: string; titleLabel?: string; titleLive?: boolean;
+}) {
+  return <header className={["page-header", className].filter(Boolean).join(" ")}>
+    <div className="page-header-title">{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1 id={titleId} aria-label={titleLabel} aria-live={titleLive ? "polite" : undefined}>{title}</h1></div>
+    <div className="header-actions">{actions}</div>
+  </header>;
 }
 
 function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview, onRecordCompletion }: {
@@ -1123,9 +1156,28 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
   const [monthFocusDate, setMonthFocusDate] = useState<string | null>(null);
   const [weekKeyboardFocus, setWeekKeyboardFocus] = useState<{ kind: "header" | "grid"; date: string; minute: number }>(() => ({ kind: "header", date: anchor, minute: 540 }));
   const [blockForm, setBlockForm] = useState(false);
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
+  // 时间块编辑器先挂上，再收起「显示 ⋯」：同一提交里一关一开会把浮层栈长度
+  // 从 1 换回 1，新层拿不到 isTop，pointer-events 会停在 none。
+  useEffect(() => { if (blockForm) setMoreAnchor(null); }, [blockForm]);
   // 提交态由 TimeBlockEditor 的编辑会话上报；FloatingPanel 据此在提交中拦住 Esc 与外部点击。
   const [blockBusy, setBlockBusy] = useState(false);
   const calendarRef = useRef<HTMLElement>(null); const weekFocusRequested = useRef(false); const [nowDirection, setNowDirection] = useState<"up" | "down" | null>(null);
+  // 周列宽用真实网格量（详情面板挤占后也成立）；<96px 时并行最多并排 2 项。
+  const [weekColumnWidth, setWeekColumnWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (preferences.calendarView !== "week") { setWeekColumnWidth(null); return; }
+    const grid = calendarRef.current?.querySelector<HTMLElement>(".calendar-grid.week");
+    if (!grid) { setWeekColumnWidth(null); return; }
+    // 首列是 3.625rem（100% 为 58px、200% 为 116px），不再写死 58px。
+    const gutter = 58 * preferences.scale / 100;
+    const measure = () => { const width = grid.getBoundingClientRect().width; setWeekColumnWidth(width > 0 ? (width - gutter) / 7 : null); };
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(grid);
+    return () => observer?.disconnect();
+  }, [preferences.calendarView, preferences.scale]);
+  const weekConcurrencyLimit = weekColumnWidth !== null && weekColumnWidth < 96 ? 2 : 3;
   const now = useCurrentTime();
   const dates = weekDates(anchor);
   const zoom = preferences.calendarZoom[preferences.calendarView];
@@ -1233,28 +1285,82 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
     });
   };
   useEffect(() => { wheelHandlerRef.current = zoomWithWheel; });
-  const calendarStyle = { "--calendar-hour-height": `${scale}px`, "--calendar-month-row-height": `${scale}px` } as CSSProperties;
-  return <section ref={calendarRef} className="calendar-page" aria-labelledby="calendar-title" data-calendar-zoom={zoom} data-calendar-scale={scale} style={calendarStyle}>
-    <PageHeader eyebrow="手动排程" title="日历" actions={<><div className="segmented"><button aria-pressed={preferences.calendarView === "day"} className={preferences.calendarView === "day" ? "active" : ""} onClick={() => { viewport.flush(); onPreferences({ calendarView: "day" }); }}>日</button><button aria-pressed={preferences.calendarView === "week"} className={preferences.calendarView === "week" ? "active" : ""} onClick={() => { viewport.flush(); onPreferences({ calendarView: "week" }); }}>周</button><button aria-pressed={preferences.calendarView === "month"} className={preferences.calendarView === "month" ? "active" : ""} onClick={() => { viewport.flush(); onPreferences({ calendarView: "month" }); }}>月</button></div><button className="icon-action" aria-label="上一段日期" onClick={() => shift(-1)}><ChevronLeft /></button><button className="today-button" onClick={() => setAnchor(toLocalDate(new Date()))}>{preferences.calendarView === "day" ? "回到今天" : preferences.calendarView === "week" ? "本周" : "本月"}</button><button className="icon-action" aria-label="下一段日期" onClick={() => shift(1)}><ChevronRight /></button></>} />
-    <div className="calendar-toolbar"><span aria-label="当前日历日期" aria-live="polite">{preferences.calendarView === "day" ? formatLongDate(anchor) : preferences.calendarView === "week" ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}` : formatMonth(anchor)}</span><div>{preferences.calendarView === "day" && <div className="segmented day-display-mode" role="group" aria-label="日视图显示模式">{([['defaultSlots', '默认时段'], ['fullDay', '全天']] as const).map(([value, label]) => <button key={value} aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}<div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([['compact', '紧凑'], ['standard', '标准'], ['detailed', '详细']] as const).map(([value, label]) => <button key={value} aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>{preferences.calendarView !== "month" && <>{preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} />显示实际记录</label>}<Button onClick={() => setBlockForm((value) => !value)}><Clock3 size={16} />时间块</Button><button className={`magnet-control ${preferences.snapMinutes === "off" ? "" : "active"}`} aria-label={preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`} aria-pressed={preferences.snapMinutes !== "off"} title="拖拽时按 Alt 临时反转吸附" onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} /></button></>}</div></div>
-    <div className="time-block-form-slot">{blockForm && <FloatingPanel label="添加时间块" busy={blockBusy} onClose={() => setBlockForm(false)}><TimeBlockEditor defaultDate={anchor} onCancel={() => setBlockForm(false)} onCreate={async (block) => { await onCreateBlock(block); setBlockForm(false); }} onPhase={setBlockBusy} /></FloatingPanel>}</div>
+  const calendarStyle = {
+    "--calendar-hour-height": `${scale}px`,
+    "--calendar-month-row-height": `${scale}px`,
+    // 折叠条高度与时间轴映射共用同一个像素值（A6／F20①）：界面缩放越大，带子越高。
+    "--collapsed-gap-height": `${collapsedGapHeight(preferences.scale)}px`,
+    // 界面缩放（根字号）越大，保留同样「设计宽」所需的 CSS px 越少；
+    // 网格下限定宽按它反比缩放，200% 下不再把日历顶出横向滚动。
+    "--calendar-ui-factor": String(100 / preferences.scale),
+  } as CSSProperties;
+  const rangeTitle = preferences.calendarView === "day"
+    ? `${formatShortDate(anchor)} ${weekday(anchor)}`
+    : preferences.calendarView === "week"
+      ? `${formatShortDate(dates[0])} — ${formatShortDate(dates[6])}`
+      : formatMonth(anchor);
+  const compactRangeTitle = preferences.calendarView === "week"
+    ? `${compactMonthDay(dates[0])}–${compactMonthDay(dates[6])}`
+    : preferences.calendarView === "day"
+      ? `${compactMonthDay(anchor)} ${weekday(anchor)}`
+      : null;
+  const snapLabel = preferences.snapMinutes === "off" ? "吸附已关闭" : `吸附 ${preferences.snapMinutes} 分钟`;
+  const backToCurrentLabel = preferences.calendarView === "day" ? "回到今天" : preferences.calendarView === "week" ? "回到本周" : "回到本月";
+  return <section ref={calendarRef} className="calendar-page" aria-labelledby="calendar-title" data-calendar-zoom={zoom} data-calendar-scale={scale} data-calendar-view={preferences.calendarView} data-ui-scale={preferences.scale} data-compact-title={compactRangeTitle ? "true" : undefined} style={calendarStyle}>
+    <PageHeader
+      className="calendar-header"
+      titleId="calendar-title"
+      titleLabel={rangeTitle}
+      titleLive
+      title={<><span className="calendar-range-full">{rangeTitle}</span>{compactRangeTitle && <span className="calendar-range-short" aria-hidden="true">{compactRangeTitle}</span>}</>}
+      actions={<>
+        <div className="segmented calendar-view-switch" role="group" aria-label="日历视图">
+          {([["day", "日"], ["week", "周"], ["month", "月"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={preferences.calendarView === value} className={preferences.calendarView === value ? "active" : ""} onClick={() => { viewport.flush(); onPreferences({ calendarView: value }); }}>{label}</button>)}
+        </div>
+        <div className="calendar-step-group" role="group" aria-label="日期导航">
+          <button type="button" aria-label="上一段日期" onClick={() => shift(-1)}><ChevronLeft size={16} /></button>
+          <button type="button" className="calendar-today" aria-label={backToCurrentLabel} title={backToCurrentLabel} onClick={() => setAnchor(toLocalDate(new Date()))}>今天</button>
+          <button type="button" aria-label="下一段日期" onClick={() => shift(1)}><ChevronRight size={16} /></button>
+        </div>
+      </>}
+    />
+    <div className="calendar-toolbar" role="group" aria-label="日历显示选项">
+      <div className="calendar-status-start">
+        {preferences.calendarView === "day" && <div className="segmented calendar-day-mode" role="group" aria-label="日视图显示模式">{([["defaultSlots", "默认时段"], ["fullDay", "全天"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>}
+        <div className="segmented calendar-zoom" role="group" aria-label="日历缩放">{([["compact", "紧凑"], ["standard", "标准"], ["detailed", "详细"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={zoom === value} className={zoom === value ? "active" : ""} onClick={() => setZoom(value)}>{label}</button>)}</div>
+      </div>
+      <div className="calendar-status-end">
+        {preferences.calendarView !== "month" && preferences.showActualRecordsControl && <label className="actual-record-toggle"><input type="checkbox" aria-label="显示实际记录" checked={preferences.showActualRecords} onChange={(event) => onPreferences({ showActualRecords: event.target.checked })} /><span className="calendar-actual-label-full">显示实际记录</span><span className="calendar-actual-label-short" aria-hidden="true">实际记录</span></label>}
+        <button type="button" className="calendar-more-trigger" aria-haspopup="dialog" aria-expanded={moreAnchor !== null} aria-label="显示更多日历选项" onClick={(event) => { const trigger = event.currentTarget; setMoreAnchor((current) => current ? null : trigger); }}><span className="calendar-more-label">显示</span><Ellipsis size={16} aria-hidden="true" /></button>
+      </div>
+    </div>
     <div ref={viewportRef} className={`calendar-viewport ${preferences.calendarView}-viewport`} role="region" aria-label="日历时间网格">
-      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} isProgrammaticScroll={viewport.isProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
-        <CalendarTimeAxis showHeader={false} />
-        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} index={index} preferences={preferences} now={now} hideHeader selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
+      {preferences.calendarView === "month" ? <div className={`month-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><MonthCalendar anchor={anchor} workspace={workspace} selectedDate={selectedCalendarDate} focusDate={monthFocusDate ?? anchor} onFocusDate={setMonthFocusDate} onNavigateDate={(date) => { setMonthFocusDate(date); if (!monthDates(anchor).includes(date)) setAnchor(date); }} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} />{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div> : preferences.calendarView === "day" ? <ContinuousDayView anchor={anchor} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onAnchorChange={setAnchor} onProgrammaticPosition={viewport.noteProgrammaticPosition} onBufferShift={viewport.requestBufferShift} isProgrammaticScroll={viewport.isProgrammaticPosition} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} /> : <div className={`week-calendar-layout ${selectedCalendarDate ? "with-detail" : ""}`}><div className="week-calendar-main"><div className="week-sticky-header"><WeekDateHeaders dates={dates} today={toLocalDate(now)} selectedDate={selectedCalendarDate} focusDate={weekKeyboardFocus.kind === "header" ? weekKeyboardFocus.date : null} onFocusDate={(date) => setWeekKeyboardFocus((current) => ({ ...current, kind: "header", date }))} onMoveDate={(date) => moveWeekFocus("header", date)} onSelectDate={(date) => { setSelectedCalendarDate(date); setDetailTaskId(null); setDetailProjectId(null); }} onOpenDate={(date) => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: date } })} /><WeekAllDayArea dates={dates} workspace={workspace} defaultCollapsed={preferences.scale >= 200} onOpenTask={(date, taskId) => { setSelectedCalendarDate(date); setDetailTaskId(taskId); setDetailProjectId(null); }} onOpenProject={(date, projectId) => { setSelectedCalendarDate(date); setDetailProjectId(projectId); setDetailTaskId(null); }} /></div><div className="calendar-grid week week-body">
+        <CalendarTimeAxis />
+        {dates.map((date) => <CalendarDay key={date} date={date} workspace={workspace} index={index} preferences={preferences} now={now} concurrencyLimit={weekConcurrencyLimit} selected={selectedCalendarDate === date} weekGridTabIndex={weekKeyboardFocus.kind === "grid" && weekKeyboardFocus.date === date ? 0 : -1} weekGridMinute={weekKeyboardFocus.minute} onWeekGridFocus={() => setWeekKeyboardFocus((current) => ({ ...current, kind: "grid", date }))} onWeekGridNavigate={(event) => { const snap = preferences.snapMinutes === "off" ? 1 : preferences.snapMinutes; let nextDate = date; let nextMinute = weekKeyboardFocus.minute; if (event.key === "ArrowLeft") nextDate = addDays(date, -1); else if (event.key === "ArrowRight") nextDate = addDays(date, 1); else if (event.key === "ArrowUp") nextMinute = Math.max(0, nextMinute - snap); else if (event.key === "ArrowDown") nextMinute = Math.min(1439, nextMinute + snap); else if (event.key === "PageUp") nextDate = addDays(date, -7); else if (event.key === "PageDown") nextDate = addDays(date, 7); else return; event.preventDefault(); moveWeekFocus("grid", nextDate, nextMinute); calendarRef.current?.querySelector<HTMLElement>(`.calendar-day[data-day-date="${nextDate}"] .day-track`)?.focus(); }} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={setContinuingSession} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={(session, anchorElement) => setEditingSession({ session, anchorElement })} onDragGhost={(g) => setWeekGhost(g)} />)}
         {weekGhost && weekGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${weekGhost.leftPx}px`, top: `${weekGhost.topPx}px`, width: `${weekGhost.widthPx}px`, height: `${weekGhost.heightPx}px` }}><span>{weekGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
       </div></div>{selectedCalendarDate && <CalendarDateDetails date={selectedCalendarDate} workspace={workspace} taskId={detailTaskId} projectId={detailProjectId} onOpenDay={() => onPreferences({ calendarView: "day", calendarAnchors: { ...preferences.calendarAnchors, day: selectedCalendarDate } })} />}</div>}
     </div>
     {nowDirection && <button className="back-to-now" onClick={returnToNow}>{nowDirection === "up" ? <ArrowUp size={16} /> : <ArrowDown size={16} />}回到现在</button>}
+    {moreAnchor && <FloatingPanel kind="action" className="calendar-more-panel" label="日历显示选项" anchorElement={moreAnchor} closeOnOutsideClick onClose={() => setMoreAnchor(null)}>
+      <div className="calendar-more-list">
+        <button type="button" className="calendar-more-item" onClick={() => setBlockForm(true)}><Clock3 size={16} aria-hidden="true" /><span>时间块</span></button>
+        {preferences.calendarView !== "month" && <button type="button" className={`calendar-more-item${preferences.snapMinutes === "off" ? "" : " is-active"}`} aria-label={snapLabel} aria-pressed={preferences.snapMinutes !== "off"} onClick={() => onPreferences({ snapMinutes: preferences.snapMinutes === "off" ? 15 : "off" })}><Magnet size={16} aria-hidden="true" /><span>{snapLabel}</span></button>}
+      </div>
+      {preferences.calendarView !== "month" && <p className="calendar-more-note">拖拽时按 Alt 临时反转吸附</p>}
+    </FloatingPanel>}
+    {blockForm && <FloatingPanel label="添加时间块" busy={blockBusy} onClose={() => { setBlockForm(false); setMoreAnchor(null); }}><TimeBlockEditor defaultDate={anchor} onCancel={() => { setBlockForm(false); setMoreAnchor(null); }} onCreate={async (block) => { await onCreateBlock(block); setBlockForm(false); setMoreAnchor(null); }} onPhase={setBlockBusy} /></FloatingPanel>}
     {editingSession && (() => { const task = workspace.tasks.find((item) => item.id === editingSession.session.taskId); return task ? <SessionEditPopover session={editingSession.session} task={task} anchorElement={editingSession.anchorElement} onClose={() => setEditingSession(null)} onPhase={setEditingSessionBusy} onSave={async (date, start, duration) => { await onMove(editingSession.session, date, start, duration); setEditingSession(null); }} /> : null; })()}
     {continuingSession && (() => { const task = workspace.tasks.find((item) => item.id === continuingSession.taskId); return task ? <ContinueScheduleDialog session={continuingSession} task={task} snapMinutes={preferences.snapMinutes} onClose={() => setContinuingSession(null)} onSave={async (date, start) => { await onSchedule(task, date, start); setContinuingSession(null); }} /> : null; })()}
   </section>;
 }
 
-function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, isProgrammaticScroll, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
+function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSessionId, onAnchorChange, onProgrammaticPosition, onBufferShift, isProgrammaticScroll, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession }: {
   anchor: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date; focusSessionId: string | null; onAnchorChange: (date: string) => void;
-  /** 三日缓冲的定位写入（优先级 4）：告知滚动仲裁入口，别当成用户滚动。 */
+  /** 三日缓冲在仲裁落点写完之后上报：这次 scroll 是应用自己的定位，不是用户滚动。 */
   onProgrammaticPosition: () => void;
+  /** 优先级 4：把三日缓冲的对齐交给滚动仲裁，与进入恢复／首次定位按顺序落地。 */
+  onBufferShift: (apply: () => boolean, onDiscard?: () => void) => void;
   /** 只读：这次 scroll 是否仍落在应用自己刚写下的位置上（恢复 / 显露 / 平移）。 */
   isProgrammaticScroll: () => boolean;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
@@ -1265,23 +1371,59 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
   onCreateBlock: (block: TimeBlock) => Promise<void>; onUpdateBlock: (previous: TimeBlock, next: TimeBlock) => Promise<void>; onDeleteBlock: (id: string) => Promise<void>; onEditSession: (session: ExecutionSession, anchorElement: HTMLElement | null) => void;
 }) {
   const axisRef = useRef<HTMLDivElement>(null); const pendingScrollOffset = useRef<number | null>(null); const shifting = useRef(false);
+  const previousPanelRef = useRef<HTMLElement | null>(null);
+  const previousExpansionRef = useRef<null | { beforeHeight: number; scrollTop: number }>(null);
+  const previousDate = addDays(anchor, -1);
+  /** 展开过的前一天只属于当前浏览过程；锚点一变就自然失效，不回缩。 */
+  const [expandedPreviousDate, setExpandedPreviousDate] = useState<string | null>(null);
+  const previousExpanded = expandedPreviousDate === previousDate;
+  /**
+   * 展开那一次手势不算「用户要退到前一天」。
+   *
+   * 带子展开后前一天整块网格就压在视口上方，`scrollTop` 天然低于中段起点 —— 不吞掉这一次
+   * 越界，点一下「展开」就会顺手把锚点改到昨天（改前／改后取决于当时停在哪，行为不可复现）。
+   * 用户之后再次向上越过边界（先滚回今天再滚上来）才按原有的三日缓冲语义平移锚点。
+   */
+  const suppressPreviousShift = useRef(false);
+  const expandPreviousDay = useCallback(() => {
+    if (previousExpanded) return;
+    const panel = previousPanelRef.current; const axis = axisRef.current;
+    previousExpansionRef.current = { beforeHeight: panel?.getBoundingClientRect().height ?? 0, scrollTop: axis?.scrollTop ?? 0 };
+    suppressPreviousShift.current = true;
+    setExpandedPreviousDate(previousDate);
+  }, [previousDate, previousExpanded]);
+  useLayoutEffect(() => {
+    if (!previousExpanded) return;
+    const info = previousExpansionRef.current; previousExpansionRef.current = null;
+    const panel = previousPanelRef.current; const axis = axisRef.current;
+    if (!info || !panel || !axis) return;
+    const delta = panel.getBoundingClientRect().height - info.beforeHeight;
+    // 用户停在日期带顶部时，展开就是把前一天铺在下面；停在别处时保持当前内容不动，
+    // 只把新增的高度补进 scrollTop，避免整屏跳走。
+    if (delta > 0 && info.scrollTop > 0) { axis.scrollTop = info.scrollTop + delta; onProgrammaticPosition(); }
+  }, [previousExpanded, onProgrammaticPosition]);
   const [dayGhost, setDayGhost] = useState<null | { leftPx: number; topPx: number; widthPx: number; heightPx: number; mode: CalendarDropMode; targetSessionId: string; title: string }>(null);
   useEffect(() => { const clearGhost = () => setDayGhost(null); window.addEventListener("dragend", clearGhost); window.addEventListener("drop", clearGhost); return () => { window.removeEventListener("dragend", clearGhost); window.removeEventListener("drop", clearGhost); }; }, []);
-  // 用 layout effect 而不是 passive effect：三日缓冲的定位必须在同一帧内先于
-  // 父级滚动仲裁的恢复落地（child layout effect → parent layout effect → rAF），
-  // 否则一次迟到的 passive 定位会把恢复好的位置顶掉。
+  // 三日缓冲的对齐不再直接写 scrollTop：交给父级的滚动仲裁（优先级 4），由它把
+  // 「缓冲平移 → 进入恢复／首次定位」串成一次落地。layout effect 只负责最早提交请求；
+  // 真正的写入发生在仲裁的 rAF 里 —— 那时父级 ref 已挂上，`onProgrammaticPosition()`
+  // 才能找到滚动容器（首屏直接挂载日视图时，子组件的 layout effect 早于父级 ref）。
   useLayoutEffect(() => {
-    const axis = axisRef.current; if (!axis) return;
-    const panels = Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel"));
-    const fallback = axis.scrollHeight / 3;
-    const starts = continuousPanelStarts(axis, panels, fallback);
-    const middleStart = starts[1];
-    axis.scrollTop = middleStart + (pendingScrollOffset.current ?? 0);
-    // 写入之后告知滚动仲裁入口：刚发生的这次 scroll 是应用自己的定位
-    // （含三日缓冲平移，优先级 4），不是用户滚动，不能作废「进入视图恢复」。
-    onProgrammaticPosition();
-    pendingScrollOffset.current = null; shifting.current = false;
-  }, [anchor]);
+    const discard = () => { pendingScrollOffset.current = null; shifting.current = false; };
+    onBufferShift(() => {
+      const axis = axisRef.current;
+      if (!axis) return true;
+      const panels = Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel"));
+      const fallback = axis.scrollHeight / 3;
+      const starts = continuousPanelStarts(axis, panels, fallback);
+      axis.scrollTop = starts[1] + (pendingScrollOffset.current ?? 0);
+      // 写入之后告知滚动仲裁入口：刚发生的这次 scroll 是应用自己的定位
+      // （三日缓冲平移，优先级 4），不是用户滚动，不能作废「进入视图恢复」。
+      onProgrammaticPosition();
+      pendingScrollOffset.current = null; shifting.current = false;
+      return true;
+    }, discard);
+  }, [anchor, onBufferShift, onProgrammaticPosition]);
   const onScroll = () => {
     const axis = axisRef.current; if (!axis || shifting.current) return;
     // 应用自己的定位（恢复浏览位置、目标显露、三日缓冲平移）不参与「滚到隔壁那天」的判定：
@@ -1291,16 +1433,47 @@ function ContinuousDayView({ anchor, workspace, index, preferences, now, focusSe
     const panels = Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel"));
     const fallback = axis.scrollHeight / 3; if (!fallback) return;
     const [firstStart, middleStart, nextStart] = continuousPanelStarts(axis, panels, fallback);
-    if (axis.scrollTop < middleStart) { shifting.current = true; pendingScrollOffset.current = axis.scrollTop - firstStart; onAnchorChange(addDays(anchor, -1)); }
-    else if (axis.scrollTop >= nextStart) { shifting.current = true; pendingScrollOffset.current = axis.scrollTop - nextStart; onAnchorChange(addDays(anchor, 1)); }
+    if (axis.scrollTop < middleStart) {
+      // 前一天还是 44px 带子时，顶部不是「用户已经进入前一天」，先把带子展开；
+      // 展开后继续向上滚才真正把锚点移到前一天。
+      if (!previousExpanded) return;
+      if (suppressPreviousShift.current) { suppressPreviousShift.current = false; return; }
+      shifting.current = true; pendingScrollOffset.current = axis.scrollTop - firstStart; onAnchorChange(addDays(anchor, -1));
+    }
+    else { suppressPreviousShift.current = false; if (axis.scrollTop >= nextStart) { shifting.current = true; pendingScrollOffset.current = axis.scrollTop - nextStart; onAnchorChange(addDays(anchor, 1)); } }
   };
-  return <div ref={axisRef} className="continuous-day-axis" role="region" aria-label="连续日时间轴" onScroll={onScroll}>
-    {[addDays(anchor, -1), anchor, addDays(anchor, 1)].map((date) => <section key={date} className="continuous-day-panel" data-calendar-date={date} aria-label={formatLongDate(date)}>
-      <div className="continuous-day-separator"><span>{formatLongDate(date)}</span></div>
-      <DayCalendarGrid date={date} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={(g) => setDayGhost(g)} />
-    </section>)}
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (previousExpanded || event.ctrlKey || event.deltaY >= 0) return;
+    const axis = axisRef.current;
+    if (axis && axis.scrollTop <= 0) expandPreviousDay();
+  };
+  return <div ref={axisRef} className="continuous-day-axis" role="region" aria-label="连续日时间轴" onScroll={onScroll} onWheel={onWheel}>
+    {[previousDate, anchor, addDays(anchor, 1)].map((date) => {
+      const collapsedPrevious = date === previousDate && !previousExpanded;
+      return <section key={date} ref={date === previousDate ? previousPanelRef : undefined} className={`continuous-day-panel ${collapsedPrevious ? "is-previous-collapsed" : ""}`.trim()} data-calendar-date={date} aria-label={formatLongDate(date)}>
+        <CalendarDayBand date={date} workspace={workspace} now={now} previous={date === previousDate} collapsed={collapsedPrevious} onExpand={collapsedPrevious ? expandPreviousDay : undefined} />
+        {!collapsedPrevious && <DayCalendarGrid date={date} workspace={workspace} index={index} preferences={preferences} now={now} focusSessionId={focusSessionId} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={(g) => setDayGhost(g)} />}
+      </section>;
+    })}
     {dayGhost && dayGhost.mode === "place" && <div className="calendar-drag-ghost" role="status" aria-label="拖拽排程预览" style={{ left: `${dayGhost.leftPx}px`, top: `${dayGhost.topPx}px`, width: `${dayGhost.widthPx}px`, height: `${dayGhost.heightPx}px` }}><span>{dayGhost.targetSessionId ? "悬停 0.5 秒以同时安排" : "松开放置"}</span></div>}
   </div>;
+}
+
+function CalendarDayBand({ date, workspace, now, previous, collapsed, onExpand }: {
+  date: string; workspace: WorkspaceSnapshot; now: Date; previous: boolean; collapsed: boolean; onExpand?: () => void;
+}) {
+  const today = toLocalDate(now);
+  const summary = calendarDaySummary(workspace, date, today);
+  const count = summary.scheduledSessions.length;
+  const minutes = formatCompactMinutes(summary.scheduledMinutes);
+  const facts = count === 0 ? "无安排" : `${count} 项安排`;
+  const detail = `${facts}${minutes ? ` · 投入 ${minutes}` : ""}`;
+  return <header className={`calendar-day-band ${previous ? "is-previous" : ""} ${collapsed ? "is-collapsed" : ""}`.trim()} aria-label={`${previous ? "前一天 " : ""}${formatLongDate(date)} · ${detail}`}>
+    <strong className="calendar-day-band-date">{formatShortDate(date)} <span>{weekday(date)}</span></strong>
+    {date === today && <span className="calendar-day-band-today">今天</span>}
+    <span className="calendar-day-band-summary" title={detail}>{facts}{minutes ? ` · 投入 ${minutes}` : ""}</span>
+    {onExpand && <button type="button" className="calendar-day-band-expand" aria-label={`展开前一天 ${formatLongDate(date)}`} title="展开前一天" onClick={onExpand}><ChevronDown size={16} aria-hidden="true" />展开</button>}
+  </header>;
 }
 
 function continuousPanelStarts(axis: HTMLElement, panels: HTMLElement[], fallback: number): [number, number, number] {
@@ -1332,15 +1505,49 @@ function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessio
     .filter((session) => session.localDate === date && sessionContains(session, now))
     .map((session) => { const start = timeMinutes(session.startLocal); const end = timeMinutes(session.endLocal); return { start, end: end <= start ? 1440 : end }; }) : [], [date, isToday, now, workspace.executionSessions]);
   const focusedSessionRanges = useMemo(() => focusedSession ? (() => { const start = timeMinutes(focusedSession.startLocal); const end = timeMinutes(focusedSession.endLocal); return [{ start, end: end <= start ? 1440 : end }]; })() : [], [focusedSession]);
+  // 有效日：凌晨／深夜没有安排、时间块或记录，且「现在」不在其中时才折叠。
+  // 判定只看该日真实存在的事实；偏移量仍由 calendarTimeline 的补集逻辑算。
+  const fullDayRanges = useMemo(() => {
+    if (preferences.calendarDayMode !== "fullDay") return undefined;
+    const occupied: Array<{ start: number; end: number }> = [];
+    for (const session of workspace.executionSessions) {
+      if (session.localDate !== date || session.status === "cancelled" || session.status === "skipped") continue;
+      const start = timeMinutes(session.startLocal); const end = timeMinutes(session.endLocal);
+      occupied.push({ start, end: end <= start ? 1440 : end });
+    }
+    for (const block of workspace.timeBlocks) {
+      if (block.localDate !== date) continue;
+      const start = timeMinutes(block.startLocal); const end = timeMinutes(block.endLocal);
+      occupied.push({ start, end: end <= start ? 1440 : end });
+    }
+    for (const record of workspace.executionRecords) {
+      const slice = actualRecordSlice(record, date, now);
+      if (slice) occupied.push({ start: timeMinutes(slice.start), end: timeMinutes(slice.end) });
+    }
+    occupied.push(...currentSessionRanges, ...focusedSessionRanges);
+    return fullDayEffectiveRanges({
+      occupiedRanges: occupied,
+      currentMinute: isToday ? now.getHours() * 60 + now.getMinutes() : null,
+    });
+  }, [currentSessionRanges, date, focusedSessionRanges, isToday, now, preferences.calendarDayMode, workspace.executionRecords, workspace.executionSessions, workspace.timeBlocks]);
   const timeline = useMemo(() => createCalendarTimeline({
     mode: preferences.calendarDayMode,
     slots,
     expandedGapKeys: visibleGapKeys,
     currentMinute: preferences.calendarDayMode === "defaultSlots" && isToday ? now.getHours() * 60 + now.getMinutes() : null,
     revealedRanges: [...currentSessionRanges, ...focusedSessionRanges],
+    fullDayRanges,
     pixelsPerHour: preferences.calendarScale.day,
-  }), [currentSessionRanges, focusedSessionRanges, isToday, now, preferences.calendarDayMode, preferences.calendarScale.day, slots, visibleGapKeys]);
-  const activeTimeline = preferences.calendarDayMode === "defaultSlots" ? timeline : undefined;
+    collapsedGapPx: collapsedGapHeight(preferences.scale),
+  }), [currentSessionRanges, focusedSessionRanges, fullDayRanges, isToday, now, preferences.calendarDayMode, preferences.calendarScale.day, preferences.scale, slots, visibleGapKeys]);
+  // 全天模式默认按百分比铺满 24 小时，不建映射（保持既有布局与既有偏移语义）。
+  // 只有这个日子**真的**折掉了凌晨／深夜时才切到分段映射：折叠条、卡片偏移与滚动采样
+  // 必须共用同一套像素。判据看有效日范围是不是还覆盖整天，而不是「当前有没有折叠条」——
+  // 两端都折时范围会合成一整段，手动展开整天后范围仍是拆开的，映射要留着，
+  // 「收起凌晨／收起深夜」才继续点得到。
+  const foldsEffectiveDay = preferences.calendarDayMode === "fullDay"
+    && !fullDayRanges?.some((range) => range.start === 0 && range.end === 1440);
+  const activeTimeline = preferences.calendarDayMode === "defaultSlots" || foldsEffectiveDay ? timeline : undefined;
   const toggleGap = (key: string) => setExpandedGapKeys((current) => {
     const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next;
   });
@@ -1352,11 +1559,11 @@ function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessio
   const retainDragExpansion = () => { if (!dragExpandedGapKey) return; setExpandedGapKeys((current) => new Set(current).add(dragExpandedGapKey)); setDragExpandedGapKey(null); };
   // 目标时段的显露（优先级 2）由 CalendarPage 的滚动仲裁统一处理，
   // 这里只负责把聚焦时段并入折叠时间轴的临时显露范围。
-  return <div className="calendar-grid day" style={activeTimeline ? { height: `${52 + activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} index={index} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onGapDragEnter={beginGapHover} onGapDragLeave={leaveGapHover} onClearDragExpansion={clearDragExpansion} onRetainDragExpansion={retainDragExpansion} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={onDragGhost} /></div>;
+  return <div className="calendar-grid day" style={activeTimeline ? { height: `${activeTimeline.totalHeight}px` } : undefined}><CalendarTimeAxis timeline={activeTimeline} /><CalendarDay date={date} workspace={workspace} index={index} preferences={preferences} now={now} timeline={activeTimeline} expandedGapKeys={expandedGapKeys} dragExpandedGapKey={dragExpandedGapKey} focusSessionId={focusSessionId} onToggleGap={toggleGap} onGapDragEnter={beginGapHover} onGapDragLeave={leaveGapHover} onClearDragExpansion={clearDragExpansion} onRetainDragExpansion={retainDragExpansion} onSchedule={onSchedule} onCreateTaskAt={onCreateTaskAt} onMove={onMove} onPlace={onPlace} onProgress={onProgress} onSkipReview={onSkipReview} onContinue={onContinue} onCreateBlock={onCreateBlock} onUpdateBlock={onUpdateBlock} onDeleteBlock={onDeleteBlock} onEditSession={onEditSession} onDragGhost={onDragGhost} /></div>;
 }
 
-function CalendarTimeAxis({ timeline, showHeader = true }: { timeline?: CalendarTimeline; showHeader?: boolean }) {
-  return <div className={`time-axis ${showHeader ? "" : "without-header"}`.trim()}>{showHeader && <div className="day-head-spacer" />}<div className="time-axis-track" style={timeline ? { height: `${timeline.totalHeight}px` } : undefined}>{Array.from({ length: 24 }, (_, hour) => {
+function CalendarTimeAxis({ timeline }: { timeline?: CalendarTimeline }) {
+  return <div className="time-axis"><div className="time-axis-track" style={timeline ? { height: `${timeline.totalHeight}px` } : undefined}>{Array.from({ length: 24 }, (_, hour) => {
     const minute = hour * 60; const segment = timeline?.segments.find((item) => minute >= item.start && minute < item.end);
     if (segment?.collapsed) return null;
     return <span key={hour} style={{ top: timeline ? `${timeline.offsetAtMinute(minute)}px` : `${hour / 24 * 100}%` }}>{String(hour).padStart(2, "0")}:00</span>;
@@ -1392,25 +1599,66 @@ function MonthCalendar({ anchor, workspace, selectedDate, focusDate, onFocusDate
       {(["一", "二", "三", "四", "五", "六", "日"] as const).map((day) => <div key={day} role="columnheader" aria-label={`周${day}`}>周{day}</div>)}
     </div>
     {weeks.map((week) => <div key={week[0]} className="month-calendar-row" role="row">
-      {week.map((date) => { const summary = calendarDaySummary(workspace, date, today); return <div key={date} role="gridcell" data-month-date={date} tabIndex={date === focusDate ? 0 : -1} className={`${date.startsWith(month) ? "" : "adjacent-month"} ${date === today ? "today" : ""} ${date === selectedDate ? "selected" : ""}`.trim()} aria-label={`${date} ${formatLongDate(date)}`} aria-selected={date === selectedDate} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onSelectDate(date)}><header><span>{Number(date.slice(-2))}</span>{date === today && <small>今天</small>}</header><div className="month-cell-summary">{summary.visible.map((item) => item.taskId ? <button key={item.id} className={`month-summary-item ${item.kind} urgency-${item.urgency}`} aria-label={`${deadlineUrgencyLabel(item.urgency!)}：${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenTask(date, item.taskId!); }}><Flag size={11} aria-hidden="true" /><span>{item.urgency !== "later" && `${deadlineUrgencyLabel(item.urgency!)} · `}{item.label}</span></button> : item.projectId ? <button key={item.id} className={`month-summary-item ${item.kind} ${item.kind === "milestone" ? "milestone-marker" : ""}`} aria-label={item.kind === "milestone" ? `里程碑：${item.label}` : `${deadlineUrgencyLabel(item.urgency!)}：项目截止 ${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenProject(date, item.projectId!); }}>{item.kind === "milestone" ? <Diamond size={11} aria-hidden="true" /> : <Flag size={11} aria-hidden="true" />}<span>{item.label}</span></button> : <span key={item.id} className={`month-summary-item ${item.kind}`}>{item.label}</span>)}{summary.overflowCount > 0 && <button className="month-summary-overflow" onClick={(event) => { event.stopPropagation(); onSelectDate(date); }}>另外 {summary.overflowCount} 项</button>}</div></div>; })}</div>)}
+      {week.map((date) => {
+        const summary = calendarDaySummary(workspace, date, today);
+        // 标记行只放重要事实，至多两条；安排／完成／推进收成一条聚合行，零值不写那一段。
+        const markers = [
+          ...summary.deadlines.map((task) => ({ id: `deadline:${task.id}`, kind: "deadline" as const, label: task.title, taskId: task.id, projectId: null, urgency: deadlineUrgency(date, today) })),
+          ...summary.projectDeadlines.map((project) => ({ id: `projectDeadline:${project.id}`, kind: "projectDeadline" as const, label: project.title, taskId: null, projectId: project.id, urgency: deadlineUrgency(date, today) })),
+          ...summary.milestones.map((milestone) => ({ id: `milestone:${milestone.id}`, kind: "milestone" as const, label: milestone.title, taskId: null, projectId: milestone.projectId, urgency: deadlineUrgency(date, today) })),
+        ];
+        const visible = markers.slice(0, 2); const overflow = markers.length - visible.length;
+        const aggregate = [
+          summary.scheduledSessions.length ? `安排 ${summary.scheduledSessions.length}` : "",
+          summary.completedTasks.length ? `完成 ${summary.completedTasks.length}` : "",
+          summary.progressedTasks.length ? `推进 ${summary.progressedTasks.length}` : "",
+        ].filter(Boolean).join(" · ");
+        return <div key={date} role="gridcell" data-month-date={date} tabIndex={date === focusDate ? 0 : -1} className={`${date.startsWith(month) ? "" : "adjacent-month"} ${date === today ? "today" : ""} ${date === selectedDate ? "selected" : ""}`.trim()} aria-label={`${date} ${formatLongDate(date)}`} aria-selected={date === selectedDate} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onSelectDate(date)}><header><span>{Number(date.slice(-2))}</span>{date === today && <small>今天</small>}</header>{(visible.length > 0 || overflow > 0 || aggregate) && <div className="month-cell-summary">{visible.map((item) => item.kind === "deadline" ? <button key={item.id} className={`month-summary-item deadline urgency-${item.urgency}`} aria-label={`${deadlineUrgencyLabel(item.urgency)}：${item.label}`} title={`${deadlineUrgencyLabel(item.urgency)}：${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenTask(date, item.taskId!); }}><Flag size={11} aria-hidden="true" /><span title={item.label}>{item.label}</span></button> : item.kind === "projectDeadline" ? <button key={item.id} className={`month-summary-item projectDeadline urgency-${item.urgency}`} aria-label={`${deadlineUrgencyLabel(item.urgency)}：项目截止 ${item.label}`} title={`${deadlineUrgencyLabel(item.urgency)}：项目截止 ${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenProject(date, item.projectId!); }}><Flag size={11} aria-hidden="true" /><span title={item.label}>{item.label}</span></button> : <button key={item.id} className="month-summary-item milestone milestone-marker" aria-label={`里程碑：${item.label}`} title={`里程碑：${item.label}`} onClick={(event) => { event.stopPropagation(); onOpenProject(date, item.projectId!); }}><Diamond size={11} aria-hidden="true" /><span title={item.label}>{item.label}</span></button>)}{overflow > 0 && <button className="month-summary-overflow" onClick={(event) => { event.stopPropagation(); onSelectDate(date); }}>另外 {overflow} 项</button>}{aggregate && <span className="month-cell-aggregate" title={aggregate}>{aggregate}</span>}</div>}</div>;
+      })}</div>)}
   </div>;
 }
 
-function WeekDateHeaders({ dates, today, focusDate, onFocusDate, onMoveDate, onOpenDate }: { dates: string[]; today: string; focusDate: string | null; onFocusDate: (date: string) => void; onMoveDate: (date: string) => void; onOpenDate: (date: string) => void }) {
+const CALENDAR_URGENCY_RANK: Record<DeadlineUrgency, number> = { overdue: 0, today: 1, soon: 2, later: 3 };
+/** 日历卡片的分类色条：与回顾页／任务池的项目标识共用同一套 `--chart-N` 色板。 */
+function calendarProjectColor(projects: Project[], projectId: string | null) {
+  if (!projectId) return "var(--muted-strong)";
+  const position = projects.findIndex((project) => project.id === projectId);
+  return position < 0 ? "var(--muted-strong)" : `var(--chart-${(position % 6) + 1}-ink)`;
+}
+function calendarMarkerLabel(marker: CalendarMarker) {
+  return marker.kind === "milestone" ? marker.label : marker.kind === "projectDeadline" ? `项目截止 · ${marker.label}` : `${marker.urgency !== "later" ? `${deadlineUrgencyLabel(marker.urgency)} · ` : ""}${marker.label}`;
+}
+function calendarMarkerAriaLabel(marker: CalendarMarker) {
+  return marker.kind === "milestone" ? `里程碑：${marker.label}` : marker.kind === "projectDeadline" ? `${deadlineUrgencyLabel(marker.urgency)}：项目截止 ${marker.label}` : `${deadlineUrgencyLabel(marker.urgency)}：${marker.label}`;
+}
+
+function WeekDateHeaders({ dates, today, selectedDate, focusDate, onFocusDate, onMoveDate, onSelectDate, onOpenDate }: { dates: string[]; today: string; selectedDate: string | null; focusDate: string | null; onFocusDate: (date: string) => void; onMoveDate: (date: string) => void; onSelectDate: (date: string) => void; onOpenDate: (date: string) => void }) {
   const keyDown = (event: React.KeyboardEvent<HTMLButtonElement>, date: string) => {
-    if (event.key === "Enter") { event.preventDefault(); onOpenDate(date); return; }
+    if (event.key === "Enter") { event.preventDefault(); onSelectDate(date); return; }
     const next = event.key === "ArrowLeft" ? addDays(date, -1) : event.key === "ArrowRight" ? addDays(date, 1) : event.key === "PageUp" ? addDays(date, -7) : event.key === "PageDown" ? addDays(date, 7) : null;
     if (!next) return;
     event.preventDefault(); onMoveDate(next);
-    event.currentTarget.parentElement?.querySelector<HTMLElement>(`[data-week-header="${next}"]`)?.focus();
+    event.currentTarget.closest(".week-date-headers")?.querySelector<HTMLElement>(`[data-week-header="${next}"]`)?.focus();
   };
-  return <div className="week-date-headers" aria-label="周日期头"><div className="week-date-spacer" aria-hidden="true" />{dates.map((date) => <button key={date} data-week-header={date} tabIndex={date === focusDate ? 0 : -1} aria-label={`打开 ${date} ${formatLongDate(date)} 日视图`} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onOpenDate(date)}><strong>{date === today ? "今天" : weekday(date)}</strong><span className={date === today ? "today-number" : ""}>{Number(date.slice(-2))}</span></button>)}</div>;
+  return <div className="week-date-headers" aria-label="周日期头"><div className="week-date-spacer" aria-hidden="true" />{dates.map((date) => <div key={date} className={`week-date-cell ${date === selectedDate ? "selected" : ""}`.trim()}><button type="button" data-week-header={date} className="week-date-main" tabIndex={date === focusDate ? 0 : -1} aria-label={`选中 ${date} ${formatLongDate(date)}`} aria-pressed={date === selectedDate} onFocus={() => onFocusDate(date)} onKeyDown={(event) => keyDown(event, date)} onClick={() => onSelectDate(date)} onDoubleClick={() => onOpenDate(date)}><strong>{date === today ? "今天" : weekday(date)}</strong><span className={date === today ? "today-number" : ""}>{Number(date.slice(-2))}</span></button><button type="button" className="week-date-open" aria-label={`打开 ${date} ${formatLongDate(date)} 日视图`} title="打开日视图" onClick={() => onOpenDate(date)}><CalendarDays size={14} aria-hidden="true" /></button></div>)}</div>;
 }
 
-function WeekAllDayArea({ dates, workspace, onOpenTask, onOpenProject }: { dates: string[]; workspace: WorkspaceSnapshot; onOpenTask: (date: string, taskId: string) => void; onOpenProject: (date: string, projectId: string) => void }) {
-  const [open, setOpen] = useState(true); const [expandedDates, setExpandedDates] = useState<Set<string>>(() => new Set());
+function WeekAllDayArea({ dates, workspace, defaultCollapsed, onOpenTask, onOpenProject }: { dates: string[]; workspace: WorkspaceSnapshot; defaultCollapsed: boolean; onOpenTask: (date: string, taskId: string) => void; onOpenProject: (date: string, projectId: string) => void }) {
+  const [open, setOpen] = useState(() => !defaultCollapsed);
+  const [expanded, setExpanded] = useState<{ date: string; anchor: HTMLElement } | null>(null);
   const today = toLocalDate(new Date());
-  return <section className={`week-all-day ${open ? "open" : "collapsed"}`} aria-label="全天标记"><div className="week-all-day-label"><span>全天</span><button aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起" : "展开"}</button></div>{open && dates.map((date) => { const markers = calendarDayMarkers(workspace, date, today); const visible = expandedDates.has(date) ? markers : markers.slice(0, 2); return <div key={date} className="week-all-day-cell" data-all-day-date={date}>{visible.map((marker) => { const urgency = marker.urgency; return <button key={marker.id} className={`urgency-${urgency} ${marker.kind === "milestone" ? "milestone-marker" : marker.kind === "projectDeadline" ? "project-deadline-marker" : ""}`} data-all-day-marker data-marker-kind={marker.kind} aria-label={marker.kind === "milestone" ? `里程碑：${marker.label}` : marker.kind === "projectDeadline" ? `${deadlineUrgencyLabel(urgency)}：项目截止 ${marker.label}` : `${deadlineUrgencyLabel(urgency)}：${marker.label}`} onClick={() => { if (marker.kind === "milestone" && marker.projectId) onOpenProject(date, marker.projectId); else if (marker.kind === "projectDeadline" && marker.projectId) onOpenProject(date, marker.projectId); else if (marker.taskId) onOpenTask(date, marker.taskId); }}>{marker.kind === "milestone" ? <Diamond size={11} aria-hidden="true" /> : <Flag size={11} aria-hidden="true" />}<span>{marker.kind === "milestone" ? marker.label : marker.kind === "projectDeadline" ? `项目截止 · ${marker.label}` : `${urgency !== "later" && `${deadlineUrgencyLabel(urgency)} · `}${marker.label}`}</span></button>; })}{markers.length > 2 && <button className="week-all-day-overflow" aria-expanded={expandedDates.has(date)} onClick={() => setExpandedDates((current) => { const next = new Set(current); if (next.has(date)) next.delete(date); else next.add(date); return next; })}>{expandedDates.has(date) ? "收起" : `另外 ${markers.length - 2} 项`}</button>}</div>; })}</section>;
+  const openMarker = (date: string, marker: CalendarMarker) => {
+    if (marker.kind === "milestone" && marker.projectId) onOpenProject(date, marker.projectId);
+    else if (marker.kind === "projectDeadline" && marker.projectId) onOpenProject(date, marker.projectId);
+    else if (marker.taskId) onOpenTask(date, marker.taskId);
+    setExpanded(null);
+  };
+  const groupsFor = (markers: CalendarMarker[]) => ([
+    { kind: "taskDeadline" as const, label: "截止", markers: markers.filter((marker) => marker.kind === "taskDeadline") },
+    { kind: "projectDeadline" as const, label: "项目截止", markers: markers.filter((marker) => marker.kind === "projectDeadline") },
+    { kind: "milestone" as const, label: "里程碑", markers: markers.filter((marker) => marker.kind === "milestone") },
+  ]).filter((group) => group.markers.length > 0);
+  return <section className={`week-all-day ${open ? "open" : "collapsed"}`} aria-label="全天标记"><div className="week-all-day-label"><span>全天</span><button aria-expanded={open} onClick={() => setOpen((value) => !value)}>{open ? "收起" : "展开"}</button></div>{open && dates.map((date) => { const markers = calendarDayMarkers(workspace, date, today); const groups = groupsFor(markers); /* 单行带：只留第一组，其余收进「+N」，点开仍是完整名单。 */ const visible = groups.slice(0, 1); const extra = groups.length - visible.length; return <div key={date} className="week-all-day-cell" data-all-day-date={date}>{visible.map((group) => { const urgency = group.markers.reduce<DeadlineUrgency>((worst, marker) => CALENDAR_URGENCY_RANK[marker.urgency] < CALENDAR_URGENCY_RANK[worst] ? marker.urgency : worst, "later"); const label = `${group.label} ${group.markers.length}`; const detail = group.markers.map(calendarMarkerLabel).join("；"); return <button key={group.kind} type="button" className={`week-all-day-chip urgency-${urgency} ${group.kind === "milestone" ? "milestone-marker" : group.kind === "projectDeadline" ? "project-deadline-marker" : ""}`} data-all-day-group={group.kind} aria-haspopup="dialog" aria-expanded={expanded?.date === date} aria-label={`${label} 项：${detail}`} title={detail} onClick={(event) => setExpanded({ date, anchor: event.currentTarget })}>{group.kind === "milestone" ? <Diamond size={11} aria-hidden="true" /> : <Flag size={11} aria-hidden="true" />}<span title={detail}>{label}</span></button>; })}{extra > 0 && <button type="button" className="week-all-day-chip week-all-day-more" data-all-day-group="more" aria-haspopup="dialog" aria-expanded={expanded?.date === date} aria-label={`另外 ${extra} 组全天标记，打开 ${formatLongDate(date)} 名单`} title={`另外 ${extra} 组：${markers.map(calendarMarkerLabel).join("；")}`} onClick={(event) => setExpanded({ date, anchor: event.currentTarget })}>+{extra}</button>}</div>; })}{expanded && (() => { const markers = calendarDayMarkers(workspace, expanded.date, today); return <FloatingPanel kind="action" className="week-all-day-panel" label={`${formatLongDate(expanded.date)} 全天标记`} anchorElement={expanded.anchor} closeOnOutsideClick onClose={() => setExpanded(null)}><header className="week-all-day-panel-head"><strong>{formatLongDate(expanded.date)}</strong><button type="button" aria-label="关闭全天标记" onClick={() => setExpanded(null)}><X size={14} aria-hidden="true" /></button></header><div className="week-all-day-list">{markers.map((marker) => <button key={marker.id} type="button" data-all-day-marker data-marker-kind={marker.kind} className={`week-all-day-row urgency-${marker.urgency} ${marker.kind === "milestone" ? "milestone-marker" : marker.kind === "projectDeadline" ? "project-deadline-marker" : ""}`} aria-label={calendarMarkerAriaLabel(marker)} onClick={() => openMarker(expanded.date, marker)}>{marker.kind === "milestone" ? <Diamond size={14} aria-hidden="true" /> : <Flag size={14} aria-hidden="true" />}<span>{calendarMarkerLabel(marker)}</span></button>)}</div></FloatingPanel>; })()}</section>;
 }
 
 function CalendarDateDetails({ date, workspace, taskId, projectId, onOpenDay }: { date: string; workspace: WorkspaceSnapshot; taskId: string | null; projectId: string | null; onOpenDay: () => void }) {
@@ -1421,10 +1669,10 @@ function CalendarDateDetails({ date, workspace, taskId, projectId, onOpenDay }: 
   return <aside className="calendar-date-details" aria-label={`${date} ${formatLongDate(date)}详情`}><header><div><span className="eyebrow">已选日期</span><h2>{formatLongDate(date)}</h2></div><Button onClick={onOpenDay}>打开日视图</Button></header>{task ? <section className="calendar-task-detail"><span className="eyebrow">截止任务</span><h3>{task.title}</h3><p>{workspace.projects.find((project) => project.id === task.projectId)?.title ?? "独立任务"} · 当前进度 {task.progress}%</p><span className="deadline-chip">截止 {formatShortDate(date)}</span></section> : project ? <section className="calendar-project-detail"><span className="eyebrow">项目</span><h3>{project.title}</h3>{project.deadlineLocal ? <ProjectDeadlineChip deadline={project.deadlineLocal} today={date} /> : <p>没有设置项目截止日期。</p>}<div className="calendar-project-milestones">{workspace.projectMilestones.filter((milestone) => milestone.projectId === project.id).sort((a, b) => a.targetLocalDate.localeCompare(b.targetLocalDate) || a.sortOrder - b.sortOrder).map((milestone) => <article key={milestone.id} className={milestone.targetLocalDate === date ? "on-date" : ""}><Diamond size={14} aria-hidden="true" /><div><strong>{milestone.title}</strong><span>{milestone.targetLocalDate === date ? "今天到期" : `${formatShortDate(milestone.targetLocalDate)}到期`} · {milestoneSummary(milestone, workspace.tasks.filter((item) => item.projectId === project.id))}</span></div></article>)}{workspace.projectMilestones.some((milestone) => milestone.projectId === project.id) || <p className="empty-inline">该项目还没有里程碑。</p>}</div></section> : <><section><h3>重要事实</h3>{summary.deadlines.map((item) => <article key={item.id}><Flag size={14} /><div><strong>{item.title}</strong><span>任务截止 · {item.progress}%</span></div></article>)}{summary.projectDeadlines.map((item) => <article key={`project-${item.id}`}><Flag size={14} /><div><strong>{item.title}</strong><span>项目截止</span></div></article>)}{summary.milestones.map((item) => <article key={`milestone-${item.id}`}><Diamond size={14} /><div><strong>{item.title}</strong><span>里程碑到期</span></div></article>)}{summary.completedTasks.map((item) => <article key={`done-${item.id}`}><Check size={14} /><div><strong>{item.title}</strong><span>当天曾完成 · 当前 {item.progress}%</span></div></article>)}{summary.progressedTasks.map((item) => <article key={`progress-${item.id}`}><ArrowUp size={14} /><div><strong>{item.title}</strong><span>当天有进度变化</span></div></article>)}{summary.missedTasks.map((item) => <article key={`missed-${item.id}`}><Ban size={14} /><div><strong>{item.title}</strong><span>本次未推进</span></div></article>)}{summary.deadlines.length + summary.projectDeadlines.length + summary.milestones.length + summary.completedTasks.length + summary.progressedTasks.length + summary.missedTasks.length === 0 && <p className="empty-inline">当天没有截止、完成或推进事实。</p>}</section><section><h3>当天安排</h3>{sessions.map((session) => <article key={session.id}><Clock3 size={14} /><div><strong>{taskTitle(workspace, session.taskId)}</strong><span>{session.startLocal}–{session.endLocal}</span></div></article>)}{blocks.map((block) => <article key={block.id}><Clock3 size={14} /><div><strong>{block.title}</strong><span>{block.startLocal}–{block.endLocal} · 时间块</span></div></article>)}{sessions.length + blocks.length === 0 && <p className="empty-inline">当天没有执行时段或时间块。</p>}</section></>}</aside>;
 }
 
-function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, hideHeader = false, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
+function CalendarDay({ date, workspace, index, preferences, now, timeline, expandedGapKeys, dragExpandedGapKey, focusSessionId, onToggleGap, onGapDragEnter, onGapDragLeave, onClearDragExpansion, onRetainDragExpansion, concurrencyLimit, selected = false, weekGridTabIndex, weekGridMinute, onWeekGridFocus, onWeekGridNavigate, onSchedule, onCreateTaskAt, onMove, onPlace, onProgress, onSkipReview, onContinue, onCreateBlock, onUpdateBlock, onDeleteBlock, onEditSession, onDragGhost }: {
   date: string; workspace: WorkspaceSnapshot; index: WorkspaceIndex; preferences: AppSettings; now: Date;
   timeline?: CalendarTimeline; expandedGapKeys?: ReadonlySet<string>; dragExpandedGapKey?: string | null; focusSessionId?: string | null; onToggleGap?: (key: string) => void; onGapDragEnter?: (key: string) => void; onGapDragLeave?: () => void; onClearDragExpansion?: () => void; onRetainDragExpansion?: () => void;
-  hideHeader?: boolean; selected?: boolean; weekGridTabIndex?: number; weekGridMinute?: number; onWeekGridFocus?: () => void; onWeekGridNavigate?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  concurrencyLimit?: number; selected?: boolean; weekGridTabIndex?: number; weekGridMinute?: number; onWeekGridFocus?: () => void; onWeekGridNavigate?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onSchedule: (task: Task, date: string, start: string) => Promise<void>;
   onCreateTaskAt: (title: string, date: string, start: string, duration: number) => Promise<void>;
   onMove: (session: ExecutionSession, date: string, start: string, duration?: number) => Promise<void>;
@@ -1461,10 +1709,12 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
     if (pendingPlacement && placementSettled(pendingPlacement, workspace.executionSessions)) setPendingPlacement(null);
   }, [pendingPlacement, workspace.executionSessions]);
   const renderedSessions = [...sessions.filter((item) => item.id !== pendingPlacement?.sessionId), ...(landingHere ? [landingHere] : [])];
-  const concurrency = concurrentLayouts(sessions);
+  const concurrency = concurrentLayouts(sessions, concurrencyLimit);
   const blocks = workspace.timeBlocks.filter((item) => item.localDate === date);
   const defaultSlots = defaultSlotSlicesForWeekday(preferences.defaultTimeSlots, new Date(`${date}T12:00:00`).getDay());
   const isToday = date === toLocalDate(now); const nowMinute = now.getHours() * 60 + now.getMinutes();
+  const effectiveDay = preferences.calendarDayMode === "fullDay";
+  const firstCollapsedGapKey = timeline?.segments.find((segment) => segment.collapsed)?.gapKey ?? null;
   const actualRecords = preferences.showActualRecords ? workspace.executionRecords.flatMap((record) => {
     const slice = actualRecordSlice(record, date, now); return slice ? [{ record, ...slice }] : [];
   }) : [];
@@ -1518,8 +1768,7 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
     }
     return { taskId, sessionId, startMinute, duration, title: sourceTask?.title ?? "未命名任务", mode, targetSessionId };
   };
-  const heading = <><strong>{isToday ? "今天" : weekday(date)}</strong><span className={isToday ? "today-number" : ""}>{Number(date.slice(-2))}</span></>;
-  const dayClasses = ["calendar-day", isToday ? "today" : "", hideHeader ? "without-header" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
+  const dayClasses = ["calendar-day", isToday ? "today" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
   /**
    * 周视图**不是**一张表格：7 个日列各自是一条 24 小时连续时间轴，DOM 里没有「行」。
    * 所以这里不给 `.day-track` 挂 `role="gridcell"` —— 那会声称一个并不存在的
@@ -1528,7 +1777,7 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
    * 选中态改用 `aria-current`（`group` 不支持 `aria-selected`）。
    * 方向键语义不变，说明见 docs/reports/phase-4-p4-11-implementation.md。
    */
-  return <div className={dayClasses} data-day-date={date} role={onWeekGridNavigate ? "group" : undefined} aria-label={onWeekGridNavigate ? `${date} ${formatLongDate(date)}` : undefined}>{!hideHeader && <header>{heading}</header>}
+  return <div className={dayClasses} data-day-date={date} role={onWeekGridNavigate ? "group" : undefined} aria-label={onWeekGridNavigate ? `${date} ${formatLongDate(date)}` : undefined}>
     <div className={timeline ? "day-track folded-timeline" : "day-track"} role={onWeekGridNavigate ? "group" : undefined} tabIndex={weekGridTabIndex} aria-label={onWeekGridNavigate ? `${date} ${minutesTime(weekGridMinute ?? 540)} 空白时间` : undefined} aria-current={onWeekGridNavigate && selected ? "true" : undefined} onFocus={(event) => { if (event.target === event.currentTarget) onWeekGridFocus?.(); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !onWeekGridNavigate) return; if (event.key === "Enter") { event.preventDefault(); const start = weekGridMinute ?? 540; setBlankRange({ start, end: Math.min(1440, start + 30) }); setBlankAction("menu"); return; } onWeekGridNavigate(event); }} style={timeline ? { height: `${timeline.totalHeight}px` } : undefined}
       onPointerDown={(event) => { if (event.button !== 0 || !pointsAtBlankTrack(event.target)) return; const minute = minuteAtPointer(event.clientY, event.currentTarget); blankSelectionStart.current = minute; setBlankRange({ start: minute, end: minute + 5 }); setBlankAction(null); try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* synthetic pointers need no capture */ } }}
       onPointerMove={(event) => { if (event.buttons !== 0) { if (blankSelectionStart.current === null) { setBlankHoverMinute(null); } return; } if (!pointsAtBlankTrack(event.target)) { if (blankSelectionStart.current === null) setBlankHoverMinute(null); return; } const minute = minuteAtPointer(event.clientY, event.currentTarget); if (blankSelectionStart.current === null) setBlankHoverMinute(minute); else { const start = Math.min(blankSelectionStart.current, minute); const end = Math.max(blankSelectionStart.current, minute, start + 5); setBlankRange({ start, end }); } }}
@@ -1554,9 +1803,18 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
     }}>
       {timeline?.segments.map((segment) => <i key={`map-${segment.start}-${segment.end}`} aria-hidden="true" className="timeline-map-segment" data-start-minute={segment.start} data-end-minute={segment.end} data-collapsed={segment.collapsed} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} />)}
       {Array.from({ length: 24 }, (_, hour) => { const minute = hour * 60; const segment = timeline?.segments.find((item) => minute >= item.start && minute < item.end); return segment?.collapsed ? null : <div key={hour} className="hour-line" style={{ top: timeline ? `${timeline.offsetAtMinute(minute)}px` : `${hour / 24 * 100}%` }} />; })}
-      {timeline?.segments.filter((segment) => segment.collapsed).map((segment) => { const count = [...sessions, ...blocks].filter((item) => rangeOverlaps(item.startLocal, item.endLocal, segment.start, segment.end)).length; return <button key={`${segment.start}-${segment.end}`} className="collapsed-time-gap" aria-label={`${boundaryTime(segment.start)}–${boundaryTime(segment.end)} · ${count} 项安排`} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} onClick={() => segment.gapKey && onToggleGap?.(segment.gapKey)} onDragEnter={() => segment.gapKey && onGapDragEnter?.(segment.gapKey)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onGapDragLeave?.(); }} onDragOver={(event) => event.preventDefault()}>{boundaryTime(segment.start)}–{boundaryTime(segment.end)}<span>{count} 项安排</span></button>; })}
+      {timeline?.segments.filter((segment) => segment.collapsed).map((segment) => {
+        const count = [...sessions, ...blocks].filter((item) => rangeOverlaps(item.startLocal, item.endLocal, segment.start, segment.end)).length;
+        const label = effectiveDay ? (segment.start === 0 ? "凌晨" : segment.start >= 1380 ? "深夜" : "非活跃时段") : `${boundaryTime(segment.start)}–${boundaryTime(segment.end)}`;
+        const summary = effectiveDay ? "无安排" : `${count} 项安排`;
+        const description = effectiveDay ? `${label} ${boundaryTime(segment.start)}–${boundaryTime(segment.end)} · ${summary}` : `${boundaryTime(segment.start)}–${boundaryTime(segment.end)} · ${summary}`;
+        return <div key={`${segment.start}-${segment.end}`} className={`collapsed-time-gap ${effectiveDay ? "effective-day-gap" : ""}`.trim()} style={{ top: `${segment.top}px`, height: `${segment.height}px` }} onDragEnter={() => segment.gapKey && onGapDragEnter?.(segment.gapKey)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onGapDragLeave?.(); }} onDragOver={(event) => event.preventDefault()}>
+          <button type="button" className="collapsed-gap-main" aria-label={description} onClick={() => segment.gapKey && onToggleGap?.(segment.gapKey)}>{label}<span>{summary}</span></button>
+          {effectiveDay && segment.gapKey === firstCollapsedGapKey && <button type="button" className="effective-day-expand" aria-label="展开整天" onClick={() => timeline.gaps.forEach((gap) => { if (!expandedGapKeys?.has(gap.key)) onToggleGap?.(gap.key); })}>展开整天</button>}
+        </div>;
+      })}
       {dragExpandedGapKey && timeline && (() => { const gap = timelineRangeFromKey(dragExpandedGapKey); return gap ? <div aria-hidden="true" className="drag-expanded-region" style={{ top: `${timeline.offsetAtMinute(gap.start)}px`, height: `${timeline.offsetAtMinute(gap.end) - timeline.offsetAtMinute(gap.start)}px` }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onClearDragExpansion?.(); }} /> : null; })()}
-      {[...(expandedGapKeys ?? [])].map((key) => { const gap = timelineRangeFromKey(key); return gap && timeline ? <button key={key} className="expanded-gap-toggle" aria-label={`收起 ${boundaryTime(gap.start)}–${boundaryTime(gap.end)}`} style={{ top: `${timeline.offsetAtMinute(gap.start)}px` }} onClick={() => onToggleGap?.(key)}>收起非默认时段</button> : null; })}
+      {[...(expandedGapKeys ?? [])].map((key) => { const gap = timelineRangeFromKey(key); return gap && timeline ? <button key={key} className="expanded-gap-toggle" aria-label={`收起 ${boundaryTime(gap.start)}–${boundaryTime(gap.end)}`} style={{ top: `${timeline.offsetAtMinute(gap.start)}px` }} onClick={() => onToggleGap?.(key)}>{effectiveDay ? (gap.start === 0 ? "收起凌晨" : gap.start >= 1380 ? "收起深夜" : "收起非默认时段") : "收起非默认时段"}</button> : null; })}
       {isToday && <><div className="calendar-past-region" aria-hidden="true" style={timeline ? { height: `${timeline.offsetAtMinute(nowMinute)}px` } : { height: `${nowMinute / 1440 * 100}%` }} /><div className="calendar-now-line" data-now-marker style={timeline ? { top: `${timeline.offsetAtMinute(nowMinute)}px` } : { top: `${nowMinute / 1440 * 100}%` }}><time>{formatLocalClock(now)}</time></div></>}
       {defaultSlots.map((slot) => { const style = timeline ? timeline.positionForRange(slot.start, slot.end) : positionStyle(slot.start, slot.end); return style ? <div key={slot.id} className="default-slot" style={style}><span>{slot.label}</span></div> : null; })}
       {blankHoverMinute !== null && !blankRange && !dragPreview && <div className="blank-hover-cue" aria-hidden="true" style={{ top: timeline ? `${timeline.offsetAtMinute(blankHoverMinute)}px` : `${blankHoverMinute / 1440 * 100}%` }}><Plus size={14} /><time>{minutesTime(blankHoverMinute)}</time></div>}
@@ -1591,7 +1849,7 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
         if (!task || !baseStyle || layout?.hidden) return null;
         const style = layout ? { ...baseStyle, left: `calc(${layout.left}% + 4px)`, right: "auto", width: `calc(${layout.width}% - 8px)` } : baseStyle;
         const isDraggingSource = dragSourceId === session.id;
-        return <CalendarSession key={session.id} style={style} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} sessionRecords={index.recordsBySessionId.get(shown.id) ?? []} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
+        return <CalendarSession key={session.id} style={style} categoryColor={calendarProjectColor(workspace.projects, task.projectId)} landing={landing !== null} targeted={session.id === focusSessionId} overlapTargeted={dragPreview?.mode === "overlap" && dragPreview.targetSessionId === session.id} draggingSource={isDraggingSource} session={shown} task={task} projectTitle={workspace.projects.find((project) => project.id === task.projectId)?.title ?? null} hourHeight={preferences.calendarScale[preferences.calendarView]} now={now} sessionRecords={index.recordsBySessionId.get(shown.id) ?? []} showActualRecords={preferences.showActualRecords} snapMinutes={preferences.snapMinutes} onResize={(duration) => onMove(session, session.localDate, session.startLocal, duration)} onResizeStart={() => { setBlankHoverMinute(null); setBlankRange(null); setBlankAction(null); }} onEdit={(anchor) => onEditSession(session, anchor)} onProgress={onProgress} onSkipReview={() => onSkipReview(session)} onContinue={() => onContinue(session)} onDragStartInfo={() => setDragSourceId(session.id)} onDragEndInfo={() => setDragSourceId((current) => current === session.id ? null : current)} overlay={layout?.hiddenCount ? <button className="concurrent-summary" aria-expanded={expandedConcurrency === layout.groupId} onClick={(event) => { event.stopPropagation(); setExpandedConcurrency((current) => current === layout.groupId ? null : layout.groupId); }}>另外 {layout.hiddenCount} 项</button> : layout?.showCount ? <span className="simultaneous-count">同时 {layout.totalCount} 项</span> : null} />;
       })}
       {expandedConcurrency && (() => {
         const groupSessions = sessions.filter((session) => concurrency.get(session.id)?.groupId === expandedConcurrency);
@@ -1749,8 +2007,8 @@ function CalendarTimeBlock({ block, baseStyle, position, hourHeight, snapMinutes
   </>;
 }
 
-function CalendarSession({ style, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
-  style?: CSSProperties; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
+function CalendarSession({ style, categoryColor, landing = false, targeted = false, overlapTargeted = false, draggingSource = false, session, task, projectTitle, hourHeight, now, sessionRecords, showActualRecords, snapMinutes, onResize, onResizeStart, onEdit, onProgress, onSkipReview, onContinue, overlay, onDragStartInfo, onDragEndInfo }: {
+  style?: CSSProperties; categoryColor?: string; landing?: boolean; targeted?: boolean; overlapTargeted?: boolean; draggingSource?: boolean;
   session: ExecutionSession; task: Task; projectTitle: string | null; hourHeight: number; now: Date; /** 只传该时段自己的执行记录，避免每行扫描全量历史。 */ sessionRecords: ExecutionRecord[]; showActualRecords: boolean; snapMinutes: AppSettings["snapMinutes"];
   onResize: (duration: number) => Promise<void>; onResizeStart?: () => void; onEdit: (anchorElement: HTMLElement | null) => void; onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onSkipReview: () => Promise<void>; onContinue: () => void;
   onDragStartInfo?: (sessionId: string) => void; onDragEndInfo?: (sessionId: string) => void;
@@ -1765,8 +2023,14 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
   const confirmedNoProgress = session.status === "missed";
   const elapsed = current ? Math.round((now.getTime() - localSessionStart(session)) / Math.max(1, localSessionEnd(session) - localSessionStart(session)) * 100) : 0;
   const availableHeight = sessionDuration(session) / 60 * hourHeight;
+  /**
+   * 盒子高度档位只留给两个消费方：`data-card-density`（悬停动作条阈值与测试钩子）和
+   * `showDetails`。**不再决定渲染哪些行** —— 行的显隐全部交给卡片自身的高度容器查询
+   * （`styles.css` 的 `@container (min-height: …)`，断点与内容同用 rem），
+   * 这样 200% 下同一个 px 盒子会自动少显示行，而不是把内容压出卡外。
+   */
   const density = availableHeight < hourHeight / 2 ? "compact" : availableHeight < hourHeight ? "standard" : "detailed";
-  const showTimeAndProgress = density !== "compact";
+  const showDetails = density === "detailed";
   /**
    * 待回顾动作的开合。
    *
@@ -1785,7 +2049,6 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
       </div>
     </FloatingPanel>
   ) : null;
-  const showDetails = density === "detailed";
   /**
    * 卡片状态（当前安排／待回顾／本次未推进／已完成）。
    *
@@ -1801,6 +2064,7 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
       : confirmedNoProgress ? { icon: <Ban size={12} />, label: "本次未推进" }
         : isTaskCompleted(task) || task.progress === 100 ? { icon: <Check size={12} />, label: "已完成" }
           : null;
+  const nextDeadline = task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 ? task.deadlineLocal : null;
   const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault(); event.stopPropagation();
     onResizeStart?.();
@@ -1824,16 +2088,18 @@ function CalendarSession({ style, landing = false, targeted = false, overlapTarg
   };
   const classes = ["calendar-session", session.status === "missed" ? "missed" : "", current ? "current-schedule" : "", pendingReview ? "pending-review" : "", targeted ? "targeted-session" : "", overlapTargeted ? "overlap-target" : "", isTaskCompleted(task) || task.progress === 100 ? "completed" : "", showActualRecords ? "planned-outline" : "", draggingSource ? "is-dragging-source" : "", landing ? "is-landed" : "", resize !== null ? "is-resizing" : ""].filter(Boolean).join(" ");
   const displayStyle = resize === null ? (style ?? positionStyle(session.startLocal, session.endLocal)) : { ...(style ?? positionStyle(session.startLocal, session.endLocal)), height: `${resize / 60 * hourHeight}px` };
-  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={displayStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
+  const cardStyle = categoryColor ? { ...displayStyle, "--session-category": categoryColor } as CSSProperties : displayStyle;
+  return <><article ref={articleRef} tabIndex={0} className={classes} data-session-id={session.id} data-card-density={density} title={task.title} aria-label={`${task.title}，${session.startLocal} 至 ${session.endLocal}${status ? `，${status.label}` : ""}`} style={cardStyle} draggable onClick={(event) => { if ((event.target as HTMLElement).closest("button")) return; if (pendingReview) setReviewOpen(true); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || event.key !== "Enter") return; event.preventDefault(); onEdit(articleRef.current); }} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-daymark-session", session.id); const grabOffsetY = grabOffsetWithin(event.clientY, event.currentTarget); event.dataTransfer.setData("application/x-daymark-grab", String(grabOffsetY)); beginCalendarDrag({ kind: "session", id: session.id, grabOffsetY }); onDragStartInfo?.(session.id); }} onDragEnd={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragEndInfo?.(session.id); }}>
     <DragTimePreview active={resize !== null} anchorRef={articleRef} label="调整时长预览" followKey={resize}>{session.startLocal}–{minutesTime((timeMinutes(session.startLocal) + resize!) % 1440)} · {resize} 分钟</DragTimePreview>
-    {showTimeAndProgress && <time className="session-time">{session.startLocal}–{session.endLocal}</time>}<strong>{task.title}</strong>
-    {(status || showDetails || (task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7)) && <span className="session-state">{status && (pendingReview
-      ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}{density !== "compact" && <span>{status.label}</span>}</button>
-      : <span className="session-status-icon">{status.icon}{density !== "compact" && <span>{status.label}</span>}</span>)}{showDetails && <span className="session-progress-value">{task.progress}%</span>}{task.deadlineLocal && daysBetween(toLocalDate(now), task.deadlineLocal) <= 7 && <span title={`截止日期：${formatLongDate(task.deadlineLocal)}`}><Flag size={12} aria-label={`截止日期 ${task.deadlineLocal}`} /></span>}</span>}
-    {showDetails && projectTitle && <span className="session-project">{projectTitle}</span>}
-    {current && showTimeAndProgress && <div className="session-elapsed" role="progressbar" aria-label={`${task.title} 本时段已过去`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={elapsed}><span style={{ width: `${elapsed}%` }} /></div>}
-    {showTimeAndProgress && <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>}
-    {pendingReview && showDetails && <span className="review-summary">时段已结束 · 当前进度 {task.progress}%</span>}
+    <time className="session-time">{session.startLocal}–{session.endLocal}</time><strong>{task.title}</strong>
+    {(status || nextDeadline) && <span className="session-state">{status && (pendingReview
+      ? <button type="button" className="session-status-icon session-review-trigger" aria-label={status.label} title="处理这次待回顾" onClick={() => setReviewOpen(true)}>{status.icon}<span>{status.label}</span></button>
+      : <span className="session-status-icon">{status.icon}<span>{status.label}</span></span>)}{nextDeadline && <span className="session-deadline-flag" title={`截止日期：${formatLongDate(nextDeadline)}`}><Flag size={12} aria-label={`截止日期 ${nextDeadline}`} /></span>}</span>}
+    <span className="session-meta">{projectTitle && <span className="session-project">{projectTitle}</span>}<span className="session-progress-value">{task.progress}%</span></span>
+    {current && <div className="session-elapsed" role="progressbar" aria-label={`${task.title} 本时段已过去`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={elapsed}><span style={{ width: `${elapsed}%` }} /></div>}
+    {pendingReview && <span className="review-summary">时段已结束 · 当前进度 {task.progress}%</span>}
+    {/* A6／F20④：任务进度条进文档流，紧跟最后一行内容；紧凑档仍不画。 */}
+    <div className="session-task-progress" role="progressbar" aria-label={`${task.title} 手动任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={task.progress}><span style={{ width: `${task.progress}%` }} /></div>
     {overlay}
     <button className="session-edit-button" data-session-edit-button data-action-visibility={showDetails ? "visible" : "on-demand"} aria-label={`编辑 ${task.title} 时间`} onClick={(event) => onEdit(event.currentTarget)}><Pencil size={12} /></button>
     <button className="resize-handle" aria-label={`调整 ${task.title} 时长`} onPointerDown={startResize} />
@@ -3384,6 +3650,8 @@ function deadlineLabel(today: string, deadline: string) { const days = daysBetwe
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(new Date(`${date}T12:00:00`)); }
 function formatLongDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00`)); }
 function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
+/** 200% 界面缩放下页头放不下的紧凑日期：`8/5`。 */
+function compactMonthDay(date: string) { const value = new Date(`${date}T12:00:00`); return `${value.getMonth() + 1}/${value.getDate()}`; }
 function scheduleDayLabel(today: string, date: string) { const offset = daysBetween(today, date); return offset === 0 ? "今天" : offset === 1 ? "明天" : formatShortDate(date); }
 function formatRecentAdvanceDate(date: string, today: string) {
   const sameYear = date.slice(0, 4) === today.slice(0, 4);

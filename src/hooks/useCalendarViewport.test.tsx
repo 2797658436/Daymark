@@ -1,5 +1,5 @@
 import { act, render, waitFor } from "@testing-library/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -58,6 +58,22 @@ describe("calendar viewport geometry", () => {
     expect(scrollTopForCalendarPosition({ position: again!, viewportHeight: 600, track: folded })).toBeCloseTo(first, 6);
   });
 
+  it("samples the previous-day sticky band as one collapsed strip and round-trips from its top", () => {
+    const band = track("2026-08-04", 0, 44, [{ start: 0, end: 1440, collapsed: true, gapKey: "0-1440", top: 0, height: 44 }]);
+    const anchorTrack = track("2026-08-05", 90, 1152);
+    const viewport = { top: 100, height: 600, scrollTop: 0 };
+    const position = sampleCalendarPosition({ anchorDate: "2026-08-05", view: "day", pointScreenY: 122, viewport, tracks: [band, anchorTrack] })!;
+    // 带子代表「一整天都折叠在这里」：落在上面取 00:00–24:00 的中点，而不是按 44px 内插。
+    expect(position).toMatchObject({ date: "2026-08-04", minute: 720, viewportRatio: 22 / 600 });
+    const restored = scrollTopForCalendarPosition({ position, viewportHeight: 600, track: band })!;
+    expect(restored).toBeCloseTo(0, 6);
+    // 重采样仍回到同一个分钟：带子不产生累计漂移。
+    const again = sampleCalendarPosition({
+      anchorDate: "2026-08-05", view: "day", pointScreenY: 122, viewport: { ...viewport, scrollTop: restored }, tracks: [band, anchorTrack],
+    })!;
+    expect(again).toMatchObject({ date: "2026-08-04", minute: 720 });
+  });
+
   it("clamps to the track edge when the centre lands on the day separator and still round-trips", () => {
     const tracks = [track("2026-08-05", 320, 1152)];
     const viewport = { top: 0, height: 600, scrollTop: 0 };
@@ -100,11 +116,11 @@ function domRect(top: number, height: number, left = 0, width = 400) {
 interface TrackSpec { element: HTMLElement; offsetTop: number; height: number; segments?: Array<{ start: number; end: number; top: number; height: number; collapsed: boolean }> }
 
 /** 给 jsdom 装上可预测的纵向布局：轨道位置随 `scrollTop` 变化，和真实滚动一致。 */
-function installLayout(scroller: HTMLElement, specs: TrackSpec[], viewportTop = 100, viewportHeight = 600) {
+function installLayout(scroller: HTMLElement, specs: TrackSpec[], viewportTop = 100, viewportHeight = 600, writes?: number[]) {
   let scrollTop = 0;
   Object.defineProperty(scroller, "clientHeight", { configurable: true, get: () => viewportHeight });
   Object.defineProperty(scroller, "clientTop", { configurable: true, get: () => 0 });
-  Object.defineProperty(scroller, "scrollTop", { configurable: true, get: () => scrollTop, set: (value: number) => { scrollTop = value; } });
+  Object.defineProperty(scroller, "scrollTop", { configurable: true, get: () => scrollTop, set: (value: number) => { scrollTop = Math.max(0, value); writes?.push(scrollTop); } });
   vi.spyOn(scroller, "getBoundingClientRect").mockImplementation(() => domRect(viewportTop, viewportHeight));
   for (const spec of specs) {
     spec.element.replaceChildren();
@@ -138,20 +154,40 @@ interface HarnessProps {
   now?: Date;
   dates?: string[];
   scale?: number;
+  bufferShiftTo?: number;
   onApi: (api: CalendarViewportApi) => void;
   onSettled?: (view: TimelineView, position: CalendarPosition) => void;
 }
 
-function Harness({ view, date = "2026-08-05", now = new Date("2026-08-05T14:00:00"), dates = WEEK, scale = 48, onApi, onSettled }: HarnessProps) {
+/** 模拟日视图在子组件 layout effect 里提交三日缓冲对齐请求（早于父级 hook 的排队）。 */
+function BufferShiftRequest({ request, axisRef, to }: {
+  request: CalendarViewportApi["requestBufferShift"];
+  axisRef: { current: HTMLDivElement | null };
+  to: number;
+}) {
+  useLayoutEffect(() => {
+    request(() => {
+      const axis = axisRef.current;
+      if (!axis) return true;
+      axis.scrollTop = to;
+      return true;
+    });
+  }, [axisRef, request, to]);
+  return null;
+}
+
+function Harness({ view, date = "2026-08-05", now = new Date("2026-08-05T14:00:00"), dates = WEEK, scale = 48, bufferShiftTo, onApi, onSettled }: HarnessProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const axisRef = useRef<HTMLDivElement>(null);
   const api = useCalendarViewport({ view, date, now, scale, slots: SLOTS, dates, rootRef, onPositionSettled: onSettled });
   useEffect(() => { onApi(api); });
   if (view === "day") {
-    return <div ref={rootRef}><div className="continuous-day-axis">
-      {[addDays(date, -1), date, addDays(date, 1)].map((panelDate) => (
+    return <div ref={rootRef}><div ref={axisRef} className="continuous-day-axis">
+      {bufferShiftTo !== undefined && <BufferShiftRequest request={api.requestBufferShift} axisRef={axisRef} to={bufferShiftTo} />}
+      {[addDays(date, -1), date, addDays(date, 1)].map((panelDate, index) => (
         <section key={panelDate} className="continuous-day-panel" data-calendar-date={panelDate}>
-          <div className="continuous-day-separator" />
-          <div className="calendar-grid day"><div className="calendar-day" data-day-date={panelDate}><div className="day-track" /></div></div>
+          <header className={`calendar-day-band ${index === 0 ? "is-previous is-collapsed" : ""}`.trim()} />
+          {index > 0 && <div className="calendar-grid day"><div className="calendar-day" data-day-date={panelDate}><div className="day-track" /></div></div>}
         </section>
       ))}
     </div></div>;
@@ -164,12 +200,25 @@ function Harness({ view, date = "2026-08-05", now = new Date("2026-08-05T14:00:0
   return <div ref={rootRef}><div className="calendar-viewport"><div className="month-calendar" /></div></div>;
 }
 
+/**
+ * 日视图几何：前一天只剩 44px 吸顶带（面板起点 0，含 2px 分隔），
+ * 后面两天 = 44px 日期带 + 时间轨（+2px 分隔）。
+ */
 function daySpecs(root: ParentNode): TrackSpec[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(".continuous-day-panel")).map((panel, index) => ({
-    element: panel.querySelector<HTMLElement>(".day-track")!,
-    offsetTop: index * 1244 + 40,
-    height: 1152,
-  }));
+  let panelTop = 0;
+  return Array.from(root.querySelectorAll<HTMLElement>(".continuous-day-panel")).flatMap((panel) => {
+    const collapsedBand = panel.querySelector<HTMLElement>(".calendar-day-band.is-collapsed");
+    if (collapsedBand) {
+      const spec = { element: collapsedBand, offsetTop: panelTop, height: 44 };
+      panelTop += 46;
+      return [spec];
+    }
+    panelTop += 44;
+    const track = panel.querySelector<HTMLElement>(".day-track");
+    const specs = track ? [{ element: track, offsetTop: panelTop, height: 1152 }] : [];
+    panelTop += 1152 + 2;
+    return specs;
+  });
 }
 
 function weekSpecs(root: ParentNode): TrackSpec[] {
@@ -204,6 +253,32 @@ describe("useCalendarViewport", () => {
     await waitFor(() => expect(restoredLayout.read()).toBeCloseTo(400, 0));
   });
 
+  it("samples and restores the collapsed previous-day band at the top of the day axis", async () => {
+    const settled: CalendarPosition[] = [];
+    const first = render(<Harness view="day" onApi={() => undefined} onSettled={(_view, position) => settled.push(position)} />);
+    const scroller = first.container.querySelector<HTMLElement>(".continuous-day-axis")!;
+    // 视口矮到中心落在 44px 带子上：这是唯一能让采样点进入带子的几何，
+    // 用来证明带子真的被 measureTracks 当成一条折叠轨道。
+    const layout = installLayout(scroller, daySpecs(first.container), 100, 80);
+    for (let index = 0; index < 4; index += 1) await nextFrame();
+    act(() => { scroller.scrollTop = 0; scroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    expect(readCalendarPositions().day).toMatchObject({ date: "2026-08-04", minute: 720 });
+    expect(settled.at(-1)).toMatchObject({ date: "2026-08-04", minute: 720 });
+    first.unmount();
+
+    // 退出重开：记忆里是前一天；带子必须作为恢复目标，否则会退回锚点日并把前一天甩出视野。
+    const second = render(<Harness view="day" onApi={() => undefined} />);
+    const restoredScroller = second.container.querySelector<HTMLElement>(".continuous-day-axis")!;
+    const restored = installLayout(restoredScroller, daySpecs(second.container), 100, 80);
+    act(() => { fireResize(); });
+    await waitFor(() => expect(restored.read()).toBe(0));
+    act(() => { restoredScroller.dispatchEvent(new Event("scroll")); });
+    await new Promise((resolve) => setTimeout(resolve, CALENDAR_SAMPLE_SETTLE_MS + 60));
+    // 恢复后再采样仍是前一天的中点：程序性恢复不写偏好，也不会把位置改成今天。
+    expect(readCalendarPositions().day).toMatchObject({ date: "2026-08-04", minute: 720 });
+  });
+
   it("waits for a measurable track instead of guessing with a fixed delay", async () => {
     render(<Harness view="week" onApi={() => undefined} />);
     const scroller = document.querySelector<HTMLElement>(".calendar-viewport")!;
@@ -217,6 +292,43 @@ describe("useCalendarViewport", () => {
     act(() => { fireResize(); });
     await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
     expect(layout.read()).toBeCloseTo(116 + 840 / 1440 * 1152 - 300, 0);
+  });
+
+  it("keeps the intent pending when the viewport is measured but the track is not", async () => {
+    render(<Harness view="week" onApi={() => undefined} />);
+    const scroller = document.querySelector<HTMLElement>(".calendar-viewport")!;
+    for (let index = 0; index < 8; index += 1) await nextFrame();
+    // 视口已经有高度，但轨道仍是 0 高：`pickTrackForPosition` 取不到轨道。
+    let layout = installLayout(scroller, weekSpecs(document).map((spec) => ({ ...spec, height: 0 })));
+    act(() => { fireResize(); });
+    for (let index = 0; index < 6; index += 1) await nextFrame();
+    expect(layout.read()).toBe(0);
+
+    // 轨道真正可测后，ResizeObserver 再推一次，待处理的首次定位仍要落地。
+    layout = installLayout(scroller, weekSpecs(document));
+    act(() => { fireResize(); });
+    await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
+    expect(layout.read()).toBeCloseTo(116 + 840 / 1440 * 1152 - 300, 0);
+  });
+
+  it("applies the three-day buffer shift before the first-time position", async () => {
+    const writes: number[] = [];
+    const today = render(<Harness view="day" date="2026-08-05" bufferShiftTo={500} onApi={() => undefined} />);
+    const scroller = today.container.querySelector<HTMLElement>(".continuous-day-axis")!;
+    const layout = installLayout(scroller, daySpecs(today.container), 100, 600, writes);
+    await waitFor(() => expect(layout.read()).toBeCloseTo(90 + 840 / 1440 * 1152 - 300, 0));
+    // 缓冲对齐先写中间面板起点，再被首次定位改到「现在」——两者必须串行落地。
+    expect(writes[0]).toBe(500);
+    today.unmount();
+    resetCalendarPositions();
+
+    // 锚点不是今天：首次定位落在该日首个默认时段 19:00，而不是中间面板的 00:00。
+    const otherWrites: number[] = [];
+    const other = render(<Harness view="day" date="2026-08-06" bufferShiftTo={500} onApi={() => undefined} />);
+    const otherScroller = other.container.querySelector<HTMLElement>(".continuous-day-axis")!;
+    const otherLayout = installLayout(otherScroller, daySpecs(other.container), 100, 600, otherWrites);
+    await waitFor(() => expect(otherLayout.read()).toBeCloseTo(90 + 1140 / 1440 * 1152 - 300, 0));
+    expect(otherWrites[0]).toBe(500);
   });
 
   it("lets any user scroll cancel a pending restore", async () => {

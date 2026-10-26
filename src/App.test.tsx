@@ -215,7 +215,9 @@ describe("phase 1 manual alpha", () => {
       tasks: [{ id: "task-drag", projectId: null, title: "拖拽任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
     };
     const native = createNativeApi(initial);
+    const user = userEvent.setup();
     render(<App settings={new SettingsRepository(backend)} native={native} />);
+    await user.click(await screen.findByRole("button", { name: "显示更多日历选项" }));
     expect(await screen.findByRole("button", { name: "吸附 15 分钟" })).toHaveAttribute("aria-pressed", "true");
     const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
     vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
@@ -327,7 +329,7 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup();
     const backend = new MemorySettingsBackend(); backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const native = createNativeApi(); render(<App settings={new SettingsRepository(backend)} native={native} />);
-    await screen.findByRole("button", { name: "吸附 15 分钟" });
+    await screen.findByRole("button", { name: "显示更多日历选项" });
     const track = document.querySelector<HTMLElement>('.calendar-day[data-day-date="2026-08-05"] .day-track')!;
     vi.spyOn(track, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, top: 0, left: 0, right: 200, bottom: 1440, width: 200, height: 1440, toJSON: () => ({}) });
     const down = createEvent.pointerDown(track, { button: 0, pointerId: 1 }); Object.defineProperty(down, "clientY", { value: 660 }); fireEvent(track, down);
@@ -375,7 +377,7 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi({ ...structuredClone(EMPTY_WORKSPACE), tasks, progressEvents })} />);
 
     const cell = await screen.findByRole("gridcell", { name: /2026-08-05/ });
-    expect(cell).toHaveTextContent("交付报告"); expect(cell).toHaveTextContent("完成 1 项");
+    expect(cell).toHaveTextContent("交付报告"); expect(cell).toHaveTextContent("完成 1");
     await user.click(cell);
     const detail = screen.getByRole("complementary", { name: /2026-08-05.*详情/ });
     expect(detail).toHaveTextContent("交付报告"); expect(detail).toHaveTextContent("完成复盘");
@@ -400,23 +402,25 @@ describe("phase 1 manual alpha", () => {
     expect(screen.getByRole("complementary", { name: /2026-08-09.*详情/ })).toBeVisible();
   });
 
-  it("shows two all-day deadline rows in week view and expands the overflow in place", async () => {
+  it("shows an all-day count chip and opens the full marker list in a floating panel", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const tasks = Array.from({ length: 4 }, (_, index) => ({ id: `due-${index}`, projectId: null, title: `全天 ${index + 1}`, progress: 0, status: "active" as const, deadlineLocal: "2026-08-05", estimatedMinutes: 30, sortOrder: index }));
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi({ ...structuredClone(EMPTY_WORKSPACE), tasks })} />);
 
     const allDay = await screen.findByRole("region", { name: "全天标记" });
-    expect(allDay.querySelectorAll("[data-all-day-marker]")).toHaveLength(2);
-    await user.click(screen.getByRole("button", { name: "另外 2 项" }));
-    expect(allDay.querySelectorAll("[data-all-day-marker]")).toHaveLength(4);
-    await user.click(screen.getByRole("button", { name: /：全天 1/ }));
+    expect(allDay.querySelectorAll("[data-all-day-group]")).toHaveLength(1);
+    await user.click(within(allDay).getByRole("button", { name: /截止 4 项/ }));
+    const panel = screen.getByRole("dialog", { name: /全天标记/ });
+    expect(panel.querySelectorAll("[data-all-day-marker]")).toHaveLength(4);
+    await user.click(within(panel).getByRole("button", { name: /：全天 1/ }));
+    expect(screen.queryByRole("dialog", { name: /全天标记/ })).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: /2026-08-05.*详情/ })).toHaveTextContent("全天 1");
     // 周视图不是网格：日列里的时间光标是 `group`，选中态走 `aria-current`（P4-11 方案 B）。
     expect(screen.getByRole("group", { name: /2026-08-05 09:00 空白时间/ })).toHaveAttribute("aria-current", "true");
   });
 
-  it("shows project deadline flag and milestone diamond in week all-day and opens the project detail", async () => {
+  it("shows project deadline and milestone count chips and opens the project detail", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -427,16 +431,21 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
 
     const allDay = await screen.findByRole("region", { name: "全天标记" });
-    expect(allDay.querySelector('[data-marker-kind="projectDeadline"]')).toHaveTextContent("项目截止 · 毕业设计");
-    expect(allDay.querySelector('[data-marker-kind="milestone"]')).toHaveTextContent("中期答辩");
-    await user.click(screen.getByRole("button", { name: /项目截止 毕业设计/ }));
+    expect(within(allDay).getByRole("button", { name: /项目截止 1 项/ })).toBeVisible();
+    // A6：全天区收成一行，排不下的组收进「+N」；完整名单仍在那枚浮层里。
+    expect(within(allDay).queryByRole("button", { name: /里程碑 1 项/ })).toBeNull();
+    await user.click(within(allDay).getByRole("button", { name: /另外 1 组全天标记/ }));
+    const panel = screen.getByRole("dialog", { name: /全天标记/ });
+    expect(panel.querySelector('[data-marker-kind="projectDeadline"]')).toHaveTextContent("项目截止 · 毕业设计");
+    expect(panel.querySelector('[data-marker-kind="milestone"]')).toHaveTextContent("中期答辩");
+    await user.click(within(panel).getByRole("button", { name: /项目截止 毕业设计/ }));
     const detail = screen.getByRole("complementary", { name: /2026-08-05.*详情/ });
     expect(detail).toHaveTextContent("毕业设计");
     expect(detail).toHaveTextContent("中期答辩");
     expect(detail).toHaveTextContent("项目截止");
   });
 
-  it("opens the project detail from a milestone in the week all-day area", async () => {
+  it("opens the project detail from a milestone in the week all-day panel", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
@@ -446,7 +455,9 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
 
     const allDay = await screen.findByRole("region", { name: "全天标记" });
-    await user.click(screen.getByRole("button", { name: /里程碑：中期答辩/ }));
+    await user.click(within(allDay).getByRole("button", { name: /里程碑 1 项/ }));
+    const panel = screen.getByRole("dialog", { name: /全天标记/ });
+    await user.click(within(panel).getByRole("button", { name: /里程碑：中期答辩/ }));
     const detail = screen.getByRole("complementary", { name: /2026-08-05.*详情/ });
     expect(detail).toHaveTextContent("毕业设计");
     expect(detail).toHaveTextContent("今天到期");
@@ -473,9 +484,13 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
-    const header = await screen.findByRole("button", { name: /打开 2026-08-05/ }); header.focus();
+    const header = await screen.findByRole("button", { name: /选中 2026-08-05/ }); header.focus();
     await user.keyboard("{ArrowRight}{ArrowLeft}{PageDown}");
-    await waitFor(() => expect(document.activeElement).toHaveAccessibleName(/打开 2026-08-12/));
+    await waitFor(() => expect(document.activeElement).toHaveAccessibleName(/选中 2026-08-12/));
+    // Enter 只选中日期（右侧详情），不再直接切日视图。
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "周" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("complementary", { name: /2026-08-12.*详情/ })).toBeVisible();
 
     const track = screen.getByRole("group", { name: "2026-08-12 09:00 空白时间" }); track.focus();
     await user.keyboard("{ArrowDown}"); expect(document.activeElement).toHaveAccessibleName("2026-08-12 09:15 空白时间");
@@ -500,17 +515,21 @@ describe("phase 1 manual alpha", () => {
     expect(screen.getByRole("dialog", { name: "编辑时间：键盘任务" })).toBeVisible();
   });
 
-  it("opens a week date header in day view and marks today with text", async () => {
+  it("selects a week date header on click and opens its day view on double click", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-05T12:00:00"));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "日历" }));
-    const todayHeader = screen.getByRole("button", { name: /打开.*8月5日.*日视图/ });
+    const todayHeader = screen.getByRole("button", { name: /选中 2026-08-05/ });
     expect(todayHeader).toHaveTextContent("今天");
+    expect(screen.getByRole("button", { name: /打开 2026-08-05.*日视图/ })).toBeVisible();
     await user.click(todayHeader);
+    expect(screen.getByRole("button", { name: "周" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("complementary", { name: /2026-08-05.*详情/ })).toBeVisible();
+    await user.dblClick(todayHeader);
     expect(screen.getByRole("button", { name: "日" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("当前日历日期")).toHaveTextContent(/8月5日.*星期三/);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("8月5日 周三");
     vi.useRealTimers();
   });
 
@@ -568,18 +587,18 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     const calendar = await screen.findByRole("region", { name: "日历时间网格" });
     const page = document.querySelector(".calendar-page")!;
-    expect(page).toHaveAttribute("data-calendar-scale", "72");
+    expect(page).toHaveAttribute("data-calendar-scale", "84");
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: false, clientY: 300 });
-    expect(page).toHaveAttribute("data-calendar-scale", "72");
+    expect(page).toHaveAttribute("data-calendar-scale", "84");
     fireEvent.wheel(calendar, { deltaY: -100, ctrlKey: true, clientY: 300 });
     // 滚轮缩放要量一遍所有日轨的几何（getBoundingClientRect × 7）；全量跑测试时
     // 机器更忙，1s 的默认轮询窗口偶尔不够，这里放宽到 3s。
-    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "76"), { timeout: 3000 });
-    await waitFor(() => expect(backend.value).toMatchObject({ calendarScale: { week: 76 } }));
+    await waitFor(() => expect(page).toHaveAttribute("data-calendar-scale", "88"), { timeout: 3000 });
+    await waitFor(() => expect(backend.value).toMatchObject({ calendarScale: { week: 88 } }));
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
   });
 
-  it("adapts calendar card information to the available height without changing schedule facts", async () => {
+  it("keeps the calendar card height tier hook while the box owns row visibility", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
     const backend = new MemorySettingsBackend();
@@ -603,14 +622,17 @@ describe("phase 1 manual alpha", () => {
       const short = (await screen.findByText("短时段", { selector: ".calendar-session strong" })).closest(".calendar-session")!;
       const medium = screen.getByText("中时段", { selector: ".calendar-session strong" }).closest(".calendar-session")!;
       const long = screen.getByText("长时段", { selector: ".calendar-session strong" }).closest(".calendar-session")!;
+      // A5：密度只留作「盒子高度档位」钩子（悬停动作条阈值 + 测试）；行都在 DOM 里，
+      // 显隐由 `.calendar-session` 的高度容器查询决定（jsdom 不跑布局，因此这里断言契约）。
       expect(short).toHaveAttribute("data-card-density", "compact");
-      expect(short.querySelector(".session-time")).not.toBeInTheDocument();
-      expect(short.querySelector(".session-task-progress")).not.toBeInTheDocument();
+      expect(short.querySelector(".session-time")).toHaveTextContent("10:00–10:20");
+      expect(short.querySelector(".session-task-progress")).toBeInTheDocument();
+      expect(short.querySelector(".session-meta")).toBeInTheDocument();
       expect(short.querySelector("button[aria-label='编辑 短时段 时间']")).toHaveAttribute("data-action-visibility", "on-demand");
       expect(medium).toHaveAttribute("data-card-density", "standard");
       expect(medium.querySelector(".session-time")).toHaveTextContent("11:00–11:45");
-      expect(medium.querySelector(".session-task-progress")).toBeInTheDocument();
-      expect(medium.querySelector(".session-project")).not.toBeInTheDocument();
+      expect(medium.querySelector(".session-project")).toHaveTextContent("发布计划");
+      expect(medium.querySelector("button[aria-label='编辑 中时段 时间']")).toHaveAttribute("data-action-visibility", "on-demand");
       expect(long).toHaveAttribute("data-card-density", "detailed");
       expect(long.querySelector(".session-project")).toHaveTextContent("发布计划");
       expect(long.querySelector(".session-progress-value")).toHaveTextContent("70%");
@@ -681,6 +703,188 @@ describe("phase 1 manual alpha", () => {
       expect(screen.getByText("折叠区任务", { selector: ".calendar-session strong" })).toBeVisible();
       await waitFor(() => expect(backend.value).toMatchObject({ calendarDayMode: "fullDay" }));
       expect(native.updateExecutionSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // 日历整改 A4：F05 单条 44px 吸顶日期带 / F08 有效日折叠 / F08③ 前一天带子
+  // ---------------------------------------------------------------------
+
+  it("merges the separator and the day header into one sticky band carrying the day's facts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+    };
+    const initial: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [
+        { id: "band-a", projectId: null, title: "带子任务一", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "band-b", projectId: null, title: "带子任务二", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 10, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "band-session-a", taskId: "band-a", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "band-session-b", taskId: "band-b", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "20:00", endLocal: "20:10", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    try {
+      const band = (await screen.findByText("8月5日", { selector: ".calendar-day-band-date" })).closest<HTMLElement>(".calendar-day-band")!;
+      expect(band).toBeInTheDocument();
+      expect(band).toHaveTextContent("8月5日");
+      expect(band.querySelector(".calendar-day-band-date span")).toHaveTextContent("周三");
+      expect(band.querySelector(".calendar-day-band-today")).toHaveTextContent("今天");
+      // 计数与投入直接来自 calendarDaySummary：70 分钟 ⇒ 1h10m，组件里没有第二套算式。
+      expect(band.querySelector(".calendar-day-band-summary")).toHaveTextContent("2 项安排 · 投入 1h10m");
+      // 双层吸顶彻底消失：分隔条、日头与时间轴占位块都不该再出现。
+      expect(document.querySelector(".continuous-day-separator")).toBeNull();
+      expect(document.querySelector(".calendar-day > header")).toBeNull();
+      expect(document.querySelector(".day-head-spacer")).toBeNull();
+      // 时间轴一侧不再有第二层占位，只保留轨道本身。
+      expect(document.querySelector('.continuous-day-panel[data-calendar-date="2026-08-05"] .calendar-day-band')).toBe(band);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("folds an empty early morning and late night in full-day mode and re-opens them as a whole day", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+    };
+    const initial: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "fold-task", projectId: null, title: "有效日任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "fold-session", taskId: "fold-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    try {
+      // 三日缓冲里每个空日都会各自折叠，查询必须锁在锚点那一块面板上。
+      const panel = (await screen.findByText("8月5日", { selector: ".calendar-day-band-date" })).closest<HTMLElement>(".continuous-day-panel")!;
+      const day = within(panel);
+      const track = day.getByRole("button", { name: "凌晨 00:00–06:00 · 无安排" }).closest(".day-track")!;
+      expect(day.getByRole("button", { name: "深夜 23:00–24:00 · 无安排" })).toBeVisible();
+      expect(screen.getByText("有效日任务", { selector: ".calendar-session strong" })).toBeVisible();
+      // 06:00–23:00 逐小时 + 两条 44px 折叠带：标准档 168px/小时 ⇒ 17×168 + 88。
+      expect(track).toHaveStyle({ height: `${17 * 168 + 44 * 2}px` });
+      // 折叠带把凌晨/深夜的时段折进一条带子，但仍是**按钮**：拖拽悬停与点击展开照常。
+      expect(track.querySelectorAll('.timeline-map-segment[data-collapsed="true"]')).toHaveLength(2);
+
+      await user.click(day.getByRole("button", { name: "展开整天" }));
+      expect(track).toHaveStyle({ height: `${24 * 168}px` });
+      expect(track.querySelectorAll('.timeline-map-segment[data-collapsed="true"]')).toHaveLength(0);
+      // 展开后必须还能收回去（临时展开不落库，见下一条断言）。
+      await user.click(day.getByRole("button", { name: "收起 00:00–06:00" }));
+      expect(day.getByRole("button", { name: "凌晨 00:00–06:00 · 无安排" })).toBeVisible();
+      expect(backend.value).toMatchObject({ calendarDayMode: "fullDay" });
+      expect(JSON.stringify(backend.value)).not.toContain("expandedGap");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the early hours open when the day has work or the clock is inside them", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T02:00:00+08:00"));
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+    };
+    const initial: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{ id: "night-task", projectId: null, title: "凌晨任务", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+      executionSessions: [{ id: "night-session", taskId: "night-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "10:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" }],
+    };
+    const view = render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    try {
+      const panel = (await screen.findByText("8月5日", { selector: ".calendar-day-band-date" })).closest<HTMLElement>(".continuous-day-panel")!;
+      const day = within(panel);
+      // 现在 02:00 落在 00:00–06:00 里：凌晨不折叠，只折深夜。
+      expect(day.queryByRole("button", { name: "凌晨 00:00–06:00 · 无安排" })).toBeNull();
+      const lateNight = day.getByRole("button", { name: "深夜 23:00–24:00 · 无安排" });
+      expect(lateNight).toBeVisible();
+      expect(lateNight.closest(".day-track")).toHaveStyle({ height: `${23 * 168 + 44}px` });
+
+      // 安排本身落在凌晨：即使「现在」离开，凌晨也必须因为有事而保持展开。
+      vi.setSystemTime(new Date("2026-08-05T12:00:00+08:00"));
+      view.rerender(<App settings={new SettingsRepository(backend)} native={createNativeApi({
+        ...structuredClone(EMPTY_WORKSPACE),
+        tasks: initial.tasks,
+        executionSessions: [{ ...initial.executionSessions[0], startLocal: "02:00", endLocal: "03:00" }],
+      })} />);
+      await waitFor(() => expect(day.queryByRole("button", { name: "凌晨 00:00–06:00 · 无安排" })).toBeNull());
+      expect(day.getByRole("button", { name: "深夜 23:00–24:00 · 无安排" })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders the buffered previous day as one collapsed band that expands without moving the anchor", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    try {
+      const previous = (await screen.findByRole("region", { name: "连续日时间轴" })).querySelector<HTMLElement>('.continuous-day-panel[data-calendar-date="2026-08-04"]')!;
+      expect(previous).toHaveClass("is-previous-collapsed");
+      expect(previous.querySelector(".calendar-day-band")).toHaveClass("is-collapsed");
+      // 前一天不再渲染 24 小时网格：整块面板只剩一条带子。
+      expect(previous.querySelector(".day-track")).toBeNull();
+      expect(previous.querySelector(".calendar-day-band")).toHaveTextContent("8月4日");
+      // 带子仍然是「这一天」的归属：aria-label 里带上日期与当日事实。
+      expect(previous.querySelector(".calendar-day-band")).toHaveAttribute("aria-label", "前一天 8月4日星期二 · 无安排");
+
+      await user.click(within(previous).getByRole("button", { name: /展开前一天 8月4日/ }));
+      expect(previous).not.toHaveClass("is-previous-collapsed");
+      expect(previous.querySelector(".calendar-day-band")).not.toHaveClass("is-collapsed");
+      // 展开出来的前一天本身是「空日」，所以它自己也按有效日折叠：17 小时 + 两条折叠带。
+      expect(previous.querySelector(".day-track")).toHaveStyle({ height: `${17 * 168 + 44 * 2}px` });
+      // 展开是浏览过程里的一次动作：锚点仍是 8月5日，也不写任何偏好。
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("8月5日");
+      expect((backend.value as AppSettings).calendarAnchors.day).toBe("2026-08-05");
+      expect(JSON.stringify(backend.value)).not.toContain("expandedPrevious");
+
+      // 展开后不回缩：带子上已经没有展开入口。
+      expect(within(previous).queryByRole("button", { name: /展开前一天 8月4日/ })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expands the buffered previous day when the user keeps scrolling up at the top", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T08:00:00+08:00"));
+    const backend = new MemorySettingsBackend();
+    backend.value = {
+      ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" },
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    try {
+      const axis = await screen.findByRole("region", { name: "连续日时间轴" });
+      const previous = axis.querySelector<HTMLElement>('.continuous-day-panel[data-calendar-date="2026-08-04"]')!;
+      expect(previous.querySelector(".day-track")).toBeNull();
+      // 停在内容顶端的向上手势＝「我要看前一天」：先展开带子，而不是把锚点退一天。
+      fireEvent.wheel(axis, { deltaY: -120, ctrlKey: false });
+      await waitFor(() => expect(previous.querySelector(".day-track")).not.toBeNull());
+      expect((backend.value as AppSettings).calendarAnchors.day).toBe("2026-08-05");
+      // 缩放（Ctrl+滚轮）不是向上滚：不得顺手展开前一天。
+      fireEvent.wheel(axis, { deltaY: -120, ctrlKey: true });
+      expect(previous).not.toHaveClass("is-previous-collapsed");
     } finally {
       vi.useRealTimers();
     }
@@ -757,12 +961,12 @@ describe("phase 1 manual alpha", () => {
         scrollTop: { configurable: true, writable: true, value: 1900 },
       });
       fireEvent.scroll(axis);
-      await waitFor(() => expect(screen.getByLabelText("当前日历日期")).toHaveTextContent(/8月5日.*星期三/));
+      await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("8月5日 周三"));
       axis.scrollTop = 3000;
       fireEvent.scroll(axis);
-      await waitFor(() => expect(screen.getByLabelText("当前日历日期")).toHaveTextContent(/8月6日.*星期四/));
+      await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("8月6日 周四"));
       await user.click(screen.getByRole("button", { name: "回到今天" }));
-      await waitFor(() => expect(screen.getByLabelText("当前日历日期")).toHaveTextContent(/8月5日.*星期三/));
+      await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("8月5日 周三"));
     } finally {
       vi.useRealTimers();
     }
@@ -784,7 +988,8 @@ describe("phase 1 manual alpha", () => {
       expect(screen.getByRole("progressbar", { name: "整理研究笔记 本时段已过去" })).toHaveAttribute("aria-valuenow", "50");
       expect(screen.getByRole("progressbar", { name: "整理研究笔记 手动任务进度" })).toHaveAttribute("aria-valuenow", "40");
       expect(document.querySelector(".calendar-session.current-schedule")).toHaveTextContent("整理研究笔记");
-      expect(document.querySelector(".calendar-past-region")).toHaveAttribute("style", expect.stringContaining("50%"));
+      // 全天模式折掉凌晨之后，「已经过去」不再是整天的 50%：折叠带 44px + 06:00→12:00 按 168px/小时。
+      expect(document.querySelector(".calendar-past-region")).toHaveAttribute("style", expect.stringContaining(`height: ${44 + (720 - 360) / 60 * 168}px`));
     } finally {
       vi.useRealTimers();
     }
@@ -1120,6 +1325,7 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const native = createNativeApi();
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={native} />);
     await user.click(await screen.findByRole("button", { name: "日历" }));
+    await user.click(screen.getByRole("button", { name: "显示更多日历选项" }));
     await user.click(screen.getByRole("button", { name: "时间块" }));
     await user.type(screen.getByRole("textbox", { name: "标题" }), "午休");
     await user.click(screen.getByRole("button", { name: "创建时间块" }));
@@ -1129,7 +1335,7 @@ describe("phase 1 manual alpha", () => {
 
   it("moves a time block's bottom edge to stretch it and commits an update", async () => {
     const backend = new MemorySettingsBackend();
-    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" } };
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" }, calendarScale: { day: 72, week: 84, month: 120 } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       timeBlocks: [{ id: "block-1", title: "通勤", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
     };
@@ -1148,7 +1354,7 @@ describe("phase 1 manual alpha", () => {
 
   it("moves a time block's top edge to change its start while keeping the end fixed", async () => {
     const backend = new MemorySettingsBackend();
-    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" } };
+    backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "day", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, day: "2026-08-05" }, calendarScale: { day: 72, week: 84, month: 120 } };
     const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE),
       timeBlocks: [{ id: "block-2", title: "会议", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "10:00", endLocal: "11:00", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480 }],
     };
@@ -1277,7 +1483,7 @@ describe("phase 1 manual alpha", () => {
     const { backend, native } = rescueScenario(); const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<App settings={new SettingsRepository(backend)} native={native} />);
     await user.click(await screen.findByRole("button", { name: "重新选择时间" }));
-    expect(await screen.findByRole("heading", { name: "日历", level: 1 })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "日历时间网格" })).toBeVisible();
     await waitFor(() => expect(document.querySelector(".calendar-session.pending-review")).toHaveTextContent("恢复行动待回顾"));
     expect(document.querySelector(".calendar-session.pending-review")).toHaveAttribute("draggable", "true");
     expect(native.updateExecutionSession).not.toHaveBeenCalled();
@@ -1450,9 +1656,25 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "日历" }));
+    await user.click(screen.getByRole("button", { name: "显示更多日历选项" }));
     await user.click(screen.getByRole("button", { name: "吸附 15 分钟" }));
     expect(screen.getByRole("button", { name: "吸附已关闭" })).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => expect(backend.value).toMatchObject({ snapMinutes: "off" }));
+  });
+
+  it("keeps the calendar status bar compact and restores focus from the display bubble", async () => {
+    const user = userEvent.setup();
+    render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "日历" }));
+    expect(screen.getByRole("checkbox", { name: "显示实际记录" })).toBeVisible();
+    const trigger = screen.getByRole("button", { name: "显示更多日历选项" });
+    await user.click(trigger);
+    const panel = await screen.findByRole("dialog", { name: "日历显示选项" });
+    expect(panel).toHaveTextContent("时间块");
+    expect(panel).toHaveTextContent("吸附 15 分钟");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(panel).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("shows a persistent automatic backup error on the data page", async () => {
@@ -1851,11 +2073,12 @@ describe("phase 1 manual alpha", () => {
     const body = await screen.findByText("午休");
     const down = createEvent.pointerDown(body, { button: 0, clientY: 600 }); fireEvent(body, down);
     const move = createEvent.pointerMove(window, { clientY: 696, clientX: 100 }); fireEvent(window, move);
-    expect(screen.getByRole("status", { name: "时间块时间预览" })).toHaveTextContent("11:15–12:15");
+    // 标准档 168px/小时：96px ≈ 34 分钟，吸附 15 分钟 → +30 分钟。
+    expect(screen.getByRole("status", { name: "时间块时间预览" })).toHaveTextContent("10:30–11:30");
     // 拖动整块时落点虚线框要出现，且停在吸附后的最终位置（不是跟手的中间像素）。
     expect(document.querySelector(".calendar-time-block-drop")).toBeTruthy();
     const up = createEvent.pointerUp(window, { clientY: 696, clientX: 100 }); fireEvent(window, up);
-    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-3", startLocal: "11:15", endLocal: "12:15", localDate: "2026-08-05" })));
+    await waitFor(() => expect(native.updateTimeBlock).toHaveBeenCalledWith(expect.objectContaining({ id: "block-3", startLocal: "10:30", endLocal: "11:30", localDate: "2026-08-05" })));
   });
 
   it("drags a time block horizontally into the adjacent day in week view", async () => {
@@ -2420,11 +2643,24 @@ function stubDayAxisLayout(axis: HTMLElement, viewportTop = 100, viewportHeight 
   Object.defineProperty(axis, "clientTop", { configurable: true, get: () => 0 });
   Object.defineProperty(axis, "scrollTop", { configurable: true, get: () => scrollTop, set: (value: number) => { scrollTop = value; } });
   vi.spyOn(axis, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop, viewportHeight));
-  Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel")).forEach((panel, index) => {
+  let panelTop = 0;
+  Array.from(axis.querySelectorAll<HTMLElement>(".continuous-day-panel")).forEach((panel) => {
+    const band = panel.querySelector<HTMLElement>(".calendar-day-band");
+    // 闭包按引用读 `panelTop`，循环结束后所有轨道都会落到同一个偏移；
+    // 每个元素必须各自捕获自己的起点。
+    const bandTop = panelTop;
+    if (band) vi.spyOn(band, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop + bandTop - scrollTop, 44));
+    panelTop += 44;
     const track = panel.querySelector<HTMLElement>(".day-track");
-    if (!track) return;
-    const offsetTop = index * 1200 + 40;
-    vi.spyOn(track, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop + offsetTop - scrollTop, 1152));
+    if (track) {
+      // 这套用例验证的是滚动仲裁与位置恢复，不是折叠映射；移除分段让采样按线性 24 小时走，
+      // 折叠条的映射由 calendarTimeline.test.ts 与 M4 覆盖。
+      track.querySelectorAll(".timeline-map-segment").forEach((segment) => segment.remove());
+      const trackTop = panelTop;
+      vi.spyOn(track, "getBoundingClientRect").mockImplementation(() => fakeRect(viewportTop + trackTop - scrollTop, 1152));
+      panelTop += 1152;
+    }
+    panelTop += 2;
   });
   return { read: () => scrollTop };
 }
@@ -2514,7 +2750,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       await screen.findByRole("button", { name: "日" });
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       stubDayAxisLayout(axis);
-      act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
+      act(() => { axis.scrollTop = 366; axis.dispatchEvent(new Event("scroll")); });
       // 固定等 360ms 在机器忙时会读到还没落库的偏好；等条件成立再断言，断言值不变。
       await waitFor(() => expect((backend.value as AppSettings).calendarPositions.day).not.toBeNull());
 
@@ -2527,7 +2763,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
       await screen.findByRole("button", { name: "日" });
       const restored = stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
-      await waitFor(() => expect(restored.read()).toBeCloseTo(1516, 0));
+      await waitFor(() => expect(restored.read()).toBeCloseTo(366, 0));
     } finally {
       vi.unstubAllGlobals();
       resetCalendarPositions();
@@ -2545,7 +2781,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       await screen.findByRole("button", { name: "日" });
       stubDayAxisLayout(document.querySelector<HTMLElement>(".continuous-day-axis")!);
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
-      act(() => { axis.scrollTop = 1516; axis.dispatchEvent(new Event("scroll")); });
+      act(() => { axis.scrollTop = 366; axis.dispatchEvent(new Event("scroll")); });
       await waitFor(() => expect(readCalendarPositions().day).not.toBeNull(), { timeout: 3000 });
       expect(readCalendarPositions().day?.minute).toBe(720);
       first.unmount();
@@ -2583,7 +2819,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       // 重负载下会随机红（单独跑与重跑都过）。等条件成立再读，断言值不变。
       await waitFor(() => expect(readCalendarPositions().day).not.toBeNull(), { timeout: 3000 });
       const remembered = readCalendarPositions().day;
-      expect(remembered?.minute).toBeCloseTo((500 + 300 - 40) / 1152 * 1440, 3);
+      expect(remembered?.minute).toBeCloseTo((500 + 300 - 90) / 1152 * 1440, 3);
 
       await user.click(screen.getByRole("button", { name: "周" }));
       await user.click(screen.getByRole("button", { name: "日" }));
@@ -2609,7 +2845,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
 describe("phase 4 P4-06 deadline view", () => {
   const NAVIGATION: Array<[PageId, string, string | RegExp]> = [
     ["today", "今日", /\d+月\d+日星期/],
-    ["calendar", "日历", "日历"],
+    ["calendar", "日历", "8月3日 — 8月9日"],
     ["deadlines", "截止", "截止事项"],
     ["projects", "项目", "项目"],
     ["review", "回顾", "8月3日 — 8月9日"],

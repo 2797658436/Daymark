@@ -210,7 +210,7 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 
 /* 行高必须锁死：200% 下侧栏内容比窗口高，auto 行会被撑开，整个应用跟着比窗口高，
    日历页因此溢出窗口（axe 与 toBeInViewport 都按窗口算）。 */
-.app-shell { height: 100%; display: grid; grid-template-columns: 4.375rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); background: var(--bg); }
+.app-shell { --pool-overlay-inset: 4.375rem; height: 100%; display: grid; grid-template-columns: 4.375rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); background: var(--bg); }
 .app-shell.with-task-pool { grid-template-columns: 4.375rem minmax(0, 1fr) 6px var(--pool-width, 320px); }
 .sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: .75rem .4375rem; z-index: 3; }
 /* 侧栏宽度封顶 96px：品牌字（Daymark）不再跟着放大，否则 200% 下会溢出被裁；导航文字仍然缩放。 */
@@ -564,7 +564,43 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .button-quiet { border-color: transparent; background: transparent; }
 .button-quiet:hover:not(:disabled) { background: var(--panel-strong); }
 
-.calendar-page { --calendar-hour-height: 48px; --calendar-month-row-height: 82px; position: relative; min-width: 0; max-width: 1240px; height: 100%; margin: 0 auto; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 8px; }
+.calendar-page {
+  --calendar-hour-height: 48px; --calendar-month-row-height: 82px;
+  /* 首列是时间轴刻度：字号按 rem 随界面缩放长大，列宽也必须同步 →
+     写 rem（100% = 58px、200% = 116px），否则 200% 下「10:00」丢首位数字。
+     其余列下限与「设计宽」仍按 --calendar-ui-factor（=100/缩放）反比换算：
+     A5 起 min-week = 首列 + 7 列下限，100% 为 3.625rem + 784px = 842px，
+     200% 为 116px + 392px = 508px（旧口径 421px）。
+     任务池停靠判据是同一公式再加 60px 余量（100% 902px、200% 538px），
+     见 AppShell 的 weekGridDesignWidth。 */
+  --calendar-gutter: 3.625rem;
+  /* A6／F20①：折叠条只认这一个来源（App 按 preferences.scale 内联下发），
+     不再与 2.75rem 各算一套。 */
+  --collapsed-gap-height: 44px;
+  --calendar-min-week: calc(var(--calendar-gutter) + 7 * var(--calendar-week-column));
+  --calendar-min-day: calc(500px * var(--calendar-ui-factor, 1));
+  --calendar-week-column: calc(112px * var(--calendar-ui-factor, 1));
+  --calendar-day-column: calc(400px * var(--calendar-ui-factor, 1));
+  position: relative; min-width: 0; max-width: 1240px; height: 100%; margin: 0 auto; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 8px;
+}
+/* 日历页头：标题就是当前范围（日／周／月），右侧只放视图切换与 ‹ 今天 ›。
+   日期范围只写一次；不再有 eyebrow，也不再与工具栏各写一遍。 */
+.page-header.calendar-header { min-height: 0; padding-bottom: 0; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.calendar-header .page-header-title { display: flex; align-items: center; min-width: 0; flex: 1 1 auto; }
+.calendar-header h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.calendar-header .header-actions { flex-wrap: nowrap; gap: 6px; }
+.calendar-view-switch { height: 2.125rem; padding: 2px; gap: 2px; flex: none; }
+.calendar-view-switch button { min-height: 0; height: 100%; padding: 0 .45rem; font-size: .75rem; }
+.calendar-step-group { display: inline-flex; align-items: center; gap: 2px; height: 2.125rem; padding: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); box-shadow: inset 0 1px 0 rgb(255 255 255 / 50%); flex: none; }
+.calendar-step-group button { display: grid; place-items: center; width: 2.125rem; height: 100%; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: .75rem; font-weight: 500; transition: background .12s ease, color .12s ease; }
+.calendar-step-group button:hover { background: var(--panel); color: var(--text); }
+.calendar-step-group .calendar-today { width: auto; padding: 0 .5rem; color: var(--muted-strong); }
+.calendar-step-group .calendar-today:hover { color: var(--accent-strong); }
+.calendar-step-group button:focus-visible, .calendar-view-switch button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* 200% 下页头放不下完整范围时换紧凑写法（完整文本仍在 aria-label 与 title 里）。 */
+.calendar-range-short { display: none; }
+.calendar-page[data-ui-scale="200"][data-compact-title="true"] .calendar-range-full { display: none; }
+.calendar-page[data-ui-scale="200"][data-compact-title="true"] .calendar-range-short { display: inline; }
 /* ---------------------------------------------------------------------------
    P4-13 §1：日历内部的**图层表**。
    整个日历的堆叠上下文由 `.calendar-viewport`（`container-type: inline-size` →
@@ -576,50 +612,97 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
      0–10   轨道内容（past-region 0／时间块 1／卡片 2／hover 4／当前安排 5／
              待回顾 6／实际记录 7／当前时间线·目标卡片·拖拽展开区 8／
              折叠区间·重叠目标 9／展开按钮 10）
-     19     日视图吸顶日期头（`.calendar-day > header`、「今天」药丸在这里）
-            与时间轴那一侧的 `.day-head-spacer`
-     20     吸顶分隔条（`.continuous-day-separator`）与周视图吸顶头
-            （`.week-sticky-header`）—— 分隔线高于日期头，因为它压在日期头上面
+     20     日视图吸顶日期带（`.calendar-day-band`，「今天」药丸在这里）
+            与周视图吸顶头（`.week-sticky-header`）
      22     覆盖式日期详情面板（窄容器下）
      24–35  **临时层**：插入线／位移预览 24、拖拽预览与落点幽灵 35
      30     浮动按钮（`.back-to-now`）
-   规则：**临时层永远高于吸顶头**（拖拽反馈不能被吸顶带挡住），**吸顶头永远高于轨道内容**
-   （否则内容滚到头部下方时会盖住日期与「今天」）。改任何一档都要同时检查这三条。
+   规则：**临时层永远高于吸顶带**（拖拽反馈不能被吸顶带挡住），**吸顶带永远高于轨道内容**
+   （否则内容滚到头部下方时会盖住日期与「今天」）。改任何一档都要同时检查这两条。
    回归判据用 `document.elementFromPoint`（`toBeVisible()` 查不出遮挡），见
    `e2e/phase1.spec.ts` 的 `phase 4 M13` 用例。
    --------------------------------------------------------------------------- */
 .calendar-page[data-calendar-zoom="compact"] { --calendar-hour-height: 36px; --calendar-month-row-height: 64px; }
 .calendar-page[data-calendar-zoom="detailed"] { --calendar-hour-height: 64px; --calendar-month-row-height: 104px; }
-.calendar-toolbar { display: flex; justify-content: space-between; align-items: center; margin: 6px 0 4px; padding: 8px 12px; color: var(--muted); font-size: .8125rem; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-low); flex-wrap: wrap; gap: 10px; }
-.calendar-toolbar > span { color: var(--muted-strong); font-weight: 600; font-variant-numeric: tabular-nums; }
-.calendar-toolbar label { display: flex; align-items: center; gap: 8px; }
-.calendar-toolbar select { padding: .35rem .5rem; }
-.calendar-zoom { padding: 3px; gap: 2px; }
-.calendar-zoom button { min-height: 36px; padding: .35rem .8rem; font-size: .75rem; gap: 5px; }
-.calendar-zoom button svg { color: currentColor; opacity: .8; }
-.actual-record-toggle { min-height: 36px; padding-inline: 10px; border-radius: 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); transition: background .12s ease, border-color .12s ease; gap: 6px; }
+/* 视图状态条：不是独立卡片，只是页头下方一行紧凑控制。
+   左＝该视图的显示模式（仅日视图）＋密度；右＝实际记录开关＋「显示 ⋯」。
+   所有控件走 2.125rem 紧凑档；200% 下根字号翻倍，这一行仍保持单行。 */
+.calendar-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 2.125rem; color: var(--muted); font-size: .75rem; flex-wrap: wrap; row-gap: 4px; }
+.calendar-toolbar > div { display: flex; align-items: center; gap: 8px; height: 2.125rem; }
+/* A6／F20③：右组按中线对齐；复选框标签自身也走 inline-flex，文字与勾选框同一条基线。 */
+.calendar-status-end { align-items: center; }
+.calendar-status-end .actual-record-toggle { display: inline-flex; align-items: center; }
+.calendar-status-end .actual-record-toggle input { margin: 0; }
+.calendar-toolbar .segmented { height: 2.125rem; padding: 2px; gap: 2px; flex: none; }
+.calendar-toolbar .segmented button { min-height: 0; height: 100%; padding: 0 .3rem; font-size: .75rem; }
+.actual-record-toggle { min-height: 2.125rem; padding-inline: .375rem; border-radius: 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); transition: background .12s ease, border-color .12s ease; gap: 6px; font-size: .75rem; }
 .actual-record-toggle:hover { background: var(--panel-strong); border-color: var(--line); }
 .actual-record-toggle input { flex: none; }
+.calendar-more-trigger { display: inline-flex; align-items: center; gap: 4px; height: 2.125rem; padding: 0 .375rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel); color: var(--muted-strong); font: inherit; font-size: .75rem; font-weight: 500; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.calendar-more-trigger:hover, .calendar-more-trigger[aria-expanded="true"] { background: var(--panel-strong); border-color: var(--line); color: var(--text); }
+.calendar-more-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.floating-panel.calendar-more-panel { width: min(14rem, calc(100vw - 24px)); padding: 6px; }
+.calendar-more-list { display: grid; gap: 2px; }
+.calendar-more-item { display: flex; align-items: center; gap: 8px; min-height: 2.75rem; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: .8rem; text-align: left; }
+.calendar-more-item:hover, .calendar-more-item[aria-pressed="true"] { background: var(--accent-softer); color: var(--accent-strong); }
+.calendar-more-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -1px; }
+.calendar-more-note { margin: 4px 8px 2px; color: var(--muted); font-size: .75rem; }
+/* 200% 下把两个长标签收短一档：开关仍可见，气泡入口仍可点。 */
+.calendar-actual-label-short { display: none; }
+.calendar-page[data-ui-scale="200"] .calendar-actual-label-full { display: none; }
+.calendar-page[data-ui-scale="200"] .calendar-actual-label-short { display: inline; }
+.calendar-page[data-ui-scale="200"] .calendar-more-label { display: none; }
 .calendar-viewport { min-height: 0; overflow: auto; container-type: inline-size; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; box-shadow: var(--shadow-low); scrollbar-gutter: stable; }
-.calendar-grid { height: calc(52px + (var(--calendar-hour-height) * 24)); min-width: 720px; display: grid; grid-template-columns: 58px repeat(7, minmax(84px, 1fr)); background: var(--panel); }
-.calendar-grid.day { min-width: 520px; grid-template-columns: 58px minmax(400px, 1fr); }
-.week-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.week-calendar-layout.with-detail { grid-template-columns: minmax(720px, 1fr) minmax(260px, 320px); }.week-calendar-main { min-width: 720px; }.week-sticky-header { position: sticky; top: 0; z-index: 20; min-width: 720px; background: var(--panel); box-shadow: 0 1px 0 var(--line-soft); }.week-date-headers, .week-all-day { display: grid; grid-template-columns: 58px repeat(7, minmax(84px, 1fr)); background: var(--panel); }.week-date-headers { min-height: 52px; border-bottom: 1px solid var(--line-soft); }.week-date-spacer { border-right: 1px solid var(--line-soft); background: var(--panel-strong); }.week-date-headers button { min-width: 0; border: 0; border-right: 1px solid var(--line-soft); background: var(--panel); color: var(--text); display: flex; justify-content: center; align-items: center; gap: 6px; transition: background .12s ease; }.week-date-headers button:last-child { border-right: 0; }.week-date-headers button:hover { background: var(--panel-strong); }.week-date-headers strong { color: var(--muted); font-size: .75rem; }
-.week-all-day { min-width: 720px; border-bottom: 1px solid var(--line-soft); }
-.week-all-day-label { padding: 6px 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border-right: 1px solid var(--line-soft); color: var(--muted); font-size: .68rem; background: var(--panel-strong); }
-.week-all-day-label > span { color: var(--muted-strong); font-weight: 600; font-size: .7rem; }
-.week-all-day-label button { min-width: 44px; min-height: 28px; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .65rem; font-weight: 600; padding: 0 8px; transition: background .12s ease, border-color .12s ease; }
+.calendar-grid { height: calc(var(--calendar-hour-height) * 24); min-width: var(--calendar-min-week); display: grid; grid-template-columns: var(--calendar-gutter) repeat(7, minmax(var(--calendar-week-column), 1fr)); background: var(--panel); }
+.calendar-grid.day { min-width: var(--calendar-min-day); grid-template-columns: var(--calendar-gutter) minmax(var(--calendar-day-column), 1fr); }
+.week-calendar-layout { position: relative; min-width: var(--calendar-min-week); min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.week-calendar-layout.with-detail { grid-template-columns: minmax(var(--calendar-min-week), 1fr) minmax(260px, 320px); }.week-calendar-main { min-width: var(--calendar-min-week); }.week-sticky-header { position: sticky; top: 0; z-index: 20; min-width: var(--calendar-min-week); background: var(--panel-strong); box-shadow: 0 1px 0 var(--line-soft); }.week-date-headers, .week-all-day { display: grid; grid-template-columns: var(--calendar-gutter) repeat(7, minmax(var(--calendar-week-column), 1fr)); background: transparent; }.week-date-headers { min-height: 2.75rem; }.week-date-spacer { border-right: 1px solid var(--line-soft); background: transparent; }.week-date-cell { position: relative; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 2px; border-right: 1px solid var(--line-soft); background: transparent; transition: background .12s ease; }.week-date-cell:last-child { border-right: 0; }.week-date-cell:hover { background: var(--panel); }.week-date-cell.selected { background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel)); box-shadow: inset 0 -2px 0 var(--accent-strong); }.week-date-main { min-width: 0; flex: 1 1 auto; align-self: stretch; border: 0; background: transparent; color: var(--text); display: flex; justify-content: center; align-items: center; gap: 6px; padding: 0; transition: background .12s ease; }.week-date-open { flex: none; display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-right: 2px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }.week-date-open:hover { background: var(--panel); color: var(--accent-strong); }.week-date-main:focus-visible, .week-date-open:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }.week-date-headers strong { color: var(--muted); font-size: .75rem; }
+/* 200%/960 的窄容器里，日期头还要放「今天 + 日号」；打开日视图的入口收成悬停／聚焦时才浮出的角标，
+   仍保留在 DOM 与 Tab 顺序里。 */
+@container (max-width: 760px) {
+  .week-date-open { position: absolute; top: 2px; right: 2px; width: 1.25rem; height: 1.25rem; margin: 0; opacity: 0; pointer-events: none; background: var(--panel); }
+  .week-date-cell:hover .week-date-open, .week-date-cell:focus-within .week-date-open { opacity: 1; pointer-events: auto; }
+}
+/* 底边由 `.week-sticky-header` 的一条 1px 阴影承担；这里不再加边框，
+   否则两行 44 + 44 会变成 89。 */
+.week-all-day { min-width: var(--calendar-min-week); min-height: 2.75rem; }
+/* A6／F18：日期头与全天区各一行 2.75rem，共用 panel-strong 底色，底边只留一条。 */
+.week-all-day-label { min-height: 2.75rem; padding: 0; display: flex; align-items: center; justify-content: center; gap: 0; border-right: 1px solid var(--line-soft); color: var(--muted); font-size: .75rem; background: transparent; }
+.week-all-day-label > span { color: var(--muted-strong); font-weight: 600; font-size: .75rem; white-space: nowrap; }
+.week-all-day-label button { min-width: 0; min-height: 0; height: 1.75rem; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .75rem; font-weight: 600; padding: 0 4px; white-space: nowrap; transition: background .12s ease, border-color .12s ease; }
 .week-all-day-label button:hover { background: var(--accent-soft); border-color: var(--accent); }
-.week-all-day-cell { min-width: 0; min-height: 64px; padding: 5px; display: grid; align-content: start; gap: 3px; border-right: 1px solid var(--line-soft); overflow: hidden; }
-.week-all-day-cell:last-child { border-right: 0; }.week-all-day-cell button { min-width: 0; min-height: 24px; overflow: hidden; border: 0; border-radius: 5px; padding: 3px 6px; background: var(--accent-soft); color: var(--accent-strong); display: flex; align-items: center; gap: 3px; font-size: .66rem; text-align: left; max-width: 100%; transition: background .12s ease; }
-.week-all-day-cell button:hover { background: color-mix(in srgb, var(--accent) 22%, var(--accent-soft)); }
-.week-all-day-cell button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.week-all-day-cell .week-all-day-overflow { background: transparent !important; color: var(--accent-strong) !important; border: 1px dashed var(--line) !important; }
-.week-all-day-cell .week-all-day-overflow:hover { background: var(--accent-soft) !important; border-color: var(--accent) !important; }.week-all-day.collapsed .week-all-day-label { grid-column: 1 / -1; min-height: 44px; grid-template-columns: auto auto; place-content: center; align-items: center; }.calendar-grid.week-body { height: calc(var(--calendar-hour-height) * 24); }.week-body .time-axis, .week-body .calendar-day { grid-template-rows: 1fr; }
+.week-all-day-cell { min-width: 0; min-height: 2.75rem; padding: 2px 4px; display: flex; align-items: center; gap: 3px; border-right: 1px solid var(--line-soft); overflow: hidden; }
+.week-all-day-cell:last-child { border-right: 0; }.week-all-day-chip { min-width: 0; min-height: 0; height: 1.75rem; flex: 0 1 auto; overflow: hidden; border: 0; border-radius: 5px; padding: 0 6px; background: var(--accent-soft); color: var(--accent-strong); display: flex; align-items: center; gap: 3px; font-size: .75rem; text-align: left; max-width: 100%; transition: background .12s ease; }
+.week-all-day-chip:hover { background: color-mix(in srgb, var(--accent) 22%, var(--accent-soft)); }
+.week-all-day-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.week-all-day-chip svg { flex: none; }
+.week-all-day-chip.week-all-day-more { flex: none; padding: 0 5px; font-variant-numeric: tabular-nums; }
+.week-all-day-panel { width: min(22rem, calc(100vw - 24px)); }
+.week-all-day-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.week-all-day-panel-head strong { font-size: .84rem; }
+.week-all-day-panel-head button { display: grid; place-items: center; width: 2rem; height: 2rem; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
+.week-all-day-panel-head button:hover { background: var(--panel-strong); color: var(--text); }
+.week-all-day-list { display: grid; gap: 2px; }
+.week-all-day-row { min-height: 2.75rem; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 8px; background: var(--panel-strong); color: var(--text); font: inherit; font-size: .8rem; text-align: left; }
+.week-all-day-row:hover { background: var(--accent-softer); color: var(--accent-strong); }
+.week-all-day-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.week-all-day-row svg, .week-all-day-panel-head svg { flex: none; }.week-all-day.collapsed .week-all-day-label { grid-column: 1 / -1; min-height: 44px; justify-content: center; gap: 8px; }.calendar-grid.week-body { height: calc(var(--calendar-hour-height) * 24); }.week-body .time-axis, .week-body .calendar-day { grid-template-rows: 1fr; }
 .day-viewport { overflow: hidden; }.month-viewport { overflow: auto; }
 .continuous-day-axis { height: 100%; overflow: auto; scrollbar-gutter: stable; position: relative; }
-.continuous-day-panel { min-width: 520px; border-bottom: 2px solid var(--line); }
-.continuous-day-separator { position: sticky; top: 0; z-index: 20; min-height: 40px; display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel-strong); color: var(--text); font-size: .8rem; font-weight: 600; }
-.continuous-day-panel .calendar-day > header, .continuous-day-panel .day-head-spacer { top: 40px; }
+.continuous-day-panel { min-width: var(--calendar-min-day); border-bottom: 2px solid var(--line); }
+.continuous-day-panel.is-previous-collapsed { min-height: 2.75rem; height: 2.75rem; }
+/* 连续日视图唯一的日期身份：44px（设计尺寸，rem 随界面缩放）吸顶带。
+   日期、今天、当天安排数与计划投入都只写这一处。 */
+.calendar-day-band { position: sticky; top: 0; z-index: 20; height: var(--collapsed-gap-height, 2.75rem); min-height: var(--collapsed-gap-height, 2.75rem); display: flex; align-items: center; gap: .5rem; padding: 0 .875rem; border-bottom: 1px solid var(--line); background: var(--panel-strong); color: var(--text); font-size: .8rem; }
+.calendar-day-band-date { flex: none; font-size: .84rem; font-weight: 600; white-space: nowrap; }
+.calendar-day-band-date span { color: var(--muted); font-weight: 500; }
+/* 「今天」药丸跟着日期带上移后**每一屏都在视口里**，axe 会真的评估它：
+   白字压 --accent 浅色实测 3.61、暗色 2.47（原先藏在日头里很少入镜才没被发现）。
+   换成同一家族的「柔底 + 强墨」（浅 4.89 / 暗 6.95），再补一条描边让它仍然读作一枚药丸。 */
+.calendar-day-band-today { flex: none; padding: .1rem .5rem; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; font-weight: 600; line-height: 1.4; }
+.calendar-day-band-summary { min-width: 0; overflow: hidden; color: var(--muted-strong); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.calendar-day-band-expand { flex: none; height: 100%; margin-left: auto; display: inline-flex; align-items: center; gap: .25rem; padding: 0 .375rem; border: 0; border-radius: .5rem; background: transparent; color: var(--accent-strong); font: inherit; font-size: .75rem; font-weight: 600; }
+.calendar-day-band-expand:hover, .calendar-day-band-expand:focus-visible { background: var(--accent-soft); }
+.calendar-day-band-expand svg { flex: none; }
 .month-calendar-layout { position: relative; min-width: 720px; min-height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); }.month-calendar-layout.with-detail { grid-template-columns: minmax(600px, 1fr) minmax(260px, 320px); }.month-calendar { height: 100%; min-height: calc(42px + (var(--calendar-month-row-height) * 6)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 42px repeat(6, minmax(var(--calendar-month-row-height), 1fr)); }
 /* 月历是 6×7 的表：`grid → row → columnheader／gridcell`。七列落在**行**上，外层只排 7 行
    （1 行表头 + 6 行日期），否则 `role="gridcell"` 就没有 `role="row"` 祖先（P4-11 修）。 */
@@ -631,45 +714,88 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .month-calendar [role="gridcell"]:nth-child(7n) { border-right: 0; }
 .month-calendar [role="gridcell"].adjacent-month { color: var(--muted); background: color-mix(in srgb, var(--panel-strong) 68%, var(--panel)); }
 .month-calendar [role="gridcell"].today { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent-soft) 22%, var(--panel)); }
-.month-calendar [role="gridcell"].selected { box-shadow: inset 0 0 0 2px var(--accent-strong); background: color-mix(in srgb, var(--accent-soft) 40%, var(--panel)); }.month-calendar [role="gridcell"]:focus-visible { position: relative; z-index: 2; outline: 3px solid var(--focus); outline-offset: -3px; }.month-calendar [role="gridcell"] small { color: var(--accent-strong); font-weight: 600; }.month-cell-summary { min-width: 0; display: grid; gap: 2px; }.month-summary-item, .month-summary-overflow { min-width: 0; min-height: 20px; overflow: hidden; border: 0; border-radius: 4px; padding: 2px 4px; background: var(--panel-strong); color: var(--muted); font-size: .66rem; line-height: 1rem; text-overflow: ellipsis; white-space: nowrap; text-align: left; }.month-summary-item.deadline { display: flex; align-items: center; gap: 3px; color: var(--accent-strong); background: var(--accent-soft); }.month-summary-item.completed { color: var(--success); }.month-summary-item.missed { color: var(--danger); }.month-summary-item.scheduled { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 12%, var(--panel-strong)); font-weight: 600; }.month-summary-overflow { color: var(--accent-strong); cursor: pointer; }
-.urgency-overdue { border-left: 3px solid var(--danger) !important; color: var(--danger) !important; }.urgency-today { border-left: 3px solid var(--accent-strong) !important; font-weight: 700; }.urgency-soon { border-left: 3px solid var(--accent) !important; }.urgency-later { opacity: .82; }.month-summary-item.milestone { display: flex; align-items: center; gap: 3px; color: var(--focus); background: color-mix(in srgb, var(--focus) 12%, var(--panel)); }.month-summary-item.projectDeadline { display: flex; align-items: center; gap: 3px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }.milestone-marker { border-left: 3px solid var(--focus) !important; }.project-deadline-marker { border-left: 3px solid var(--accent-strong) !important; }.week-all-day-cell .milestone-marker { background: color-mix(in srgb, var(--focus) 12%, var(--panel)); color: var(--focus); }.week-all-day-cell .project-deadline-marker { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent-strong); }
-.calendar-date-details { min-width: 0; padding: 14px; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); display: grid; align-content: start; gap: 14px; }.calendar-date-details > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }.calendar-date-details h2, .calendar-date-details h3, .calendar-date-details p { margin: 0; }.calendar-date-details section { display: grid; gap: 6px; }.calendar-date-details article { min-height: 44px; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 7px; align-items: center; padding: 6px; border-radius: 7px; background: var(--panel-strong); }.calendar-date-details article div { min-width: 0; display: grid; }.calendar-date-details article strong, .calendar-date-details article span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.calendar-date-details article span, .calendar-task-detail p { color: var(--muted); font-size: .72rem; }.calendar-task-detail { padding: 10px; border: 1px solid var(--line); border-radius: 9px; }.calendar-project-detail { padding: 10px; border: 1px solid var(--line); border-radius: 9px; display: grid; gap: 10px; }.calendar-project-milestones { display: grid; gap: 6px; }.calendar-project-milestones article.on-date { border: 1px solid var(--focus); }
+.month-calendar [role="gridcell"].selected { box-shadow: inset 0 0 0 2px var(--accent-strong); background: color-mix(in srgb, var(--accent-soft) 40%, var(--panel)); }.month-calendar [role="gridcell"]:focus-visible { position: relative; z-index: 2; outline: 3px solid var(--focus); outline-offset: -3px; }.month-calendar [role="gridcell"] small { color: var(--accent-strong); font-weight: 600; }.month-cell-summary { min-width: 0; display: grid; gap: 2px; }.month-cell-aggregate { min-width: 0; overflow: hidden; padding: 1px 4px; color: var(--muted); font-size: .75rem; line-height: 1.25rem; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }.month-summary-item, .month-summary-overflow { min-width: 0; min-height: 20px; overflow: hidden; border: 0; border-radius: 4px; padding: 2px 4px; background: var(--panel-strong); color: var(--muted); font-size: .75rem; line-height: 1.25rem; text-overflow: ellipsis; white-space: nowrap; text-align: left; }.month-summary-item.deadline { display: flex; align-items: center; gap: 3px; color: var(--accent-strong); background: var(--accent-soft); }.month-summary-item.completed { color: var(--success); }.month-summary-item.missed { color: var(--danger); }.month-summary-item.scheduled { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 12%, var(--panel-strong)); font-weight: 600; }.month-summary-overflow { color: var(--accent-strong); cursor: pointer; }
+.urgency-overdue { border-left: 3px solid var(--danger) !important; color: var(--danger) !important; }.urgency-today { border-left: 3px solid var(--accent-strong) !important; font-weight: 700; }.urgency-soon { border-left: 3px solid var(--accent) !important; }.urgency-later { opacity: .82; }
+/* 月格与全天胶囊里 `later` 只表示「不紧急」，不能靠整块透明度去强调 —— 会把文字一起稀释，
+   200% 下 axe 实测 color-contrast 失败；让图标与文字本身承担语义。 */
+.month-summary-item.urgency-later, .week-all-day-chip.urgency-later { opacity: 1; }.month-summary-item.milestone { display: flex; align-items: center; gap: 3px; color: var(--focus); background: color-mix(in srgb, var(--focus) 12%, var(--panel)); }.month-summary-item.projectDeadline { display: flex; align-items: center; gap: 3px; color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }.milestone-marker { border-left: 3px solid var(--focus) !important; }.project-deadline-marker { border-left: 3px solid var(--accent-strong) !important; }.week-all-day-cell .milestone-marker { background: color-mix(in srgb, var(--focus) 12%, var(--panel)); color: var(--focus); }.week-all-day-cell .project-deadline-marker { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--accent-strong); }
+.calendar-date-details { min-width: 0; padding: 14px; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); display: grid; align-content: start; gap: 14px; }.calendar-date-details > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }.calendar-date-details h2, .calendar-date-details h3, .calendar-date-details p { margin: 0; }.calendar-date-details section { display: grid; gap: 6px; }.calendar-date-details article { min-height: 44px; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 7px; align-items: center; padding: 6px; border-radius: 7px; background: var(--panel-strong); }.calendar-date-details article div { min-width: 0; display: grid; }.calendar-date-details article strong, .calendar-date-details article span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.calendar-date-details article span, .calendar-task-detail p { color: var(--muted); font-size: .75rem; }.calendar-task-detail { padding: 10px; border: 1px solid var(--line); border-radius: 9px; }.calendar-project-detail { padding: 10px; border: 1px solid var(--line); border-radius: 9px; display: grid; gap: 10px; }.calendar-project-milestones { display: grid; gap: 6px; }.calendar-project-milestones article.on-date { border: 1px solid var(--focus); }
 /* 窄容器下详情面板改为覆盖层。覆盖层必须给日历**让出**它占的宽度：否则最右几列
    （月视图的周六／周日）会被面板压在下面，既看不到也滚不到 —— 这就是
    「排程之后月视图没有显示」的现象。让位用 padding-right，覆盖层正好落在留白里
    （绝对定位的包含块是 padding box，right: 0 即留白右缘）。 */
 @container (max-width: 1040px) {
-  .week-calendar-layout.with-detail, .month-calendar-layout.with-detail { grid-template-columns: minmax(0, 1fr); min-width: 0; padding-right: min(320px, calc(100% - 58px)); }
-  .with-detail > .calendar-date-details { position: absolute; z-index: 22; inset: 0 0 0 auto; width: min(320px, calc(100% - 58px)); max-height: 100%; box-shadow: var(--shadow-float); }
+  .week-calendar-layout.with-detail, .month-calendar-layout.with-detail { grid-template-columns: minmax(0, 1fr); min-width: 0; padding-right: min(320px, calc(100% - var(--calendar-gutter))); }
+  .with-detail > .calendar-date-details { position: absolute; z-index: 22; inset: 0 0 0 auto; width: min(320px, calc(100% - var(--calendar-gutter))); max-height: 100%; box-shadow: var(--shadow-float); }
   /* 让出宽度后日历只剩 content box；这些 min-width 会把内容顶回覆盖层下面，必须一并放开。 */
   .with-detail .month-calendar, .with-detail .week-calendar-main, .with-detail .week-sticky-header { min-width: 0; }
   .with-detail .month-calendar-row { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-  .with-detail .week-date-headers, .with-detail .week-all-day { grid-template-columns: 58px repeat(7, minmax(0, 1fr)); }
+  .with-detail .week-date-headers, .with-detail .week-all-day { grid-template-columns: var(--calendar-gutter) repeat(7, minmax(0, 1fr)); }
+  .with-detail .calendar-grid.week { min-width: 0; grid-template-columns: var(--calendar-gutter) repeat(7, minmax(0, 1fr)); }
 }
-.time-axis, .calendar-day { min-width: 0; display: grid; grid-template-rows: 52px 1fr; }.time-axis { border-right: 1px solid var(--line); background: var(--panel-strong); }.day-head-spacer { position: sticky; top: 0; z-index: 19; background: var(--panel-strong); border-bottom: 1px solid var(--line); }.time-axis-track { position: relative; min-height: 0; }.time-axis-track > span { position: absolute; right: 7px; color: var(--muted); font-size: .78rem; line-height: 1rem; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
+/* 112px 列下限下，详情面板停靠需要 58 + 7×112 + 320 = 1162px；不足时详情改为贴顶侧栏，
+   周网格让出宽度（列宽因此可低于 112，并行上限按 96px 判据收到 2），避免选中日期反而
+   把详情挤出视口。周视图的时间轴本身纵向滚动，所以侧栏用 sticky 贴住滚动视口顶部；
+   绝对定位会跟着内容滚到 00:00 以上，选中后只剩一片空白。 */
+@container (max-width: 1162px) {
+  .week-calendar-layout.with-detail { grid-template-columns: minmax(0, 1fr) min(320px, calc(100% - var(--calendar-gutter))); min-width: 0; padding-right: 0; }
+  .week-calendar-layout.with-detail > .calendar-date-details { position: sticky; top: 0; align-self: start; z-index: 22; width: auto; max-height: none; box-shadow: var(--shadow-float); }
+  .with-detail .week-calendar-main, .with-detail .week-sticky-header { min-width: 0; }
+  .with-detail .week-date-headers, .with-detail .week-all-day { grid-template-columns: var(--calendar-gutter) repeat(7, minmax(0, 1fr)); }
+  .with-detail .calendar-grid.week { min-width: 0; grid-template-columns: var(--calendar-gutter) repeat(7, minmax(0, 1fr)); }
+}
+.time-axis, .calendar-day { min-width: 0; display: grid; grid-template-rows: 1fr; }.time-axis { border-right: 1px solid var(--line); background: var(--panel-strong); }.time-axis-track { position: relative; min-height: 0; }.time-axis-track > span { position: absolute; right: 7px; color: var(--muted); font-size: .78rem; line-height: 1rem; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
 .time-axis-track > span:first-child { transform: translateY(4px); }
-.calendar-day { border-right: 1px solid var(--line); }.calendar-day:last-child { border-right: 0; }.calendar-day.today { box-shadow: inset 0 0 0 1px var(--accent); }.calendar-day.selected { box-shadow: inset 0 0 0 2px var(--accent-strong); }.calendar-day > header { display: flex; justify-content: center; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 19; background: var(--panel); }.calendar-day > header strong { color: var(--muted); font-size: .75rem; }.calendar-day > header span { font-weight: 600; }.today-number { background: var(--accent); color: white; width: 27px; height: 27px; border-radius: 999px; display: grid; place-items: center; }
+.calendar-day { border-right: 1px solid var(--line); }.calendar-day:last-child { border-right: 0; }.calendar-day.today { box-shadow: inset 0 0 0 1px var(--accent); }.calendar-day.selected { box-shadow: inset 0 0 0 2px var(--accent-strong); }
+/* A5：与日视图吸顶带的「今天」药丸同一家族 —— 柔底 + 强墨 + 描边。
+   白字压 --accent 浅色 3.61、暗色 2.47；柔底实测浅 4.89 / 暗 6.95（A4 §6.4）。 */
+.today-number { flex: none; background: var(--accent-soft); color: var(--accent-strong); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); width: 27px; height: 27px; border-radius: 999px; display: grid; place-items: center; font-weight: 600; }
 .day-track { position: relative; background: repeating-linear-gradient(to bottom, transparent 0, transparent calc((100% / 24) - 1px), var(--line) calc(100% / 24)); min-height: 0; }.hour-line { position: absolute; inset-inline: 0; border-top: 1px solid transparent; pointer-events: none; }
 .day-track.folded-timeline { background: none; }.folded-timeline .hour-line { border-top-color: var(--line); }
 .timeline-map-segment { position: absolute; inset-inline: 0; pointer-events: none; }
 .drag-expanded-region { position: absolute; z-index: 8; inset-inline: 0; border: 1px dashed var(--accent); background: color-mix(in srgb, var(--accent-soft) 22%, transparent); }
-.collapsed-time-gap { position: absolute; z-index: 9; inset-inline: 0; min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 0; border-block: 1px solid var(--line); background: color-mix(in srgb, var(--panel-strong) 90%, var(--muted)); color: var(--text); font-size: .76rem; font-variant-numeric: tabular-nums; cursor: pointer; }.collapsed-time-gap::before, .collapsed-time-gap::after { content: ""; flex: 1; max-width: 90px; border-top: 1px dashed var(--muted); opacity: .55; }.collapsed-time-gap span { color: var(--muted); pointer-events: none; }.collapsed-time-gap:hover, .collapsed-time-gap:focus-visible { background: var(--accent-soft); color: var(--accent-strong); }.expanded-gap-toggle { position: absolute; z-index: 10; right: 7px; min-height: 44px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); box-shadow: var(--shadow-low); font-size: .7rem; transform: translateY(4px); }.expanded-gap-toggle:hover, .expanded-gap-toggle:focus-visible { color: var(--accent-strong); border-color: var(--accent); }
+.collapsed-time-gap { position: absolute; z-index: 9; inset-inline: 0; min-height: var(--collapsed-gap-height, 2.75rem); display: flex; align-items: center; justify-content: center; gap: .5rem; border: 0; border-block: 1px solid var(--line); background: color-mix(in srgb, var(--panel-strong) 90%, var(--muted)); color: var(--text); font-size: .75rem; font-variant-numeric: tabular-nums; }.collapsed-time-gap::before, .collapsed-time-gap::after { content: ""; flex: 1; max-width: 90px; border-top: 1px dashed var(--muted); opacity: .55; }.collapsed-time-gap:hover, .collapsed-time-gap:focus-within { background: var(--accent-soft); color: var(--accent-strong); }
+.collapsed-gap-main { min-height: var(--collapsed-gap-height, 2.75rem); display: inline-flex; align-items: center; gap: .5rem; padding: 0 .5rem; border: 0; border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: .75rem; font-variant-numeric: tabular-nums; cursor: pointer; }.collapsed-gap-main span { color: var(--muted); pointer-events: none; }.collapsed-time-gap:hover .collapsed-gap-main span, .collapsed-time-gap:focus-within .collapsed-gap-main span { color: var(--muted-strong); }
+.effective-day-expand { position: absolute; right: .5rem; height: 100%; padding: 0 .625rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--accent-strong); font: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; }
+.effective-day-expand:hover, .effective-day-expand:focus-visible { border-color: var(--accent); background: var(--panel-strong); }
+.expanded-gap-toggle { position: absolute; z-index: 10; right: 7px; min-height: calc(var(--collapsed-gap-height, 2.75rem) - 1rem); padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); box-shadow: var(--shadow-low); font-size: .75rem; transform: translateY(4px); }.expanded-gap-toggle:hover, .expanded-gap-toggle:focus-visible { color: var(--accent-strong); border-color: var(--accent); }
 .calendar-session.targeted-session { z-index: 8; border-color: var(--accent-strong); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-low); }
 .calendar-session.overlap-target { z-index: 9; border-color: var(--accent-strong); transform: scale(.96); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); transition: transform 160ms cubic-bezier(.2, 0, 0, 1); }
 .calendar-past-region { position: absolute; z-index: 0; inset: 0 0 auto; background: linear-gradient(180deg, color-mix(in srgb, var(--muted) 8%, transparent) 0%, color-mix(in srgb, var(--muted) 2%, transparent) 100%); pointer-events: none; }
 .calendar-now-line { position: absolute; z-index: 8; inset-inline: 0; height: 0; border-top: 0; pointer-events: none; }
 .calendar-now-line::before { content: ""; position: absolute; inset-inline: 0; top: 0; border-top: 2px dashed var(--accent-strong); }
 .calendar-now-line::after { content: ""; position: absolute; right: -1px; top: -5px; width: 10px; height: 10px; border-radius: 999px; background: var(--accent-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 60%, transparent); }
-.calendar-now-line time { position: absolute; left: 4px; top: -22px; padding: 2px 7px; border-radius: 6px; background: var(--accent-strong); color: var(--action-text); font-size: .68rem; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-low); }
+.calendar-now-line time { position: absolute; left: 4px; top: -22px; padding: 2px 7px; border-radius: 6px; background: var(--accent-strong); color: var(--action-text); font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-low); }
 .default-slot { position: absolute; inset-inline: 3px; background: color-mix(in srgb, var(--accent) 6%, transparent); border-left: 2px solid color-mix(in srgb, var(--accent) 28%, transparent); pointer-events: none; overflow: hidden; }
 .default-slot span { position: absolute; top: 4px; left: 6px; right: 6px; font-size: .75rem; line-height: 1.15rem; color: var(--accent-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-.calendar-session { container-type: size; position: absolute; z-index: 2; inset-inline: 4px; min-height: 25px; border: 1px solid color-mix(in srgb, var(--accent) 72%, var(--line)); border-left: 3px solid var(--accent-strong); border-radius: 7px; background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); padding: 4px 6px 10px; overflow: hidden; cursor: grab; box-shadow: 0 1px 2px rgb(35 31 27 / 6%); display: grid; align-content: start; transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), transform .12s ease, box-shadow .12s ease, z-index 0s; }
+/* A6／D10：字号与行高随**视图 + 档位**走。日视图 standard 起对齐全站 14px 基准；
+   周视图列窄（141px），取 12／13／14px 避免每 8 字换行。行高仍用 rem 表达，
+   高度容器查询按档写死 rem 字面量（见下方五档断点）。 */
+.calendar-page[data-calendar-view="day"] { --session-font-size: .75rem; --session-line-height: 1.125rem; }
+.calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] { --session-font-size: .875rem; --session-line-height: 1.375rem; }
+.calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] { --session-font-size: 1rem; --session-line-height: 1.625rem; }
+.calendar-page[data-calendar-view="week"] { --session-font-size: .75rem; --session-line-height: 1.125rem; }
+.calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] { --session-font-size: .8125rem; --session-line-height: 1.25rem; }
+.calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] { --session-font-size: .875rem; --session-line-height: 1.375rem; }
+/* 行的显隐仍交给盒子自己的高度容器查询；最小档保留标题 + 分类色条 + 状态图标。 */
+.calendar-session { container-type: size; position: absolute; z-index: 2; inset-inline: 4px; min-height: calc(1.375rem + 2px); border: 1px solid var(--line-soft); border-left: 3px solid var(--session-category, var(--accent-strong)); border-radius: 10px; background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); padding: .25rem 6px .5rem 6px; overflow: hidden; cursor: grab; box-shadow: 0 1px 2px rgb(35 31 27 / 6%); display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; font-size: var(--session-font-size, .75rem); line-height: var(--session-line-height, 1.125rem); transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), transform .12s ease, box-shadow .12s ease, z-index 0s; }
+.calendar-page:not([data-calendar-zoom="compact"]) .calendar-session { min-height: calc(1.875rem + 2px); }
+/* 紧凑档只有一行标题：上下内边距收到最小，24px 的最小卡才真的装得下。 */
+.calendar-page[data-calendar-zoom="compact"] .calendar-session { padding-block: .0625rem; }
+/* 200% 下 1.375rem + 2px 是 46px，比 30 分钟格 42px 还高 4px；内容盒本身正好是
+   calc(1.25rem + 2px)（200% 42px），把最小高度收回内容高度，重叠归零。 */
+.calendar-page[data-ui-scale="200"][data-calendar-zoom="compact"] .calendar-session { min-height: calc(1.25rem + 2px); }
 .calendar-session:hover { box-shadow: 0 4px 12px rgb(35 31 27 / 12%); z-index: 4; }
-.calendar-session time, .calendar-session span { font-size: .75rem; color: var(--muted); }
-.calendar-session strong { min-width: 0; font-size: .75rem; overflow-wrap: anywhere; }
+.calendar-session time, .calendar-session span { font-size: inherit; color: var(--muted); }
+.calendar-session strong { min-width: 0; font-size: inherit; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
 .calendar-session.current-schedule { z-index: 5; border-width: 2px; border-color: var(--accent-strong); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 24%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent); }
-.calendar-session.pending-review { z-index: 6; overflow: visible; border-width: 2px; border-color: color-mix(in srgb, var(--accent-strong) 70%, var(--line)); }
+/* 待回顾的区分靠 2px 描边 + 混色 + 图标；不再 `overflow: visible` 把内容画到网格上。 */
+.calendar-session.pending-review { z-index: 6; border-width: 2px; border-color: color-mix(in srgb, var(--accent-strong) 70%, var(--line)); }
 .calendar-session.completed { border-color: color-mix(in srgb, var(--success) 58%, var(--line)); background: color-mix(in srgb, var(--success) 8%, var(--panel)); }
+/* 状态描边会改整圈 `border-color`；分类色条必须始终留在左缘，不随状态退成强调色。 */
+.calendar-session.current-schedule, .calendar-session.pending-review, .calendar-session.completed,
+.calendar-session.missed, .calendar-session.targeted-session, .calendar-session.overlap-target,
+.calendar-session.planned-outline { border-left-color: var(--session-category, var(--accent-strong)); border-left-style: solid; border-left-width: 3px; }
 /* P4-13 §3：整卡 `opacity: .62` 换成**显式的去强调表面**。
    整卡降透明度会把卡片里的 --muted 文字一起稀释（浅色实测 2.38–2.48、暗色 3.88），
    与 UI-SPEC §视觉令牌基线「禁用态使用满足对比度的专用语义色而不是整体降低透明度」冲突。
@@ -680,31 +806,131 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .session-state, .session-status-icon { display: flex; align-items: center; gap: 3px; }
 /* 「待回顾」既是状态也是入口：卡片聚焦后 Tab 到这里按 Enter 就能打开动作气泡，
    不必把 Enter 从「编辑时间」上挪走（那是已定稿的键盘契约）。*/
-.session-review-trigger { padding: 1px 4px; min-height: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; text-align: left; }
+.session-review-trigger { padding: 0 4px; min-height: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; font: inherit; text-align: left; }
 .session-review-trigger:hover { background: var(--panel-strong); color: var(--accent-strong); }
 .session-state svg { flex: 0 0 auto; }
-.session-project { min-width: 0; color: var(--muted); font-size: .68rem !important; overflow-wrap: anywhere; }
-.session-progress-value { font-variant-numeric: tabular-nums; }
-.session-elapsed, .session-task-progress { position: absolute; inset-inline: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--muted) 22%, transparent); }
-.session-elapsed { bottom: 7px; height: 2px; }
-.session-task-progress { bottom: 2px; height: 4px; }.calendar-session[data-card-density="standard"] .session-task-progress { height: 2px; }.session-elapsed span, .session-task-progress span { display: block; height: 100%; border-radius: inherit; }.session-elapsed span { background: var(--accent-strong); }.session-task-progress span { background: var(--success); }.calendar-session[data-card-density="compact"] { align-content: center; padding: 3px 24px 3px 5px; }.calendar-session[data-card-density="compact"] .session-state { position: absolute; top: 5px; right: 5px; }.calendar-session[data-card-density="standard"] { padding-bottom: 7px; }
-@container (max-width: 124px) { .calendar-session .session-project { display: none; } }
-@container (max-width: 112px) { .calendar-session .session-progress-value { display: none; } }
-@container (max-width: 100px) { .calendar-session .session-status-icon > span { display: none; } .calendar-session .session-state { position: absolute; top: 4px; right: 4px; } }
-@container (max-width: 88px) { .calendar-session .session-time { display: none; } }
-.review-summary { font-size: .68rem !important; overflow-wrap: anywhere; }
+/* ---------------------------------------------------------------------------
+   A5／D8：行的显隐。
+   默认是最小档（标题 1 行 + 分类色条 + 状态图标角标）—— 紧凑档不论多高都停在这一档，
+   因为 60px/小时是「扫形状」的场合，时间靠轴位置读。标准／详细档再按**内容盒高度**
+   （容器查询的 min-height，单位 rem）逐级放出时间、状态短词、项目行与回顾摘要。
+   断点值 = 行数 × 1.125rem，另加 2px 边框容差；行数取「该档最多同时出现的行」，
+   所以永远不会为了多放一行而把最后一行压出卡外。
+   --------------------------------------------------------------------------- */
+/* 最小档的状态图标是一枚右上角角标：小底片保证标题从下面穿过时仍然读得清；
+   行版式（≥3 行内容盒）里它回到普通行，底片与内边距随之去掉。 */
+.calendar-session .session-state { position: absolute; z-index: 3; top: 2px; right: 2px; padding: 1px 2px; border-radius: 4px; background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.calendar-session .session-status-icon > span { display: none; }
+.calendar-session .session-deadline-flag { display: none; }
+.calendar-session .session-time,
+.calendar-session .session-meta,
+.calendar-session .review-summary,
+.calendar-session .session-elapsed,
+.calendar-session .session-task-progress { display: none; }
+/* 标准／详细档的进度不占行：2px 底边填充（详细档回到 4px 的粗条，与 2px 流逝条分开）。 */
+.calendar-page:not([data-calendar-zoom="compact"]) .calendar-session .session-task-progress,
+.calendar-page:not([data-calendar-zoom="compact"]) .calendar-session .session-elapsed { display: block; }
+/* 五档断点 = 行数 × 该档行单位 + 2px 边框容差。条件里写死 rem 字面量，
+   不依赖容器查询条件内的 var()（Chromium 对条件内自定义属性解析不稳）。
+   第 1 档（2 行）：起止时间
+   第 2 档（3 行）：状态行（图标 + 短词 + 截止旗）
+   第 3 档（4 行）：标准档标题第 2 行 / 详细档「项目 + 百分比」
+   第 4 档（5 行）：详细档「待回顾」摘要
+   第 5 档（6 行）：详细档标题第 2 行 */
+@container (min-height: calc(2.5rem + 2px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session .session-time { display: block; }
+}
+@container (min-height: calc(2.75rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session .session-time,
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-time { display: block; }
+}
+@container (min-height: calc(3.25rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-time { display: block; }
+}
+@container (min-height: calc(3.75rem + 2px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session .session-state { position: static; padding: 0; background: transparent; }
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session .session-status-icon > span { display: inline; }
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session .session-deadline-flag { display: inline-flex; }
+}
+@container (min-height: calc(4.125rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session .session-state,
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-state { position: static; padding: 0; background: transparent; }
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session .session-status-icon > span,
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-status-icon > span { display: inline; }
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session .session-deadline-flag,
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-deadline-flag { display: inline-flex; }
+}
+@container (min-height: calc(4.875rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-state { position: static; padding: 0; background: transparent; }
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-status-icon > span { display: inline; }
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-deadline-flag { display: inline-flex; }
+}
+@container (min-height: calc(5rem + 2px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session strong { -webkit-line-clamp: 2; }
+}
+@container (min-height: calc(5.5rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session strong { -webkit-line-clamp: 2; }
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-meta { display: flex; }
+}
+@container (min-height: calc(6.5rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-meta { display: flex; }
+}
+@container (min-height: calc(6.875rem + 2px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .review-summary { display: block; }
+}
+@container (min-height: calc(8.125rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .review-summary { display: block; }
+}
+@container (min-height: calc(8.25rem + 2px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session strong { -webkit-line-clamp: 2; }
+}
+@container (min-height: calc(9.75rem + 2px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session strong { -webkit-line-clamp: 2; }
+}
+/* 最小档的状态角标与右上角的编辑铅笔抢同一个位置：把铅笔让到角标左侧，
+   状态图标（M2 红线）始终露得出来、也点得到。紧凑档永远停在角标形态；
+   标准／详细档在状态行还没放出来之前让位。 */
+.calendar-page[data-calendar-zoom="compact"] .calendar-session .session-edit-button { top: 1px; right: 20px; }
+@container (max-height: calc(3.75rem + 1px)) {
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="standard"] .calendar-session .session-edit-button { right: 20px; }
+}
+@container (max-height: calc(4.125rem + 1px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="standard"] .calendar-session .session-edit-button,
+  .calendar-page[data-calendar-view="week"][data-calendar-zoom="detailed"] .calendar-session .session-edit-button { right: 20px; }
+}
+@container (max-height: calc(4.875rem + 1px)) {
+  .calendar-page[data-calendar-view="day"][data-calendar-zoom="detailed"] .calendar-session .session-edit-button { right: 20px; }
+}
+.session-meta { min-width: 0; align-items: center; gap: .375rem; }
+.session-project { min-width: 0; flex: 1 1 auto; color: var(--muted); font-size: inherit !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-progress-value { flex: none; font-variant-numeric: tabular-nums; }
+.session-elapsed, .session-task-progress { overflow: hidden; background: color-mix(in srgb, var(--muted) 22%, transparent); }
+.session-elapsed { position: absolute; inset-inline: .375rem; bottom: .4375rem; height: 2px; border-radius: 999px; }
+/* A6／F20④：任务进度条进文档流，紧跟标题／摘要的最后一行，卡底留白不再被它钉住。 */
+.session-task-progress { position: relative; width: 100%; height: 2px; margin-top: .125rem; border-radius: 999px; }
+.calendar-page[data-calendar-zoom="detailed"] .calendar-session .session-task-progress { height: 4px; }
+.session-elapsed span, .session-task-progress span { display: block; height: 100%; border-radius: inherit; }
+.session-elapsed span { background: var(--accent-strong); }
+.session-task-progress span { background: var(--success); }
+/* 宽度断点仍是 px（宽度不随界面缩放走）。这几条要压过上面的高度断点，
+   所以选择器也带 `[data-calendar-zoom]`，与高度规则同特异性、靠源序取胜。 */
+@container (max-width: 124px) { .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-project { display: none; } }
+@container (max-width: 112px) { .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-progress-value { display: none; } .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-meta { display: none; } }
+@container (max-width: 100px) { .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-status-icon > span { display: none; } .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-state { position: absolute; top: .25rem; right: .25rem; padding: 1px 2px; background: color-mix(in srgb, var(--panel) 82%, transparent); } }
+@container (max-width: 88px) { .calendar-page[data-calendar-view][data-calendar-zoom] .calendar-session .session-time { display: none; } }
+.review-summary { font-size: inherit !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 待回顾动作现在是 FloatingPanel（非模态 dialog）里的按钮组：定位、开合、Esc、
    焦点归还都归浮层宿主管。这里只负责排布 —— 不再自己 fixed 定位 + 定时器显隐，
    那样鼠标从卡片移到「更新进度」滑块上就会把面板关掉。*/
 .session-review-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 0; border: 0; background: transparent; box-shadow: none; }
-.session-review-actions button { min-height: 44px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .72rem; }
+.session-review-actions button { min-height: 44px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-strong); color: var(--text); font-size: .75rem; }
 .session-review-actions button:hover { color: var(--accent-strong); }
 .session-review-actions .progress-control { flex-basis: 100%; min-width: 250px; }
 /* P4-12：前景走 --actual-record-text（专用 token，不再借用给实色按钮配的 --action-text
    —— 浅色下白字落在被稀释过的橙底上只有 2.82:1）。
    P4-13：底色从「满饱和橙（accent 82%）」减重为「淡底 + 左侧 4px 色条」（accent 30%），
    观感从「实体高亮」回到「记录层」；前景因此也按主题成对声明，见 `:root` 的说明。 */
-.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: var(--actual-record-surface); color: var(--actual-record-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .68rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-actual-record { container-type: size; position: absolute; z-index: 7; inset-inline: 12px 4px; min-height: 22px; overflow: hidden; display: grid; align-content: start; padding: 4px 6px; border: 1px solid var(--accent-strong); border-left-width: 4px; border-radius: 6px; background: var(--actual-record-surface); color: var(--actual-record-text); box-shadow: var(--shadow-low); pointer-events: none; }.calendar-actual-record.running { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); }.calendar-actual-record span, .calendar-actual-record time { font-size: .75rem; color: inherit; }.calendar-actual-record strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .back-to-now { position: absolute; z-index: 30; right: 18px; bottom: 18px; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid var(--accent); border-radius: 999px; background: var(--panel); color: var(--accent-strong); box-shadow: var(--shadow-float); font-weight: 600; }
 /* P4-13 §4：叠加层按可用高度**逐行**隐藏，不让某一行被单独压成 0。
    P4-12 §6.3 的实测：200% 下正文行高 44px、三行要 132px，而 1 小时的叠加层只有 72px；
@@ -721,8 +947,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 @container (max-height: calc(2.75rem + 9px)) { .calendar-actual-record span { display: none; } }
 .resize-handle { position: absolute; height: 9px; inset-inline: 0; bottom: 0; border: 0; background: transparent; cursor: ns-resize; }.resize-handle::after { content: ""; display: block; margin: 4px auto; width: 24px; border-top: 2px solid var(--accent-strong); }
 .session-edit-button { position: absolute; top: 3px; right: 3px; z-index: 2; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }.calendar-session[data-card-density="detailed"] .session-edit-button, .calendar-session:hover .session-edit-button, .calendar-session:focus-within .session-edit-button { opacity: 1; }.session-edit-button:hover { background: var(--panel-strong); color: var(--accent-strong); }
-.calendar-session.missed { border-style: dashed; border-left-style: solid; border-color: color-mix(in srgb, var(--muted) 70%, var(--line)); background: color-mix(in srgb, var(--muted) 16%, var(--panel)); }
-.drag-time-preview { position: fixed; z-index: 90; padding: 4px 10px; border-radius: 7px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); box-shadow: var(--shadow-float); font-size: .72rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.calendar-session.missed { border-style: dashed; border-color: color-mix(in srgb, var(--muted) 70%, var(--line)); border-left-style: solid; border-left-width: 3px; border-left-color: var(--session-category, var(--accent-strong)); background: color-mix(in srgb, var(--muted) 16%, var(--panel)); }
+.drag-time-preview { position: fixed; z-index: 90; padding: 4px 10px; border-radius: 7px; background: color-mix(in srgb, var(--text) 94%, transparent); color: var(--panel); box-shadow: var(--shadow-float); font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 .drag-time-preview.is-above { transform: translateY(-100%); }
 
 .project-form { display: grid; gap: 14px; }.project-form label, .modal label { display: grid; gap: 6px; color: var(--muted); font-size: .78rem; }.project-form input, .project-form textarea { width: 100%; }.form-actions { justify-content: flex-end; }
@@ -972,20 +1198,17 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .habit-form .weekday-picker { width: 100%; }
 .session-edit-fields > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding-bottom: 6px; border-bottom: 1px dashed var(--line-soft); }
 .session-edit-fields > header strong { min-width: 0; overflow-wrap: anywhere; font-size: .8rem; }
-.session-edit-fields .session-edit-popover-label { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--muted); font-size: .7rem; }
+.session-edit-fields .session-edit-popover-label { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; color: var(--muted); font-size: .75rem; }
 .session-edit-fields label { display: grid; gap: 4px; color: var(--muted); font-size: .74rem; }
-.session-edit-fields small { color: var(--muted); font-size: .72rem; }
-.calendar-toolbar > div { display: flex; align-items: center; gap: 10px; }.time-block-form { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(120px, .75fr)) auto; align-items: end; gap: 8px; margin-bottom: 8px; padding: 10px; }.time-block-form label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }.time-block-form .form-actions { flex-wrap: nowrap; }
-.magnet-control { min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: .42rem .75rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--panel); color: var(--muted); transition: background .12s ease, border-color .12s ease, color .12s ease; }
-.magnet-control:hover { background: var(--panel-strong); border-color: var(--line); color: var(--text); }
-.magnet-control.active { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: var(--accent-soft); color: var(--accent-strong); }
-.magnet-control.active:hover { background: color-mix(in srgb, var(--accent) 14%, var(--accent-soft)); }
+.session-edit-fields small { color: var(--muted); font-size: .75rem; }
+.time-block-form { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(120px, .75fr)) auto; align-items: end; gap: 8px; margin-bottom: 8px; padding: 10px; }.time-block-form label { display: grid; gap: 4px; color: var(--muted); font-size: .75rem; }.time-block-form .form-actions { flex-wrap: nowrap; }
 
 /* 落点指示框（虚线框）：高度按真实时长算，但**不得矮于卡片** —— 15–30 分钟的短安排
    在紧凑比例下只有 12–24px，比卡片还矮就既看不清也对不准（用户反馈"太短"）。
    移动时用同一段过渡扫过格线，而不是一格一格跳。*/
-.calendar-drag-preview { position: absolute; z-index: 35; inset-inline: 4px; min-height: 32px; display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, height; animation: drag-preview-in 120ms ease-out; }
-.calendar-drag-ghost { position: absolute; z-index: 35; min-height: 32px; display: grid; align-items: center; justify-content: center; box-sizing: border-box; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), left 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1), width 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, left, height, width; animation: drag-preview-in 120ms ease-out; }
+.calendar-drag-preview { position: absolute; z-index: 35; inset-inline: 4px; min-height: calc(1.875rem + 2px); display: grid; align-items: center; justify-content: center; padding: 4px 10px; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, height; animation: drag-preview-in 120ms ease-out; }
+/* 落点框与卡片共用同一个最小高度（卡片 200% 下会长到 rem 尺度，px 的 32 会变矮）。 */
+.calendar-drag-ghost { position: absolute; z-index: 35; min-height: calc(1.875rem + 2px); display: grid; align-items: center; justify-content: center; box-sizing: border-box; border: 2px dashed var(--accent-strong); border-radius: 8px; background: transparent; color: var(--text); pointer-events: none; box-shadow: none; transition: top 150ms cubic-bezier(.2, 0, 0, 1), left 150ms cubic-bezier(.2, 0, 0, 1), height 150ms cubic-bezier(.2, 0, 0, 1), width 150ms cubic-bezier(.2, 0, 0, 1); will-change: top, left, height, width; animation: drag-preview-in 120ms ease-out; }
 .calendar-drag-ghost > span { background: color-mix(in srgb, var(--accent-soft) 86%, transparent); border-radius: 6px; padding: 3px 12px; font-size: .78rem; font-weight: 600; color: var(--accent-strong); white-space: nowrap; letter-spacing: .01em; }
 .week-body { position: relative; }
 @keyframes drag-preview-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -993,8 +1216,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .calendar-drag-preview.overlap { border-style: solid; border-width: 2px; border-color: var(--accent-strong); transform: scale(.97); box-shadow: var(--ring-accent); }
 .calendar-drag-preview.overlap > span { background: color-mix(in srgb, var(--accent) 32%, var(--panel-strong)); color: var(--accent-strong); }
 .calendar-drag-preview.insert-before, .calendar-drag-preview.insert-after { border-color: var(--accent); }
-.calendar-insert-line { position: absolute; z-index: 24; left: 1px; right: 1px; height: 2px; background: var(--accent-strong); pointer-events: none; }.calendar-insert-line::before, .calendar-insert-line::after { content: ""; position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-strong); }.calendar-insert-line::before { left: 0; }.calendar-insert-line::after { right: 0; }.calendar-insert-line span { position: absolute; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 5px; background: var(--accent-strong); color: var(--action-text); font-size: .65rem; white-space: nowrap; }
-.calendar-shift-preview { position: absolute; z-index: 24; inset-inline: 5px; display: grid; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel) 72%, transparent); opacity: .55; pointer-events: none; }.calendar-shift-preview strong, .calendar-shift-preview time { overflow: hidden; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-insert-line { position: absolute; z-index: 24; left: 1px; right: 1px; height: 2px; background: var(--accent-strong); pointer-events: none; }.calendar-insert-line::before, .calendar-insert-line::after { content: ""; position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-strong); }.calendar-insert-line::before { left: 0; }.calendar-insert-line::after { right: 0; }.calendar-insert-line span { position: absolute; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 5px; background: var(--accent-strong); color: var(--action-text); font-size: .75rem; white-space: nowrap; }
+.calendar-shift-preview { position: absolute; z-index: 24; inset-inline: 5px; display: grid; padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 62%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel) 72%, transparent); opacity: .55; pointer-events: none; }.calendar-shift-preview strong, .calendar-shift-preview time { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 /* 拖动中的源卡片只能变「淡」，**绝不能**被设为不可命中。
    浏览器在拖拽持续期间会不断用指针位置去命中拖拽源：`dragstart` 里把源设成
    `pointer-events: none`（或任何让它不再可命中的写法），Chromium 会在 `dragstart`
@@ -1004,9 +1227,9 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 落点覆盖那一份是"还没写进去的位置"：可以看，不该点。 */
 .calendar-session.is-landed { pointer-events: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), var(--shadow-low); }
 .calendar-session.is-resizing { opacity: .85; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--shadow-low); transition: height .16s ease-out, opacity .14s ease, box-shadow .14s ease; }
-.concurrent-summary { position: absolute; z-index: 7; inset: auto 4px 4px; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .68rem; cursor: pointer; }.concurrent-expanded-list { position: absolute; z-index: 6; left: 8px; right: 8px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--accent); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-float); }.concurrent-expanded-list button { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 7px; border: 0; border-radius: 6px; background: var(--panel-strong); color: var(--text); text-align: left; }.concurrent-expanded-list time { color: var(--muted); font-size: .7rem; white-space: nowrap; }
-.simultaneous-count { position: absolute; z-index: 6; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 999px; background: var(--panel); color: var(--accent-strong) !important; font-size: .62rem !important; white-space: nowrap; }
-.blank-hover-cue { position: absolute; z-index: 9; left: 50%; display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent-soft) 72%, transparent); color: var(--accent-strong); font-size: .68rem; opacity: .72; pointer-events: none; transform: translate(-50%, -50%); }.blank-range-preview { position: absolute; z-index: 8; inset-inline: 3px; min-height: 6px; border: 1px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 55%, transparent); pointer-events: none; }.blank-action-bubble { position: absolute; z-index: 40; left: 12px; min-width: 240px; width: max-content; max-width: calc(100vw - 80px); display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: var(--shadow-float); }
+.concurrent-summary { position: absolute; z-index: 7; inset: auto 4px 4px; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 6px; background: var(--panel); color: var(--accent-strong); font-size: .75rem; cursor: pointer; }.concurrent-expanded-list { position: absolute; z-index: 6; left: 8px; right: 8px; display: grid; gap: 3px; padding: 7px; border: 1px solid var(--accent); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-float); }.concurrent-expanded-list button { min-height: 44px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 7px; border: 0; border-radius: 6px; background: var(--panel-strong); color: var(--text); text-align: left; }.concurrent-expanded-list time { color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.simultaneous-count { position: absolute; z-index: 6; right: 4px; bottom: 4px; padding: 2px 5px; border-radius: 999px; background: var(--panel); color: var(--accent-strong) !important; font-size: .75rem !important; white-space: nowrap; }
+.blank-hover-cue { position: absolute; z-index: 9; left: 50%; display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent-soft) 72%, transparent); color: var(--accent-strong); font-size: .75rem; opacity: .72; pointer-events: none; transform: translate(-50%, -50%); }.blank-range-preview { position: absolute; z-index: 8; inset-inline: 3px; min-height: 6px; border: 1px dashed var(--accent-strong); border-radius: 6px; background: color-mix(in srgb, var(--accent-soft) 55%, transparent); pointer-events: none; }.blank-action-bubble { position: absolute; z-index: 40; left: 12px; min-width: 240px; width: max-content; max-width: calc(100vw - 80px); display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: var(--shadow-float); }
 .blank-action-bubble > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 2px; border-bottom: 1px dashed var(--line-soft); }
 .blank-action-bubble > header strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; color: var(--accent-strong); font-weight: 600; white-space: nowrap; letter-spacing: -.005em; }
 .blank-action-bubble > header button { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); display: inline-grid; place-items: center; transition: background .12s ease, color .12s ease; }
@@ -1034,18 +1257,22 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .blank-task-picker button:hover .blank-task-icon { color: var(--accent-strong); }
 .blank-task-text { display: grid; gap: 1px; min-width: 0; flex: 1; }
 .blank-task-text strong { font-size: .8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.blank-task-text small { font-size: .7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.blank-task-text small { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .blank-task-picker > span.empty-inline { padding: 14px; text-align: center; border: 1px dashed var(--line); border-radius: 9px; }
 /* 时间块的 `min-height` **保持 px，不要换成 rem**。
    换成 rem 后 200% 下内容盒会被抬过 `@container (max-height: 26px)` 的阈值 → `time` 显形 →
    网格先把 44px 给它 → 带 `overflow: hidden`（最小尺寸 0）的标题只剩 0px（12 → 0，是回归）。
    把那条阈值一起换成 rem 则会改变 100% 下的隐藏范围，属设计决策，不是单位换算。
    三种取值的实测与代价见 P4-13 报告 §12.1。 */
-.calendar-time-block { container-type: size; position: absolute; z-index: 1; inset-inline: 7px; min-height: 28px; border: 1px dashed color-mix(in srgb, var(--muted) 60%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 88%, var(--muted)); padding: 6px 22px 8px 6px; display: grid; align-content: start; cursor: grab; transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), left .16s ease, box-shadow .12s ease, opacity .14s ease; }.calendar-time-block:active { cursor: grabbing; }.calendar-time-block time { color: var(--muted-strong); font-size: .68rem; }.calendar-time-block strong { font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A6／F20②：删除按钮的 44px 透明命中区（::before）会撑出 scrollWidth 并逐层上传成
+   日视图那条 2px 横溢。卡片裁掉外溢部分，命中区仍然留在卡内右上角。 */
+.calendar-time-block { container-type: size; position: absolute; z-index: 1; inset-inline: 7px; min-height: 28px; overflow: hidden; border: 1px dashed color-mix(in srgb, var(--muted) 60%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--panel-strong) 88%, var(--muted)); padding: 6px 22px 8px 6px; display: grid; align-content: start; cursor: grab; transition: top .2s cubic-bezier(.2, 0, 0, 1), height .2s cubic-bezier(.2, 0, 0, 1), left .16s ease, box-shadow .12s ease, opacity .14s ease; }.calendar-time-block:active { cursor: grabbing; }.calendar-time-block time { color: var(--muted-strong); font-size: .75rem; }.calendar-time-block strong { font-size: .75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calendar-time-block .time-block-delete { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; z-index: 3; }
 .calendar-time-block:hover .time-block-delete, .calendar-time-block:focus-within .time-block-delete { opacity: 1; }
 .calendar-time-block .time-block-delete:hover { background: var(--panel-strong); color: var(--danger); }
-.calendar-time-block .time-block-delete::before { content: ""; position: absolute; inset: -12px; }
+/* 扩大命中区只向上／向左长：向右或向下会在按钮自己的 scrollWidth 里留下 12px，
+   再逐层上传成整条日视图的横溢（A6／F20②）。 */
+.calendar-time-block .time-block-delete::before { content: ""; position: absolute; inset: -12px 0 0 -12px; }
 .calendar-time-block .time-block-handle { position: absolute; inset-inline: 0; height: 9px; border: 0; background: transparent; cursor: ns-resize; z-index: 2; }
 .calendar-time-block .time-block-handle-top { top: 0; }
 .calendar-time-block .time-block-handle-bottom { bottom: 0; }
@@ -1714,7 +1941,7 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .import-source { color: var(--muted); font-size: .8rem; }
 
 @media (max-width: 1199px) {
-  .app-shell { grid-template-columns: 4rem minmax(0, 1fr); }
+  .app-shell { --pool-overlay-inset: 4rem; grid-template-columns: 4rem minmax(0, 1fr); }
   .app-shell.with-task-pool { grid-template-columns: 64px minmax(0, 1fr); }
   .app-shell > .pool-splitter-region { display: none; }
   .workspace-main { padding-inline: 18px; }
@@ -1728,6 +1955,12 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
   .app-shell.with-task-pool.day-view-pool > .task-pool { position: static; inset: auto; width: auto; box-shadow: none; }
   .app-shell.with-task-pool.day-view-pool > .pool-splitter-region { display: block; }
 }
+/* 宽窗口下的覆盖态：周视图停靠后不足 902 设计宽（1200 + 停靠池是最常见组合）时，
+   React 只切 poolUsesOverlay 并加 .pool-overlay，复用 960–1199 的遮罩／Esc／浮钮机制。 */
+.app-shell.with-task-pool.pool-overlay { grid-template-columns: var(--pool-overlay-inset, 4.375rem) minmax(0, 1fr); }
+.app-shell.pool-overlay > .pool-splitter-region { display: none; }
+.app-shell.pool-overlay > .task-pool-scrim { display: block; position: fixed; z-index: 24; inset: 0 0 0 var(--pool-overlay-inset, 4.375rem); border: 0; background: rgb(22 17 12 / 24%); cursor: default; }
+.app-shell.pool-overlay > .task-pool { position: fixed; z-index: 25; inset: 0 0 0 auto; width: min(360px, calc(100vw - var(--pool-overlay-inset, 4.375rem))); box-shadow: var(--shadow-float); }
 @media (max-width: 1050px) {
   .page-header { align-items: flex-start; }
   .time-block-form { grid-template-columns: 1fr 1fr; }

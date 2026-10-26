@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel } from "./calendarSummary";
+import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel, formatCompactMinutes } from "./calendarSummary";
 import { EMPTY_WORKSPACE, type WorkspaceSnapshot } from "./native";
 
 describe("calendar day summary", () => {
@@ -56,7 +56,23 @@ describe("calendar day summary", () => {
     expect(summary.visible[0]).toMatchObject({ kind: "scheduled", label: "安排 2 项 · 14:00 起" });
     // 未执行与取消都不能重复算成「安排」。
     expect(summary.scheduledSessions.map((session) => session.id)).toEqual(["earlier", "later"]);
+    expect(summary.scheduledMinutes).toBe(120);
     expect(summary.missedTasks.map((task) => task.id)).toEqual(["task-1"]);
+  });
+
+  it("sums a cross-midnight arrangement once and formats the band's compact investment", () => {
+    const workspace: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      executionSessions: [
+        { id: "overnight", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-06", startLocal: "22:30", endLocal: "01:15", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+        { id: "short", taskId: "task-1", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "09:00", endLocal: "09:45", timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled" },
+      ],
+    };
+    expect(calendarDaySummary(workspace, "2026-08-05", "2026-08-05").scheduledMinutes).toBe(210);
+    expect(formatCompactMinutes(130)).toBe("2h10m");
+    expect(formatCompactMinutes(180)).toBe("3h");
+    expect(formatCompactMinutes(45)).toBe("45m");
+    expect(formatCompactMinutes(0)).toBe("");
   });
 
   it("aggregates project deadlines and milestones into the day summary after task deadlines", () => {

@@ -18,6 +18,8 @@ export interface CalendarDaySummary {
   date: string;
   /** 当天仍然成立的安排（`scheduled`）。自动排程写入的结果靠它出现在月历格子里。 */
   scheduledSessions: ExecutionSession[];
+  /** 这些安排的合计投入分钟数；跨午夜时段按自身时长计一次。 */
+  scheduledMinutes: number;
   deadlines: Task[];
   projectDeadlines: Project[];
   milestones: ProjectMilestone[];
@@ -96,6 +98,7 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
   return {
     date,
     scheduledSessions,
+    scheduledMinutes: scheduledSessions.reduce((sum, session) => sum + sessionMinutes(session), 0),
     deadlines,
     projectDeadlines,
     milestones,
@@ -106,6 +109,27 @@ export function calendarDaySummary(workspace: WorkspaceSnapshot, date: string, t
     visible: items.slice(0, 3),
     overflowCount: Math.max(0, items.length - 3),
   };
+}
+
+function sessionMinutes(session: ExecutionSession) {
+  const start = clockMinutes(session.startLocal);
+  let end = clockMinutes(session.endLocal);
+  if (session.endLocalDate !== session.localDate || end <= start) end += 1440;
+  return Math.max(0, end - start);
+}
+
+function clockMinutes(value: string) {
+  if (value === "24:00") return 1440;
+  const [hours, minutes] = value.split(":").map(Number);
+  return Math.max(0, Math.min(1440, hours * 60 + minutes));
+}
+
+/** 日期带上的紧凑投入写法：2h10m／45m／3h。 */
+export function formatCompactMinutes(minutes: number) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "";
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours ? `${hours}h` : ""}${rest ? `${rest}m` : ""}`;
 }
 
 function uniqueTasks(tasks: Array<Task | undefined>) {

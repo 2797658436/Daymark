@@ -43,7 +43,7 @@ export function insertionChanges(sessions: ExecutionSession[], sourceId: string,
   return changes;
 }
 
-export function concurrentLayouts(sessions: ExecutionSession[]): Map<string, ConcurrentLayout> {
+export function concurrentLayouts(sessions: ExecutionSession[], maxSideBySide = 3): Map<string, ConcurrentLayout> {
   const sorted = [...sessions].sort((a, b) => clockMinutes(a.startLocal) - clockMinutes(b.startLocal) || a.id.localeCompare(b.id));
   const output = new Map<string, ConcurrentLayout>();
   let group: ExecutionSession[] = []; let groupEnd = -1;
@@ -57,10 +57,14 @@ export function concurrentLayouts(sessions: ExecutionSession[]): Map<string, Con
       laneEnds[lane] = end;
       return { session, lane };
     });
-    const laneCount = laneEnds.length; const width = laneCount >= 4 ? 50 : 100 / laneCount;
-    const hiddenCount = assigned.filter((item) => item.lane >= 2).length;
-    const summarySessionId = assigned.find((item) => item.lane === 1)?.session.id;
-    assigned.forEach(({ session, lane }, index) => output.set(session.id, { left: laneCount >= 4 && lane >= 2 ? 100 : lane * width, width, hidden: laneCount >= 4 && lane >= 2, hiddenCount: session.id === summarySessionId ? hiddenCount : 0, groupId, totalCount: laneCount, showCount: laneCount > 1 && index === 0 }));
+    const laneCount = laneEnds.length;
+    // 超过上限才收成汇总卡；汇总态固定展示前两项（与「4 项以上」的既有规则一致）。
+    const collapsed = laneCount > maxSideBySide;
+    const visibleLanes = collapsed ? Math.min(2, maxSideBySide) : laneCount;
+    const width = 100 / visibleLanes;
+    const hiddenCount = assigned.filter((item) => item.lane >= visibleLanes).length;
+    const summarySessionId = assigned.find((item) => item.lane === visibleLanes - 1)?.session.id;
+    assigned.forEach(({ session, lane }, index) => output.set(session.id, { left: lane >= visibleLanes ? 100 : lane * width, width, hidden: lane >= visibleLanes, hiddenCount: session.id === summarySessionId ? hiddenCount : 0, groupId, totalCount: laneCount, showCount: laneCount > 1 && index === 0 }));
     group = []; groupEnd = -1;
   };
   for (const session of sorted) {

@@ -192,10 +192,38 @@ describe("settings persistence", () => {
       calendarView: "week",
       calendarAnchors: { day: null, week: "2026-08-10", month: null },
       calendarZoom: { day: "standard", week: "compact", month: "standard" },
-      calendarScale: { day: 72, week: 48, month: 120 },
+      // A6 起日视图上界是 240，200 是合法的连续值，不再回退。
+      calendarScale: { day: 200, week: 60, month: 120 },
     });
     expect(repository.normalize({ calendarZoom: { day: "detailed", week: "compact", month: "standard" } }).calendarScale)
-      .toEqual({ day: 96, week: 48, month: 120 });
+      .toEqual({ day: 216, week: 60, month: 120 });
+    // 旧偏好里的连续值（例如 72／48）仍在合法区间内，只改档位映射，不迁移用户已有的值。
+    expect(repository.normalize({ calendarScale: { day: 72, week: 48 } }).calendarScale)
+      .toEqual({ day: 72, week: 48, month: 120 });
+  });
+
+  /**
+   * A6／D9 的「档位忠实迁移」：只有用户点过档位（`calendarZoom.day` 存在）且连续值
+   * 恰好停在该档旧预设上时才改写；用户自己滚出来的 72／99 原样保留。
+   */
+  it("migrates only day tier presets that the user explicitly selected", () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    const day = (calendarZoom: unknown, value: unknown) => repository.normalize({ calendarZoom, calendarScale: { day: value } }).calendarScale.day;
+
+    expect(day({ day: "standard" }, 84)).toBe(168);
+    expect(day({ day: "detailed" }, 108)).toBe(216);
+    expect(day({ day: "compact" }, 60)).toBe(84);
+    // 档位与值必须属于同一档：standard 档里用户自己滚到 60 不算「旧紧凑预设」。
+    expect(day({ day: "standard" }, 60)).toBe(60);
+    // 没有点过档位时，84 可能只是旧默认值，也可能是手感值 —— 规则要求原样保留。
+    expect(day({ week: "compact" }, 84)).toBe(84);
+    expect(day(undefined, 84)).toBe(84);
+    for (const value of [72, 99, 167, 168]) {
+      expect(day({ day: "standard" }, value), `${value} 不是旧预设，必须原样保留`).toBe(value);
+    }
+    // 迁移是幂等的：第二次加载不会把 168 再改一次。
+    expect(day({ day: "standard" }, 168)).toBe(168);
+    expect(day({ day: "detailed" }, 216)).toBe(216);
   });
 
   it("keeps every calendar zoom preset inside the range normalization accepts", () => {
@@ -212,10 +240,20 @@ describe("settings persistence", () => {
     // 曾经越界的正是月视图 detailed：预设 160 高于上界 132，而校验失败的回退
     // 又调用同一个预设，于是规范化产出自己判为非法的值。
     expect(calendarScaleForZoom("month", "detailed")).toBe(160);
+    expect(calendarScaleForZoom("day", "compact")).toBe(84);
+    expect(calendarScaleForZoom("day", "standard")).toBe(168);
+    expect(calendarScaleForZoom("day", "detailed")).toBe(216);
+    expect(calendarScaleForZoom("week", "compact")).toBe(60);
+    expect(calendarScaleForZoom("week", "standard")).toBe(84);
+    expect(calendarScaleForZoom("week", "detailed")).toBe(108);
+    expect(CALENDAR_SCALE_RANGE.day).toEqual([28, 240]);
     expect(repository.normalize({ calendarZoom: { month: "detailed" } }).calendarScale.month).toBe(160);
     expect(repository.normalize({ calendarScale: { month: 160 } }).calendarScale.month).toBe(160);
     // 越界值仍必须回退到当前档位预设（默认 standard = 120）。
     expect(repository.normalize({ calendarScale: { month: 200 } }).calendarScale.month).toBe(120);
+    // 日视图新上界 240 合法；241 回退到当前档位预设。
+    expect(repository.normalize({ calendarScale: { day: 240 } }).calendarScale.day).toBe(240);
+    expect(repository.normalize({ calendarScale: { day: 241 } }).calendarScale.day).toBe(168);
   });
 
   it("keeps the day display mode as a persisted UI preference", () => {

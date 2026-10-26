@@ -8,7 +8,7 @@ import type { CalendarPosition, CalendarPositions, CalendarView, DefaultTimeSlot
 /**
  * 日历滚动仲裁与逻辑浏览位置（阶段 4 / P4-04 仲裁与内存记忆，P4-05 持久化）。
  *
- * 为什么不能跨视图复用 `scrollTop`：日视图有 52px 日期头、折叠区间与三日缓冲，
+ * 为什么不能跨视图复用 `scrollTop`：日视图有 44px 吸顶日期带、折叠区间与三日缓冲，
  * 周视图有吸顶日期头与全天区 —— 同样的像素在不同视图里不是同一个时间。
  * 因此这里保存的是逻辑坐标 `{date, minute, viewportRatio}`，恢复时再用
  * `lib/calendarTimeline` 的分钟／像素映射重新算像素。
@@ -87,7 +87,9 @@ export interface ViewportGeometry {
  *
  * 采样点落在折叠条上时取该条时间区间的**中点** —— 折叠条把整段非默认时间压成
  * 44px，按像素内插会随 1px 滚动剧烈跳变；取中点既稳定，也保证恢复时不必展开它。
- * 采样点落在日分隔条／面板头上（中心不在任何轨道内）时，取最近轨道的边缘并把
+ * 前一天只剩 44px 吸顶日期带时同理：那条带子就是「整天都折叠在这里」，
+ * 采样落上去取 00:00–24:00 的中点，恢复也落回带子，不需要先展开它。
+ * 采样点落在日期带／面板空隙上（中心不在任何轨道内）时，取最近轨道的边缘并把
  * `viewportRatio` 记成该边缘当时的屏幕比例，恢复时能把边缘放回原处。
  */
 export function sampleCalendarPosition(input: {
@@ -240,6 +242,8 @@ export interface CalendarViewportApi {
   revealSession: (sessionId: string) => void;
   /** 优先级 3：记录缩放前的指针锚点（在写入新比例之前调用）。 */
   captureZoomAnchor: (measurement: ZoomAnchorMeasurement) => void;
+  /** 优先级 4：三日缓冲重新对齐中间面板；恢复／首次定位会串在它之后落地。 */
+  requestBufferShift: (apply: () => boolean, onDiscard?: () => void) => void;
   /** 优先级 4：应用自己刚程序化写入过位置（三日缓冲平移等），这次 scroll 不是用户滚动。 */
   noteProgrammaticPosition: () => void;
   /** 只读：当前这次 scroll 是否仍落在应用自己刚写下的位置上。 */
@@ -282,7 +286,7 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const generationRef = useRef(0);
   /** 最近一次采样到的位置；切页／卸载时用它刷新内存。 */
   const latestRef = useRef<null | { view: TimelineView; position: CalendarPosition }>(null);
-  const pendingRef = useRef<null | { reason: CalendarScrollReason; generation: number; apply: () => boolean; frames: number }>(null);
+  const pendingRef = useRef<null | { reason: CalendarScrollReason; generation: number; apply: () => boolean; frames: number; discard?: () => void }>(null);
   const frameRef = useRef<number | null>(null);
   const detachRef = useRef<null | (() => void)>(null);
   const draggingRef = useRef(false);
@@ -327,11 +331,13 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     if (latest && latest.view === target) calendarPositions[target] = latest.position;
   }, []);
 
-  const cancelPending = useCallback(() => {
+  const cancelPending = useCallback((discard = true) => {
+    const intent = pendingRef.current;
     detachRef.current?.();
     detachRef.current = null;
     pendingRef.current = null;
     if (frameRef.current !== null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; }
+    if (discard) intent?.discard?.();
   }, []);
 
   /**
@@ -371,12 +377,29 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     });
   }, [cancelPending]);
 
-  const queue = useCallback((reason: CalendarScrollReason, apply: () => boolean) => {
+  const queue = useCallback((reason: CalendarScrollReason, apply: () => boolean, discard?: () => void) => {
     const generation = generationRef.current;
     const existing = pendingRef.current;
-    if (existing && existing.generation === generation && priorityOf(existing.reason) < priorityOf(reason)) return;
+    if (existing && existing.generation === generation) {
+      // 三日缓冲平移是恢复／首次定位的**前置步骤**，不是与它们竞争同一个目标：
+      // 两者按「先平移、后定位」串行落地，而不是让优先级把定位作废。
+      if (existing.reason === "bufferShift" && (reason === "restore" || reason === "initial")) {
+        const shift = existing.apply;
+        existing.apply = () => shift() && apply();
+        pump();
+        return;
+      }
+      if (reason === "bufferShift" && (existing.reason === "restore" || existing.reason === "initial")) {
+        const target = existing.apply;
+        existing.apply = () => apply() && target();
+        existing.discard = discard;
+        pump();
+        return;
+      }
+      if (priorityOf(existing.reason) < priorityOf(reason)) return;
+    }
     cancelPending();
-    const intent = { reason, generation, apply, frames: 0 };
+    const intent = { reason, generation, apply, frames: 0, discard };
     pendingRef.current = intent;
     // 「进入视图恢复」与「首次定位」让位于任何先发生的滚动：用户拖动、键盘滚动或
     // 程序化写入都比一次迟到的自动定位更权威（阶段 3 的 108px 位移就是这类争抢）。
@@ -397,6 +420,37 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     pump();
   }, [cancelPending, pump, scrollerFor]);
 
+  /**
+   * 优先级 4：三日缓冲重新对齐中间面板。
+   *
+   * 日视图在 layout effect 里提交这个请求。React 先跑子组件的 layout effect、后跑父组件的，
+   * 首屏直接挂载时父组件的 ref 也可能尚未挂上 —— 所以这里延后一个微任务：等父级按新视图／
+   * 日期递增完 generation、并把「进入恢复／首次定位」排进队列后，立刻写入对齐位置并上报。
+   * 平移必须在下一帧之前落地：否则用户从「下一段日期」直接开始拖拽时，面板会在拖拽中途
+   * 移动，落点被带到相邻的一天。恢复／首次定位仍在下一帧的 rAF 里排在它之后落地。
+   * 只有轨道还量不到时才退回优先级 4 的队列，由重试与 ResizeObserver 兜住。
+   */
+  const requestBufferShift = useCallback((apply: () => boolean, onDiscard?: () => void) => {
+    queueMicrotask(() => {
+      const pending = pendingRef.current;
+      const current = pending && pending.generation === generationRef.current ? pending : null;
+      if (apply()) {
+        // 旧的重试请求已被这次成功写入覆盖：只清队列，不触发 discard
+        // （它会清掉刚刚用过的跨日偏移，而写入本身已经复位了平移状态）。
+        if (current?.reason === "bufferShift") cancelPending(false);
+        return;
+      }
+      if (current?.reason === "bufferShift") {
+        current.apply = apply;
+        current.discard = onDiscard;
+        current.frames = 0;
+        pump();
+        return;
+      }
+      queue("bufferShift", apply, onDiscard);
+    });
+  }, [cancelPending, pump, queue]);
+
   const applyPosition = useCallback((position: CalendarPosition, target: TimelineView, anchorDate: string, options?: { resetHorizontal?: boolean }): boolean => {
     const root = rootRef.current;
     const scroller = scrollerFor(target);
@@ -405,7 +459,7 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     if (viewport.height <= 0) return false;       // 布局尚未测量：下一帧／等 ResizeObserver
     const tracks = measureTracks(root, target, viewport);
     const track = pickTrackForPosition(tracks, anchorDate, position);
-    if (!track) return true;                      // 没有轨道可对齐：不空转
+    if (!track) return false;                     // 轨道还没渲染／量不到：保持待处理，不要当成已落地
     if (track.height <= 0) return false;
     const next = scrollTopForCalendarPosition({ position, viewportHeight: viewport.height, track });
     if (next === null) return true;
@@ -596,8 +650,8 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
    * 「进入视图恢复」会被自己的定位当成「用户已经接管」而取消 —— 日视图进入时的
    * 三日缓冲重定位正是这种情况。
    *
-   * 它同时是优先级 4 的落点：平移直接由日视图写位置，所以同代里不会再排一个
-   * 与之争抢的恢复请求（日期变化本来也不会排队恢复）。
+   * 它同时是优先级 4 落点的上报：三日缓冲平移由 `requestBufferShift` 排进仲裁，
+   * 写入发生在同一个 rAF 里，写完立即上报，这次 scroll 才不会被当成用户滚动。
    */
   const noteProgrammaticPosition = useCallback(() => {
     // 同一次写入也是「不写偏好」的判据：三日缓冲平移不是用户在挑位置。
@@ -628,6 +682,7 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     flush,
     revealNow,
     revealSession,
+    requestBufferShift,
     captureZoomAnchor,
     noteProgrammaticPosition,
     isProgrammaticPosition,
@@ -675,8 +730,23 @@ function measureTracks(root: HTMLElement, target: TimelineView, viewport: Viewpo
   const tracks: TrackGeometry[] = [];
   for (const container of containers) {
     const trackDate = target === "day" ? container.dataset.calendarDate : container.dataset.dayDate;
+    if (!trackDate) continue;
+    // 前一天的 44px 吸顶带不是时间网格，但它代表「一整天都折叠在这里」：
+    // 采样落上去时按折叠条中点处理，恢复时也落回这条带子，不需要先展开它。
+    const collapsedBand = target === "day" ? container.querySelector<HTMLElement>(".calendar-day-band.is-collapsed") : null;
+    if (collapsedBand) {
+      const bandRect = collapsedBand.getBoundingClientRect();
+      if (bandRect.height <= 0) continue;
+      tracks.push({
+        date: trackDate,
+        offsetTop: bandRect.top - viewport.top + viewport.scrollTop,
+        height: bandRect.height,
+        segments: [{ start: 0, end: 1440, collapsed: true, gapKey: "0-1440", top: 0, height: bandRect.height }],
+      });
+      continue;
+    }
     const track = container.querySelector<HTMLElement>(".day-track");
-    if (!trackDate || !track) continue;
+    if (!track) continue;
     const rect = track.getBoundingClientRect();
     if (rect.height <= 0) continue;
     tracks.push({

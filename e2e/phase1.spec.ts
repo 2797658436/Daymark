@@ -23,6 +23,43 @@ async function waitForScrollSettled(locator: Locator) {
   }));
 }
 
+/** 低频日历选项（时间块、吸附）收在「显示 ⋯」气泡里，先打开再取按钮。 */
+async function openCalendarMore(page: Page) {
+  await page.getByRole("button", { name: "显示更多日历选项" }).click();
+  await expect(page.getByRole("dialog", { name: "日历显示选项" })).toBeVisible();
+}
+
+/**
+ * 滚动容器视口中心落在某条轨道上的**逻辑分钟**。
+ *
+ * 必须按 `.timeline-map-segment` 分段换算，不能按整轨线性内插：全天模式会把无安排的
+ * 凌晨／深夜折成 44px 折叠条，折叠条按产品规则取区间**中点**（与
+ * `sampleCalendarPosition` 同一套判据）。整轨内插会把 14:00 读成上午，落点类用例随之失真。
+ */
+async function calendarCentreMinute(page: Page, container: string, track: string) {
+  return page.evaluate(({ containerSelector, trackSelector }) => {
+    const scroller = document.querySelector<HTMLElement>(containerSelector);
+    const element = document.querySelector<HTMLElement>(trackSelector);
+    if (!scroller || !element) return Number.NaN;
+    const centre = scroller.getBoundingClientRect().top + scroller.clientHeight / 2;
+    const segments = Array.from(element.querySelectorAll<HTMLElement>(".timeline-map-segment")).map((segment) => {
+      const rect = segment.getBoundingClientRect();
+      return {
+        start: Number(segment.dataset.startMinute), end: Number(segment.dataset.endMinute),
+        collapsed: segment.dataset.collapsed === "true", top: rect.top, height: rect.height,
+      };
+    });
+    if (!segments.length) {
+      const rect = element.getBoundingClientRect();
+      if (rect.height <= 0) return Number.NaN;
+      return (centre - rect.top) / rect.height * 1440;
+    }
+    const hit = segments.find((segment) => centre >= segment.top && centre <= segment.top + segment.height) ?? segments.at(-1)!;
+    if (hit.collapsed || hit.height <= 0) return (hit.start + hit.end) / 2;
+    return hit.start + Math.min(Math.max((centre - hit.top) / hit.height, 0), 1) * (hit.end - hit.start);
+  }, { containerSelector: container, trackSelector: track });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -59,6 +96,9 @@ test("task can be scheduled by one drag and the schedule can be undone", async (
 });
 
 test("scheduled session can move and return to the pool without copying its task", async ({ page }) => {
+  // A3 起 1200 宽周视图会因列宽不足把任务池转成覆盖面板（入口变浮钮）；
+  // 这条用例考的是拖拽语义，用 1440 宽让任务池保持停靠。
+  await page.setViewportSize({ width: 1440, height: 800 });
   await page.getByRole("textbox", { name: "任务标题" }).fill("移动排程");
   await page.getByRole("button", { name: "创建任务" }).click();
   await page.getByRole("button", { name: "日历", exact: true }).click();
@@ -116,6 +156,7 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await expect(page.getByRole("button", { name: /撤销本次自动排程/ })).toBeVisible();
 
   await page.getByRole("button", { name: "日历", exact: true }).click();
+  await openCalendarMore(page);
   await page.getByRole("button", { name: "时间块" }).click();
   await page.getByRole("textbox", { name: "标题", exact: true }).fill("午休");
   await page.getByRole("button", { name: "创建时间块" }).click();
@@ -230,9 +271,9 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   await page.getByRole("textbox", { name: "任务标题" }).fill("跨日安排");
   await page.getByRole("button", { name: "创建任务" }).click();
   await page.getByRole("button", { name: "日历", exact: true }).click();
-  const period = page.getByLabel("当前日历日期");
-  // 翻页后**不能立刻读 textContent**：React 还没重渲染时读到的是旧标签，拿它去断言之后
-  // 会随机失败（实测 3 次里抖 1 次）。先等标签真的变了再捕获。
+  const period = page.locator("#calendar-title .calendar-range-full");
+  // 翻页后**不能立刻读 textContent**：React 还没重渲染时读到的是旧标题，拿它去断言之后
+  // 会随机失败（实测 3 次里抖 1 次）。先等标题真的变了再捕获。
   const beforeWeek = await period.textContent();
   await page.getByRole("button", { name: "下一段日期" }).click();
   await expect.poll(() => period.textContent()).not.toBe(beforeWeek);
@@ -260,17 +301,21 @@ test("phase 3 calendar anchors survive reload and the day axis changes date only
   await page.getByRole("button", { name: "日", exact: true }).click();
   const initialDay = await period.textContent();
   const axis = page.getByRole("region", { name: "连续日时间轴" });
-  await axis.evaluate((element) => {
-    const segment = element.scrollHeight / 3;
-    element.scrollTop = segment * 1.5;
+  /**
+   * 滚到三日缓冲里第 `index` 块面板的上沿。
+   *
+   * 不能用 `scrollHeight / 3`：前一天现在只剩 44px 吸顶带，三块面板不再等高。
+   * 面板本身不是吸顶元素，按「rect 差 + 当前 scrollTop」量它在内容里的偏移最稳。
+   */
+  const scrollToPanel = (index: number) => axis.evaluate((element, panelIndex) => {
+    const panels = Array.from(element.querySelectorAll<HTMLElement>("[data-calendar-date]"));
+    const panel = panels[panelIndex];
+    element.scrollTop = panel.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop + 2;
     element.dispatchEvent(new Event("scroll"));
-  });
+  }, index);
+  await scrollToPanel(1);
   await expect(period).toHaveText(initialDay ?? "");
-  await axis.evaluate((element) => {
-    const segment = element.scrollHeight / 3;
-    element.scrollTop = segment * 2 + 2;
-    element.dispatchEvent(new Event("scroll"));
-  });
+  await scrollToPanel(2);
   await expect(period).not.toHaveText(initialDay ?? "");
   const currentTrack = axis.locator("[data-calendar-date]").nth(1).locator(".day-track");
   await page.locator(".task-card", { hasText: "跨日安排" }).dragTo(currentTrack, { targetPosition: { x: 30, y: 500 } });
@@ -302,11 +347,11 @@ test("phase 3 day view opened just after midnight keeps today instead of shiftin
   });
   await page.reload();
   await page.getByRole("button", { name: "日", exact: true }).click();
-  const period = page.getByLabel("当前日历日期");
-  await expect(period).toHaveText("9月20日星期日");
+  const period = page.locator("#calendar-title .calendar-range-full");
+  await expect(period).toHaveText("9月20日 周日");
   // 等过应用自己那两帧定位窗口，锚点不能被写成昨天。
   await page.waitForTimeout(600);
-  await expect(period).toHaveText("9月20日星期日");
+  await expect(period).toHaveText("9月20日 周日");
   const anchors = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarAnchors ?? {});
   expect(anchors.day === null || anchors.day === "2026-09-20").toBe(true);
   // 三日缓冲仍以今天为中段。
@@ -346,7 +391,8 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
   await expect(page.locator(".calendar-actual-record", { hasText: "验证计划实际" })).toBeVisible();
   const compactReview = page.locator(".calendar-session.pending-review", { hasText: "待回顾检查" });
   await expect(compactReview.locator(".session-status-icon")).toHaveAttribute("aria-label", "待回顾");
-  await expect(compactReview.locator(".review-summary")).toHaveCount(0);
+  // A5：摘要行始终在 DOM 里，由高度容器查询隐藏 —— 这张 1 分钟卡装不下，所以不可见。
+  await expect(compactReview.locator(".review-summary")).not.toBeVisible();
   // 动作气泡是「点开」的，不是「hover 即弹」：hover 期间不该有任何浮层。
   await compactReview.hover();
   await expect(page.getByRole("dialog", { name: "待回顾检查 待回顾操作" })).toHaveCount(0);
@@ -444,7 +490,12 @@ test("phase 3 M3 zooms around the pointed time and keeps schedule facts unchange
   const continuousAxis = page.getByRole("region", { name: "连续日时间轴" });
   const currentPanel = continuousAxis.locator("[data-calendar-date]").nth(1);
   const currentTrack = currentPanel.locator(".day-track");
-  await continuousAxis.evaluate((element) => { element.scrollTop = element.scrollHeight / 3 + 52 + 12 * 48 - element.clientHeight / 2; });
+  // 三块面板不再等高（前一天只剩 44px 带子），按中段轨道的实际内容偏移定位。
+  await continuousAxis.evaluate((element) => {
+    const track = element.querySelectorAll<HTMLElement>("[data-calendar-date]")[1].querySelector<HTMLElement>(".day-track")!;
+    const trackTop = track.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+    element.scrollTop = trackTop + 12 * 48 - element.clientHeight / 2;
+  });
   const currentNoonY = async () => currentTrack.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return rect.top + rect.height / 2;
@@ -535,6 +586,219 @@ test("phase 3 M4 folds non-default hours and retains only a successful drag expa
   await expect(panel.locator(".calendar-session", { hasText: "拖入折叠区" })).toHaveCount(0);
 });
 
+/**
+ * 日历整改 A4：一条 44px 吸顶日期带 + 有效日折叠 + 前一天只留带子。
+ *
+ * 三条账都要在**真实布局**下量（jsdom 没有布局，结构账只能在这里成立）：
+ *   1. 双层吸顶合并：分隔条与日头都不再存在，每天只剩一条 44px 带，带上有当日事实；
+ *   2. 全天模式的空凌晨／空深夜折成折叠带，一天的高度按结构账收小；
+ *   3. 三日缓冲的前一天不再渲染整天网格，展开后才出现轨道，且不改锚点、不落偏好。
+ */
+test("calendar A4 merges the sticky date band, folds an empty day and buffers yesterday as a band", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date(`${anchor}T12:00:00`));
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [{ id: "p-a4", title: "毕业设计", deadlineLocal: null }],
+      projectMilestones: [], milestoneOutcomes: [], progressEvents: [], executionRecords: [], timeBlocks: [],
+      recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [], completionRecords: [],
+      tasks: [
+        { id: "t-a4-1", projectId: "p-a4", title: "A4 上午安排", progress: 10, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "t-a4-2", projectId: null, title: "A4 晚间安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 70, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "s-a4-1", taskId: "t-a4-1", localDate: date, endLocalDate: date, startLocal: "09:00", endLocal: "10:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+        { id: "s-a4-2", taskId: "t-a4-2", localDate: date, endLocalDate: date, startLocal: "19:30", endLocal: "20:40", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" },
+      ],
+    }));
+  }, anchor);
+  await page.reload();
+  await page.setViewportSize({ width: 1200, height: 800 });
+
+  const axis = page.getByRole("region", { name: "连续日时间轴" });
+  await expect(axis).toBeVisible();
+  const panel = axis.locator(`[data-calendar-date="${anchor}"]`);
+  const band = panel.locator(".calendar-day-band");
+
+  // ---- F05：双层吸顶合并成一条 44px 带，当日事实在带上
+  await expect(axis.locator(".continuous-day-panel")).toHaveCount(3);
+  await expect(axis.locator(".calendar-day-band")).toHaveCount(3);
+  await expect(axis.locator(".continuous-day-separator")).toHaveCount(0);
+  await expect(axis.locator(".calendar-day > header")).toHaveCount(0);
+  await expect(axis.locator(".day-head-spacer")).toHaveCount(0);
+  const bandBox = await band.boundingBox();
+  expect(bandBox?.height, "吸顶日期带必须是 44px 一档").toBeLessThanOrEqual(45);
+  expect(bandBox?.height).toBeGreaterThanOrEqual(43);
+  await expect(band).toContainText("8月5日");
+  await expect(band.locator(".calendar-day-band-date span")).toContainText("周三");
+  await expect(band.locator(".calendar-day-band-today")).toContainText("今天");
+  await expect(band.locator(".calendar-day-band-summary")).toContainText("2 项安排 · 投入 2h10m");
+  // 带子吸顶：滚过上午之后仍贴在滚动窗口上沿。
+  await axis.evaluate((element) => { element.scrollTop = 400; });
+  await waitForScrollSettled(axis);
+  const stuck = await band.boundingBox();
+  const stuckScroller = await axis.boundingBox();
+  expect(Math.abs((stuck?.y ?? 0) - (stuckScroller?.y ?? 0)), "带子必须贴在滚动容器上沿").toBeLessThanOrEqual(2);
+
+  // ---- F08：空凌晨与空深夜折成折叠带
+  await expect(panel.getByRole("button", { name: "凌晨 00:00–06:00 · 无安排" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "深夜 23:00–24:00 · 无安排" })).toBeVisible();
+  const foldedHeight = await panel.locator(".day-track").evaluate((element) => element.getBoundingClientRect().height);
+  // 标准档 168px/小时（A6）：06:00–23:00 逐小时 + 两条 44px 折叠带。
+  expect(Math.round(foldedHeight)).toBe(17 * 168 + 44 * 2);
+  await panel.getByRole("button", { name: "展开整天" }).click();
+  const openedHeight = await panel.locator(".day-track").evaluate((element) => element.getBoundingClientRect().height);
+  expect(Math.round(openedHeight)).toBe(24 * 168);
+  await panel.getByRole("button", { name: "收起 00:00–06:00" }).click();
+  await expect(panel.getByRole("button", { name: "凌晨 00:00–06:00 · 无安排" })).toBeVisible();
+  // 临时展开不落库（UI-SPEC §129）：偏好里既没有展开态也没有新增字段。
+  const preferences = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}"));
+  expect(preferences.calendarDayMode).toBe("fullDay");
+  expect(JSON.stringify(preferences)).not.toContain("expandedGap");
+
+  // ---- F08③：前一天只留一条带子，展开后不改锚点也不回缩
+  const yesterday = axis.locator('[data-calendar-date="2026-08-04"]');
+  await expect(yesterday.locator(".calendar-day-band")).toHaveClass(/is-collapsed/);
+  await expect(yesterday.locator(".day-track")).toHaveCount(0);
+  const yesterdayBox = await yesterday.boundingBox();
+  expect(Math.round(yesterdayBox?.height ?? 0), "前一天面板只剩一条带子的高度").toBeLessThanOrEqual(46);
+  await yesterday.getByRole("button", { name: /展开前一天 8月4日/ }).click();
+  await expect(yesterday.locator(".day-track")).toHaveCount(1);
+  await expect(page.locator("#calendar-title")).toContainText("8月5日");
+  const storedAnchors = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarAnchors ?? {});
+  expect(storedAnchors.day, "展开前一天不得改锚点").toBe(anchor);
+  // 展开后不回缩：来回滚一遍，轨道仍在。
+  await axis.evaluate((element) => { element.scrollTop = 0; });
+  await waitForScrollSettled(axis);
+  await axis.evaluate((element) => { element.scrollTop = 600; });
+  await waitForScrollSettled(axis);
+  await expect(yesterday.locator(".day-track")).toHaveCount(1);
+  // 展开那一次越界不算「退到前一天」：先滚回今天，再向上越过中段起点，锚点才按三日缓冲平移。
+  await axis.evaluate((element) => {
+    const panels = Array.from(element.querySelectorAll<HTMLElement>("[data-calendar-date]"));
+    const middle = panels[1].getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+    element.scrollTop = middle + 200;
+  });
+  await waitForScrollSettled(axis);
+  await expect(page.locator("#calendar-title")).toContainText("8月5日");
+  await axis.evaluate((element) => {
+    const panels = Array.from(element.querySelectorAll<HTMLElement>("[data-calendar-date]"));
+    const middle = panels[1].getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+    element.scrollTop = middle - 8;
+  });
+  await waitForScrollSettled(axis);
+  await expect(page.locator("#calendar-title")).toContainText("8月4日");
+});
+
+/**
+ * A6／D9 预设：日视图 紧凑 84 / 标准 168 / 详细 216；周视图仍是 60/84/108。
+ * 只迁移「点过档位且值恰好停在旧预设」的日视图；72 这类手感值原样保留。
+ */
+test("calendar A6 day density presets move to 84/168/216 and faithfully migrate old tiers", async ({ page }) => {
+  const anchor = "2026-08-05";
+  const hourHeight = async () => page.locator(".calendar-page").evaluate((element) => parseFloat(getComputedStyle(element).getPropertyValue("--calendar-hour-height")));
+  const storedDayScale = async () => page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarScale?.day);
+
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots",
+      calendarAnchors: { day: date, week: date, month: date },
+    }));
+  }, anchor);
+  await page.reload();
+  // 全新偏好：三档 = 84 / 168 / 216。
+  expect(await hourHeight()).toBeCloseTo(168, 0);
+  await page.getByRole("button", { name: "紧凑" }).click();
+  expect(await hourHeight()).toBeCloseTo(84, 0);
+  await page.getByRole("button", { name: "详细" }).click();
+  expect(await hourHeight()).toBeCloseTo(216, 0);
+  expect(await storedDayScale()).toBe(216);
+
+  // 老偏好里存过 72（A4 之前的标准档）：不是旧预设，规范化必须原样保留。
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+      calendarScale: { day: 72, week: 48, month: 120 },
+    }));
+  }, anchor);
+  await page.reload();
+  expect(await hourHeight()).toBeCloseTo(72, 0);
+  await page.getByRole("button", { name: "详细" }).click();
+  expect(await storedDayScale()).toBe(216);
+
+  // 旧 detailed 108 + 点过 detailed：档位忠实迁移到 216。
+  await page.evaluate((date) => {
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarDayMode: "defaultSlots",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "detailed", week: "standard", month: "standard" },
+      calendarScale: { day: 108, week: 48, month: 120 },
+    }));
+  }, anchor);
+  await page.reload();
+  expect(await hourHeight()).toBeCloseTo(216, 0);
+  // 迁移在读取规范化层完成；没有用户动作时不回写 Store（沿用 A4 的语义）。
+  expect(await storedDayScale()).toBe(108);
+
+  // 周视图不受日视图迁移影响：同一份偏好里 week 存的是 48，切过去仍是 48。
+  await page.getByRole("button", { name: "周", exact: true }).click();
+  expect(await hourHeight()).toBeCloseTo(48, 0);
+});
+
+/**
+ * A6／D10：200% 下 standard 档的 60 分钟卡必须同时露出时间与标题，且不裁切。
+ * 行高 1.375rem 在 200% 下是 44px，卡片内容盒 142px；时间 / 标题 / 状态 / 进度共 140px。
+ */
+test("calendar A6 keeps a 200% standard card readable with time and title", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.clock.setFixedTime(new Date(`${anchor}T12:00:00`));
+  await page.evaluate((date) => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      scale: 200, lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+      calendarAnchors: { day: date, week: date, month: date },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], projectMilestones: [], milestoneOutcomes: [], progressEvents: [], executionRecords: [],
+      timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [], completionRecords: [],
+      tasks: [{ id: "a6-task", projectId: null, title: "A6 两百趴标准档的时间与标题两行", progress: 40, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task" }],
+      executionSessions: [{ id: "a6-session", taskId: "a6-task", localDate: date, endLocalDate: date, startLocal: "10:00", endLocal: "11:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" }],
+    }));
+  }, anchor);
+  await page.reload();
+
+  const card = page.locator(".calendar-session", { hasText: "A6 两百趴" });
+  await expect(card).toBeVisible();
+  await card.scrollIntoViewIfNeeded();
+  await expect(card.locator(".session-time")).toBeVisible();
+  await expect(card.locator(".session-time")).toHaveText("10:00–11:00");
+  await expect(card.locator("strong")).toBeVisible();
+  const metrics = await card.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const title = element.querySelector("strong")!.getBoundingClientRect();
+    const style = getComputedStyle(element.querySelector("strong")!);
+    return {
+      clipped: element.scrollHeight - element.clientHeight,
+      titleInside: title.bottom <= box.bottom + 1,
+      fontSize: parseFloat(style.fontSize),
+      lineHeight: parseFloat(style.lineHeight),
+    };
+  });
+  expect(metrics.clipped, "卡片内容不得压出卡底").toBeLessThanOrEqual(1);
+  expect(metrics.titleInside, "标题必须完整落在卡内").toBe(true);
+  expect(metrics.fontSize, "standard 档 14px 在 200% 下是 28px").toBeCloseTo(28, 0);
+  expect(metrics.lineHeight, "standard 行高 1.375rem 在 200% 下是 44px").toBeCloseTo(44, 0);
+});
+
 test("phase 3 M5 previews and atomically commits insertion, then opens blank-time actions", async ({ page }) => {
   const targetDate = await page.evaluate(() => {
     const now = new Date(); return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
@@ -559,7 +823,10 @@ test("phase 3 M5 previews and atomically commits insertion, then opens blank-tim
   }, targetDate);
   await page.reload();
 
+  await openCalendarMore(page);
   await expect(page.getByRole("button", { name: "吸附 15 分钟" })).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "日历显示选项" })).toHaveCount(0);
   const panel = page.locator(`.calendar-day[data-day-date="${targetDate}"]`); const track = panel.locator(".day-track");
   const target = panel.locator('.calendar-session[data-session-id="session-target"]');
   const box = await target.boundingBox(); if (!box) throw new Error("M5 target card must be visible");
@@ -602,7 +869,8 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
   await page.reload();
 
   const cell = page.getByRole("gridcell", { name: /2026-08-05/ });
-  await expect(cell).toContainText("M6 截止 2"); await expect(cell).toContainText("另外 3 项");
+  await expect(cell).toContainText("M6 截止 2"); await expect(cell).toContainText("另外 2 项");
+  await expect(cell).toContainText("完成 1 · 推进 1");
   await cell.focus(); await page.keyboard.press("ArrowRight");
   await expect(page.locator('[data-month-date="2026-08-06"]')).toBeFocused();
   await page.keyboard.press("ArrowLeft"); await page.keyboard.press("Enter");
@@ -612,16 +880,23 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
 
   await page.getByRole("button", { name: "周", exact: true }).click();
   const allDay = page.getByRole("region", { name: "全天标记" });
-  await expect(allDay.locator("[data-all-day-marker]")).toHaveCount(2);
-  await allDay.getByRole("button", { name: "另外 2 项" }).click();
-  await expect(allDay.locator("[data-all-day-marker]")).toHaveCount(4);
+  const allDayChip = allDay.getByRole("button", { name: /截止 4 项/ });
+  await expect(allDayChip).toBeVisible();
+  await allDayChip.click();
+  const allDayPanel = page.getByRole("dialog", { name: /全天标记/ });
+  await expect(allDayPanel.locator("[data-all-day-marker]")).toHaveCount(4);
+  await allDayPanel.locator("[data-all-day-marker]").first().click();
+  await expect(allDayPanel).toHaveCount(0);
   await expect(page.locator('[data-day-date="2026-08-05"]')).toHaveClass(/selected/);
   const viewport = page.getByRole("region", { name: "日历时间网格" });
   const stickyHeader = page.locator(".week-sticky-header");
   await viewport.evaluate((element) => { element.scrollTop = 420; });
   await expect.poll(async () => Math.abs(((await stickyHeader.boundingBox())?.y ?? 0) - ((await viewport.boundingBox())?.y ?? 0))).toBeLessThanOrEqual(2);
-  const header = page.getByRole("button", { name: /打开 2026-08-05/ }); await header.focus(); await page.keyboard.press("PageDown");
-  await expect(page.getByRole("button", { name: /打开 2026-08-12/ })).toBeFocused();
+  const header = page.getByRole("button", { name: /选中 2026-08-05/ }); await header.focus(); await page.keyboard.press("PageDown");
+  await expect(page.getByRole("button", { name: /选中 2026-08-12/ })).toBeFocused();
+  // 日期头 Enter 只选中日期，不切日视图。
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "周", exact: true })).toHaveAttribute("aria-pressed", "true");
   // 周视图不是网格：时间光标是 `group`（P4-11 方案 B），键盘路径不变。
   const track = page.getByRole("group", { name: "2026-08-12 09:00 空白时间" }); await track.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "空白时段操作" })).toContainText("09:15–09:45");
@@ -662,15 +937,7 @@ test("phase 4 M9 keeps the logical browsing position across day and week switche
   await waitForScrollSettled(calendarViewport);
   const factsBefore = await page.evaluate(() => localStorage.getItem("daymark.phase1.workspace"));
 
-  const centreMinute = (container: string, track: string) => page.evaluate(({ container: containerSelector, track: trackSelector }) => {
-    const scroller = document.querySelector<HTMLElement>(containerSelector);
-    const element = document.querySelector<HTMLElement>(trackSelector);
-    if (!scroller || !element) return Number.NaN;
-    const scrollerRect = scroller.getBoundingClientRect();
-    const trackRect = element.getBoundingClientRect();
-    if (trackRect.height <= 0) return Number.NaN;
-    return (scrollerRect.top + scroller.clientHeight / 2 - trackRect.top) / trackRect.height * 1440;
-  }, { container, track });
+  const centreMinute = (container: string, track: string) => calendarCentreMinute(page, container, track);
 
   const dayMinutes: number[] = [];
   const weekMinutes: number[] = [];
@@ -733,15 +1000,7 @@ test("phase 4 M9 restores each timeline view's browsing position after a restart
   }, anchor);
   await page.reload();
 
-  const centreMinute = (container: string, track: string) => page.evaluate(({ container: containerSelector, track: trackSelector }) => {
-    const scroller = document.querySelector<HTMLElement>(containerSelector);
-    const element = document.querySelector<HTMLElement>(trackSelector);
-    if (!scroller || !element) return Number.NaN;
-    const scrollerRect = scroller.getBoundingClientRect();
-    const trackRect = element.getBoundingClientRect();
-    if (trackRect.height <= 0) return Number.NaN;
-    return (scrollerRect.top + scroller.clientHeight / 2 - trackRect.top) / trackRect.height * 1440;
-  }, { container, track });
+  const centreMinute = (container: string, track: string) => calendarCentreMinute(page, container, track);
   /** 偏好里已经落定的浏览位置；写入是异步的（滚动停止 300ms 后），所以要轮询。 */
   const storedMinute = (view: "day" | "week") => page.evaluate((target) => {
     const raw = localStorage.getItem("daymark.phase0.preferences");
@@ -781,6 +1040,55 @@ test("phase 4 M9 restores each timeline view's browsing position after a restart
   await calendarViewport.evaluate((element) => { element.scrollTop = 200; });
   await page.reload();
   await expect.poll(() => page.getByRole("region", { name: "日历时间网格" }).evaluate((element) => element.scrollTop)).toBe(0);
+});
+
+/**
+ * 日历整改 A1（F01）：直接进入日视图时落点必须是「现在」，而不是三日缓冲中间面板的 00:00。
+ *
+ * 与 M9 的十次切换不同，这里从**首屏直接挂载**日视图：三日缓冲的对齐写入与首次定位
+ * 曾在同一帧里互相覆盖，落点停在 00:00。锚点不是今天时，首次定位落在该日首个默认时段。
+ * 同时守住周视图：它没有三日缓冲，进入落点不能被这次改动带坏。
+ */
+test("calendar A1 opens the day view at now instead of midnight and keeps the week entry position", async ({ page }) => {
+  const anchor = "2026-08-05";
+  const seed = async (dayAnchor: string) => {
+    await page.evaluate(({ date }) => {
+      localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+        lastPage: "calendar", calendarView: "day", calendarDayMode: "fullDay",
+        calendarAnchors: { day: date, week: date, month: date },
+        calendarZoom: { day: "standard", week: "standard", month: "standard" },
+        calendarScale: { day: 48, week: 48, month: 104 },
+        defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
+      }));
+      localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+        projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+        tasks: [{ id: "a1-task", projectId: null, title: "A1 安排", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 }],
+        executionSessions: [{ id: "a1-session", taskId: "a1-task", localDate: date, endLocalDate: date, startLocal: "19:00", endLocal: "20:00", timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" }],
+      }));
+    }, { date: dayAnchor });
+    await page.reload();
+  };
+  const centreMinute = (container: string, track: string) => calendarCentreMinute(page, container, track);
+
+  await page.clock.setFixedTime(new Date("2026-08-05T12:00:00"));
+  await seed(anchor);
+  await waitForScrollSettled(page.getByRole("region", { name: "连续日时间轴" }));
+  const dayCentre = await centreMinute(".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${anchor}"] .day-track`);
+  expect(Math.abs(dayCentre - 720)).toBeLessThanOrEqual(90);
+
+  // 周视图没有三日缓冲：进入落点仍是 12:00，不能因 A1 退化。
+  const calendarViewport = page.getByRole("region", { name: "日历时间网格" });
+  await page.getByRole("button", { name: "周", exact: true }).click();
+  await waitForScrollSettled(calendarViewport);
+  const weekCentre = await centreMinute(".calendar-viewport", `.calendar-day[data-day-date="${anchor}"] .day-track`);
+  expect(Math.abs(weekCentre - 720)).toBeLessThanOrEqual(90);
+
+  // 锚点不是今天：首次定位落在该日首个默认时段 19:00（1140 分钟），不是中间面板的 00:00。
+  const other = "2026-08-06";
+  await seed(other);
+  await waitForScrollSettled(page.getByRole("region", { name: "连续日时间轴" }));
+  const otherCentre = await centreMinute(".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${other}"] .day-track`);
+  expect(Math.abs(otherCentre - 1140)).toBeLessThanOrEqual(60);
 });
 
 function localDate(date: Date) {
@@ -1592,8 +1900,8 @@ async function scrollIntoCalendarSafeArea(page: Page, locator: Locator) {
       if (!scroller) return 0;
       const panel = element.closest(".continuous-day-panel");
       const header = scroller.querySelector(".week-sticky-header")
-        ?? panel?.querySelector(".calendar-day > header")
-        ?? panel?.querySelector(".continuous-day-separator")
+        ?? panel?.querySelector(".calendar-day-band")
+        ?? scroller.querySelector(".calendar-day-band")
         ?? null;
       if (!header || header === element || header.contains(element)) return 0;
       // 960×200% 下整页会比窗口高：只滚内层容器的话，元素仍然落在窗口之外
@@ -1721,6 +2029,9 @@ const CALENDAR_CONTRAST_TARGETS = [
   { label: "待回顾计划卡 · 进度值", selector: ".calendar-session.pending-review .session-progress-value", mustExist: false },
   { label: "待回顾计划卡 · 回顾摘要", selector: ".calendar-session.pending-review .review-summary", mustExist: false },
   { label: "时间块 · 起止时间", selector: ".calendar-time-block time", mustExist: false },
+  // A4 新吸顶日期带上的两处文字（只有日视图的轮次里才渲染，`found` 为空就跳过）。
+  { label: "吸顶日期带 · 日期", selector: ".calendar-day-band-date", mustExist: false },
+  { label: "吸顶日期带 · 当日摘要", selector: ".calendar-day-band-summary", mustExist: false },
 ] as const;
 
 /**
@@ -1758,14 +2069,14 @@ test("phase 4 M13 keeps the sticky calendar headers above the track content", as
     await expect(page.locator(".continuous-day-axis")).toBeVisible();
     const daySession = page.locator('.calendar-day.today .calendar-session[data-session-id="s-1"]');
     await expect(daySession, `${scale}% · 日视图 · 夹具里 09:00 那一段必须真的渲染出来`).toBeVisible();
-    // 让叠加层与卡片都压在吸顶头部带里（头部带在滚动容器顶部往下 40–92px）
+    // 让叠加层与卡片都压在吸顶日期带里（A4 起这条带是滚动容器顶部往下 0–44px）
     await page.locator(".continuous-day-axis").evaluate((scroller) => { scroller.scrollTop = 0; });
     await scrollIntoCalendarSafeArea(page, page.locator(".calendar-actual-record").first());
     await page.locator(".continuous-day-axis").evaluate((scroller) => {
       const overlay = document.querySelector(".calendar-actual-record");
       if (!overlay) return;
       const scrollerRect = scroller.getBoundingClientRect();
-      scroller.scrollTop += (overlay.getBoundingClientRect().top - scrollerRect.top) - 50;
+      scroller.scrollTop += (overlay.getBoundingClientRect().top - scrollerRect.top) - 22;
     });
     await page.waitForTimeout(400);
 
@@ -1776,7 +2087,8 @@ test("phase 4 M13 keeps the sticky calendar headers above the track content", as
       }
       for (const forceOverlayHit of [false, true]) {
         const result = await page.evaluate(hitTestAtCenterOf, {
-          pointSelector: ".calendar-day.today .today-number", containerSelector: ".calendar-day.today > header", forceOverlayHit,
+          pointSelector: '.continuous-day-panel[data-calendar-date="2026-08-05"] .calendar-day-band-today',
+          containerSelector: '.continuous-day-panel[data-calendar-date="2026-08-05"] .calendar-day-band', forceOverlayHit,
         });
         const hint = `${scale}% · 日视图 · ${state}${forceOverlayHit ? "（叠加层 pointer-events 临时打开）" : ""}`;
         expect(result.ok, `${hint} · 找不到「今天」药丸：${result.reason ?? ""}`).toBe(true);

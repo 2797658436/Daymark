@@ -91,7 +91,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   calendarView: "week",
   calendarAnchors: { day: null, week: null, month: null },
   calendarZoom: { day: "standard", week: "standard", month: "standard" },
-  calendarScale: { day: 72, week: 72, month: 120 },
+  calendarScale: { day: 168, week: 84, month: 120 },
   calendarPositions: { day: null, week: null },
   calendarDayMode: "fullDay",
   showActualRecords: false,
@@ -204,7 +204,7 @@ function normalizeSettings(value: unknown): AppSettings {
     calendarView: isOneOf(candidate.calendarView, ["day", "week", "month"]) ? candidate.calendarView : DEFAULT_SETTINGS.calendarView,
     calendarAnchors: normalizeCalendarAnchors(candidate.calendarAnchors),
     calendarZoom,
-    calendarScale: normalizeCalendarScale(candidate.calendarScale, calendarZoom),
+    calendarScale: normalizeCalendarScale(candidate.calendarScale, calendarZoom, candidate.calendarZoom),
     calendarPositions: normalizeCalendarPositions(candidate.calendarPositions),
     calendarDayMode: isOneOf(candidate.calendarDayMode, ["defaultSlots", "fullDay"] as const) ? candidate.calendarDayMode : DEFAULT_SETTINGS.calendarDayMode,
     showActualRecords: typeof candidate.showActualRecords === "boolean" ? candidate.showActualRecords : DEFAULT_SETTINGS.showActualRecords,
@@ -273,17 +273,27 @@ function normalizeCalendarZoom(value: unknown): CalendarZoomByView {
  * 界面滚轮钳制（App.tsx）也必须读这里，不能再写字面量。
  */
 export const CALENDAR_SCALE_RANGE: Record<CalendarView, readonly [number, number]> = {
-  day: [28, 192],
+  // A6／D9：日视图 standard 抬到 168 后，滚轮可继续放大到 240。
+  day: [28, 240],
   week: [28, 192],
   // 上界必须容纳 detailed 预设 160。月视图只通过档位设置，没有连续缩放。
   month: [52, 160],
 };
 
 const CALENDAR_SCALE_PRESET: Record<CalendarView, Record<CalendarZoom, number>> = {
-  day: { compact: 48, standard: 72, detailed: 96 },
-  week: { compact: 48, standard: 72, detailed: 96 },
+  // 2026-10-26 A6／D9：日视图按使用场景重定标；周视图保持「一周容量」口径不动。
+  day: { compact: 84, standard: 168, detailed: 216 },
+  week: { compact: 60, standard: 84, detailed: 108 },
   month: { compact: 80, standard: 120, detailed: 160 },
 };
+
+/**
+ * A6 的「档位忠实迁移」：只改档位映射时留下来的旧预设值。
+ *
+ * 用户点过档位（`calendarZoom.day` 存在）且连续值恰好停在**该档**的旧预设上时，
+ * 把它迁到同一档的新预设；用户自己滚出来的非标值（72、99…）一字不动。
+ */
+const LEGACY_DAY_SCALE_PRESET: Record<CalendarZoom, number> = { compact: 60, standard: 84, detailed: 108 };
 
 export function calendarScaleForZoom(view: CalendarView, zoom: CalendarZoom) {
   return CALENDAR_SCALE_PRESET[view][zoom];
@@ -295,10 +305,18 @@ function normalizeCalendarScaleValue(view: CalendarView, scale: unknown) {
   return typeof scale === "number" && Number.isFinite(scale) && scale >= minimum && scale <= maximum ? Math.round(scale) : null;
 }
 
-function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView): CalendarScaleByView {
+function normalizeCalendarScale(value: unknown, zoom: CalendarZoomByView, storedZoom: unknown): CalendarScaleByView {
   const candidate = value && typeof value === "object" ? value as Partial<CalendarScaleByView> : {};
-  const valid = (view: CalendarView, scale: unknown) =>
-    normalizeCalendarScaleValue(view, scale) ?? calendarScaleForZoom(view, zoom[view]);
+  const hasStoredDayZoom = Boolean(storedZoom && typeof storedZoom === "object" && "day" in storedZoom);
+  const valid = (view: CalendarView, scale: unknown) => {
+    const stored = normalizeCalendarScaleValue(view, scale);
+    if (stored === null) return calendarScaleForZoom(view, zoom[view]);
+    // 只迁移「点过档位、值恰好停在旧预设」的日视图；非标连续值保持用户手感。
+    if (view === "day" && hasStoredDayZoom && stored === LEGACY_DAY_SCALE_PRESET[zoom.day]) {
+      return calendarScaleForZoom("day", zoom.day);
+    }
+    return stored;
+  };
   return { day: valid("day", candidate.day), week: valid("week", candidate.week), month: valid("month", candidate.month) };
 }
 

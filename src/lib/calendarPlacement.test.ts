@@ -19,11 +19,26 @@ describe("calendar placement", () => {
     const two = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:15", "10:45")]);
     expect(two.get("a")).toMatchObject({ left: 0, width: 50, hidden: false });
     expect(two.get("b")).toMatchObject({ left: 50, width: 50, hidden: false });
+    const three = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:00", "11:00"), session("c", "10:00", "11:00")]);
+    expect(three.get("c")).toMatchObject({ left: 200 / 3, width: 100 / 3, hidden: false });
     const four = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:00", "11:00"), session("c", "10:00", "11:00"), session("d", "10:00", "11:00")]);
     expect(four.get("b")).toMatchObject({ hidden: false, hiddenCount: 2 });
     expect(four.get("c")).toMatchObject({ hidden: true });
     const chain = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:30", "11:30"), session("c", "11:00", "12:00"), session("d", "11:30", "12:30")]);
     expect(chain.get("a")).toMatchObject({ width: 50, hidden: false, hiddenCount: 0 });
     expect(chain.get("c")).toMatchObject({ width: 50, hidden: false, hiddenCount: 0 });
+  });
+
+  it("summarizes the third lane when the side-by-side limit is two", () => {
+    const sessions = [session("a", "10:00", "11:00"), session("b", "10:00", "11:00"), session("c", "10:00", "11:00")];
+    const narrow = concurrentLayouts(sessions, 2);
+    expect(narrow.get("a")).toMatchObject({ left: 0, width: 50, hidden: false });
+    expect(narrow.get("b")).toMatchObject({ left: 50, width: 50, hidden: false, hiddenCount: 1, totalCount: 3 });
+    expect(narrow.get("c")).toMatchObject({ hidden: true, width: 50 });
+    const two = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:00", "11:00")], 2);
+    expect(two.get("b")).toMatchObject({ left: 50, hidden: false, hiddenCount: 0 });
+    const four = concurrentLayouts([session("a", "10:00", "11:00"), session("b", "10:00", "11:00"), session("c", "10:00", "11:00"), session("d", "10:00", "11:00")], 2);
+    expect(four.get("b")).toMatchObject({ hiddenCount: 2 });
+    expect(four.get("c")).toMatchObject({ hidden: true });
   });
 });
