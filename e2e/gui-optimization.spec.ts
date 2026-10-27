@@ -38,7 +38,7 @@ for (const width of [960, 1200]) for (const scale of [100, 150, 200]) {
   });
 }
 
-test("draft cancellation never saves and a floating editor blocks a second calendar editor", async ({ page }) => {
+test("draft cancellation never saves and an inline calendar draft cancels on an outside click", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear()); await page.reload();
   await page.getByRole("textbox", { name: "任务标题", exact: true }).fill("保留原任务");
@@ -52,15 +52,18 @@ test("draft cancellation never saves and a floating editor blocks a second calen
   await expect(trigger).toBeFocused();
   await page.reload(); await expect(trigger).toBeVisible();
   await page.getByRole("button", { name: "日历", exact: true }).click();
-  await page.getByRole("button", { name: "显示更多日历选项" }).click();
-  await page.getByRole("dialog", { name: "日历显示选项" }).getByRole("button", { name: "时间块", exact: true }).click();
-  const block = page.getByRole("dialog", { name: "添加时间块" });
-  await expect(block).toBeVisible();
-  const background = page.locator(".day-track").first();
-  await background.dispatchEvent("pointerdown", { button: 0, clientX: 200, clientY: 400 });
-  await background.dispatchEvent("pointerup", { button: 0, clientX: 200, clientY: 430 });
-  await expect(page.getByRole("dialog")).toHaveCount(1);
-  await block.getByRole("button", { name: "取消" }).click();
+  // D15：时间块内联在空白时段气泡里；点气泡外面取消，不写库，也不叠出第二个气泡。
+  const track = page.locator(".calendar-day .day-track").first();
+  const box = await track.boundingBox(); if (!box) throw new Error("week day track must be visible");
+  await track.dispatchEvent("pointerdown", { pointerId: 9, button: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height * 8 / 24 });
+  await track.dispatchEvent("pointerup", { pointerId: 9, button: 0, clientX: box.x + box.width / 2, clientY: box.y + box.height * 9 / 24 });
+  const bubble = page.getByRole("dialog", { name: "空白时段操作" });
+  await bubble.getByRole("button", { name: "时间块", exact: true }).click();
+  await bubble.getByRole("textbox", { name: "标题", exact: true }).fill("不应保存");
+  await page.mouse.click(5, 5);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".calendar-time-block", { hasText: "不应保存" })).toHaveCount(0);
 });
 
 test("the month grid keeps all seven columns visible when the day details are open", async ({ page }) => {

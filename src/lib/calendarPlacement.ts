@@ -123,6 +123,49 @@ export function placeableSessions(sessions: ExecutionSession[], date: string): E
   return sessions.filter((session) => session.localDate === date && (session.status === "scheduled" || session.status === "missed"));
 }
 
+/** 卡片在自己的并排栏里让出的横向留白，与渲染的 `calc(...% + 4px)`／`width: calc(...% - 8px)` 同一口径。 */
+export const CARD_LANE_GUTTER_PX = 4;
+
+/** 卡片渲染矩形的横向区间：由 `concurrentLayouts` 的 lane 百分比在轨道上算出，不是卡片的 DOM 位置。 */
+export function laneXSpan(track: { left: number; width: number }, layout?: { left: number; width: number } | null) {
+  const percentLeft = layout?.left ?? 0;
+  const percentWidth = layout?.width ?? 100;
+  return {
+    left: track.left + percentLeft / 100 * track.width + CARD_LANE_GUTTER_PX,
+    right: track.left + (percentLeft + percentWidth) / 100 * track.width - CARD_LANE_GUTTER_PX,
+  };
+}
+
+export interface SessionHitCard {
+  sessionId: string;
+  /** 纵向读**原计划时段**（让位中的卡片 DOM 位置会移动，见 `sessionAtPoint`）。 */
+  top: number;
+  height: number;
+  /** 横向读该卡片自己的并排栏（D16）。 */
+  left: number;
+  right: number;
+}
+
+/**
+ * 拖拽命中的唯一几何判据：指针必须落在卡片的**实际渲染矩形**里 —— 纵向是原计划时段，
+ * 横向是它自己的并排栏（`laneXSpan`）。
+ *
+ * 落在栏与栏之间的空白、或落在别人那一栏的横向区域上时**不构成命中**（即使纵向与某张卡
+ * 交叠），调用方据此走 `place` 自由放置（D16／实测 #4：并排的第二张必须能被拖到部分错开的时刻）。
+ * 同一栏内不可能纵向交叠（`concurrentLayouts` 按栏尾分配），面积比较只留给异常形态兜底。
+ */
+export function sessionHitAtPoint(cards: SessionHitCard[], x: number, y: number): { sessionId: string; ratio: number } | null {
+  let best: { sessionId: string; ratio: number; area: number } | null = null;
+  for (const card of cards) {
+    if (card.height <= 0 || card.right <= card.left) continue;
+    if (x < card.left || x > card.right) continue;
+    if (y < card.top || y > card.top + card.height) continue;
+    const candidate = { sessionId: card.sessionId, ratio: (y - card.top) / card.height, area: (card.right - card.left) * card.height };
+    if (!best || candidate.area < best.area) best = candidate;
+  }
+  return best ? { sessionId: best.sessionId, ratio: best.ratio } : null;
+}
+
 export interface CalendarDropResolution {
   startMinute: number;
   mode: CalendarDropMode;
@@ -135,6 +178,11 @@ export interface CalendarDropResolution {
  *
  * `commit = true` 表示这次是松手：卡片中央一律按 overlap 提交（D5），不再静默丢弃；
  * 拖动中的预览仍停在 `place`，用来提示「悬停半秒」。边缘插入在两种情况下语义一致。
+ *
+ * **overlap 的开始时间是指针分钟（已经过吸附），不是目标卡的起点（D16／实测 #4）**：
+ * 并排的两张卡要能被拖到任意部分错开的时刻；`targetStart` 那种「对齐」会把第二张卡
+ * 强行拉回第一张的起点，只能靠铅笔编辑再改回去。半秒闩锁保留，但它现在只负责
+ * 把读数与预演确认成「同时安排」，落点跟松手时刻一致。
  */
 export function resolveCalendarDrop(input: {
   sessions: ExecutionSession[];
@@ -160,11 +208,11 @@ export function resolveCalendarDrop(input: {
     if (ratio !== null && Number.isFinite(ratio)) {
       if (ratio < .25) { mode = "insert-before"; startMinute = targetStart; }
       else if (ratio > .75) { mode = "insert-after"; startMinute = targetStart + sessionMinutes(target); }
-      else if (input.overlapLatched || input.commit) { mode = "overlap"; startMinute = targetStart; }
+      else if (input.overlapLatched || input.commit) { mode = "overlap"; startMinute = input.pointerMinute; }
       else { mode = "place"; startMinute = input.pointerMinute; }
     } else if (mode === "insert-before") startMinute = targetStart;
     else if (mode === "insert-after") startMinute = targetStart + sessionMinutes(target);
-    else if (mode === "overlap") startMinute = targetStart;
+    else if (mode === "overlap") startMinute = input.pointerMinute;
   }
   const shifted = target && (mode === "insert-before" || mode === "insert-after")
     ? insertionChanges(input.sessions, input.sourceSessionId, target.id, mode === "insert-before" ? "before" : "after", input.sourceDuration)

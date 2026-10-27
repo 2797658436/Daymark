@@ -23,7 +23,7 @@ async function waitForScrollSettled(locator: Locator) {
   }));
 }
 
-/** 低频日历选项（时间块、吸附）收在「显示 ⋯」气泡里，先打开再取按钮。 */
+/** 低频日历选项（吸附）收在「显示 ⋯」气泡里，先打开再取按钮。 */
 async function openCalendarMore(page: Page) {
   await page.getByRole("button", { name: "显示更多日历选项" }).click();
   await expect(page.getByRole("dialog", { name: "日历显示选项" })).toBeVisible();
@@ -111,6 +111,22 @@ async function visiblePointIn(page: Page, track: Locator) {
   return top + (bottom - top) / 2;
 }
 
+/**
+ * `scrollIntoViewIfNeeded` 只保证元素落在滚动口里，不知道吸顶头的存在：
+ * 卡片会被顶到滚动口上沿、整张躲在 88px 的周吸顶头后面，随后 `mouse.down`
+ * 打在日期头上而不是卡片上。这里补一次「从吸顶头下方露出」的回滚。
+ */
+async function revealBelowSticky(page: Page, target: Locator, stickySelector: string) {
+  await target.scrollIntoViewIfNeeded();
+  await target.evaluate((element, selector) => {
+    const scroller = element.closest<HTMLElement>(".calendar-viewport");
+    const header = document.querySelector<HTMLElement>(selector);
+    if (!scroller || !header) return;
+    const overlap = header.getBoundingClientRect().bottom - element.getBoundingClientRect().top + 8;
+    if (overlap > 0) scroller.scrollTop -= overlap;
+  }, stickySelector);
+}
+
 /** 直接读落库快照：断言「提交后落库时间 = 预览显示时间」。 */
 async function storedSession(page: Page, id: string) {
   return page.evaluate((sessionId) => {
@@ -186,7 +202,7 @@ test("scheduled session can move and return to the pool without copying its task
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
   const movedSession = secondDay.locator(".calendar-session", { hasText: "移动排程" });
   // 拖回任务池：pointer 松手在池上 = 取消本次安排（落区视觉仍留给 B2）。
-  await movedSession.scrollIntoViewIfNeeded();
+  await revealBelowSticky(page, movedSession, ".week-sticky-header");
   await waitForScrollSettled(page.locator(".calendar-viewport"));
   const movedBox = await movedSession.boundingBox();
   const poolBox = await page.locator("#task-pool").boundingBox();
@@ -196,8 +212,10 @@ test("scheduled session can move and return to the pool without copying its task
   await page.mouse.move(movedBox.x + movedBox.width / 2, movedBox.y + 40, { steps: 4 });
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
   // 池子顶部正对着日历视口的上边缘带：把指针停在这里时 rAF 边缘滚动绝不能带着日历走。
-  // 只按 clientY 判定的实现会一路把日历向上卷，松手位置就和落点框对不上了。
+  // 先横着移出日历（仍在卡片被拿起的高度，不在上边缘带内），再沿池子内竖移到池顶；
+  // 否则「从日历内部横穿到池子」这一段本身就会合法触发一次上边缘滚动，测不到这条断言。
   const beforeScroll = await page.locator(".calendar-viewport").evaluate((el) => el.scrollTop);
+  await page.mouse.move(poolBox.x + poolBox.width / 2, movedBox.y + 40, { steps: 8 });
   await page.mouse.move(poolBox.x + poolBox.width / 2, poolBox.y + 80, { steps: 8 });
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
   // §191：拖动期间任务池变成明确的「移回任务池」落区，文案说清只取消这一次。
@@ -396,6 +414,7 @@ test("edge insert yields the real cards, centre release overlaps, and Ctrl+Z res
   await page.waitForTimeout(300);
 
   // 中央松手：不足 500ms 也提交 overlap（F04/D5），不再静默丢弃。
+  // D16／C4：开始时间取**松手时刻**（指针在 10:00–11:00 卡中央 → 10:30），不再对齐目标卡起点。
   await expect(day.locator('.calendar-session[data-session-id="insert-source"] time')).toHaveText("14:00–15:00");
   const restoredBox = await day.locator('.calendar-session[data-session-id="insert-source"]').boundingBox();
   const centerTarget = await target.boundingBox();
@@ -411,12 +430,12 @@ test("edge insert yields the real cards, centre release overlaps, and Ctrl+Z res
   await expect(page.getByRole("status", { name: "拖拽排程预览" })).toContainText("悬停 0.5 秒以同时安排");
   await page.mouse.up();
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
-  await expect.poll(async () => (await storedSession(page, "insert-source"))?.startLocal).toBe("10:00");
-  expect((await storedSession(page, "insert-source"))?.endLocal).toBe("11:00");
+  await expect.poll(async () => (await storedSession(page, "insert-source"))?.startLocal).toBe("10:30");
+  expect((await storedSession(page, "insert-source"))?.endLocal).toBe("11:30");
   expect((await storedSession(page, "insert-target"))?.startLocal).toBe("10:00");
   await expect(page.getByRole("button", { name: /撤销同时安排/ })).toBeVisible();
 
-  // 撤销后走半秒强调路径：读数先变成「同时安排」，松手落库与读数一致。
+  // 撤销后走半秒强调路径：读数先变成「同时安排」，松手落库与读数一致（落点仍是指针分钟）。
   await page.keyboard.press("Control+z");
   await expect.poll(async () => (await storedSession(page, "insert-source"))?.startLocal).toBe("14:00");
   await page.waitForTimeout(300);
@@ -430,11 +449,99 @@ test("edge insert yields the real cards, centre release overlaps, and Ctrl+Z res
   if (!liveLatch) throw new Error("半秒强调路径下目标卡必须可见");
   await page.mouse.move(liveLatch.x + liveLatch.width / 2, liveLatch.y + liveLatch.height / 2, { steps: 1 });
   await expect(page.getByRole("status", { name: "拖拽排程预览" })).toHaveText("同时安排", { timeout: 3000 });
-  await expect(page.getByRole("status", { name: "拖动时间预览" })).toHaveText("10:00–11:00 · 60 分钟");
+  await expect(page.getByRole("status", { name: "拖动时间预览" })).toHaveText("10:30–11:30 · 60 分钟");
   await page.mouse.up();
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
-  await expect.poll(async () => (await storedSession(page, "insert-source"))?.startLocal).toBe("10:00");
-  expect((await storedSession(page, "insert-source"))?.endLocal).toBe("11:00");
+  await expect.poll(async () => (await storedSession(page, "insert-source"))?.startLocal).toBe("10:30");
+  expect((await storedSession(page, "insert-source"))?.endLocal).toBe("11:30");
+});
+
+test("calendar C4 drops the second side-by-side card at a staggered minute inside its own lane", async ({ page }) => {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date(`${anchor}T12:00:00`));
+  await page.evaluate((day) => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "week", calendarDayMode: "fullDay",
+      calendarAnchors: { day, week: day, month: day },
+      calendarZoom: { day: "compact", week: "compact", month: "compact" },
+      calendarScale: { day: 84, week: 60, month: 108 },
+      snapMinutes: 15, showActualRecords: false,
+    }));
+    const task = (id: string, title: string, order: number) => ({ id, projectId: null, title, progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, sortOrder: order, kind: "task" });
+    const session = (id: string, taskId: string, startLocal: string, endLocal: string) => ({ id, taskId, localDate: day, endLocalDate: day, startLocal, endLocal, timeZone: "local", utcOffsetMinutes: -new Date().getTimezoneOffset(), status: "scheduled" });
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [task("c4-first-task", "并排第一张", 0), task("c4-second-task", "并排第二张", 1)],
+      executionSessions: [
+        session("c4-first", "c4-first-task", "10:00", "11:00"),
+        session("c4-second", "c4-second-task", "10:00", "11:00"),
+      ],
+    }));
+  }, anchor);
+  await page.reload();
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const scroller = page.locator(".calendar-viewport");
+  const track = page.locator(`.calendar-day[data-day-date="${anchor}"] .day-track`);
+  const first = page.locator('.calendar-session[data-session-id="c4-first"]');
+  const second = page.locator('.calendar-session[data-session-id="c4-second"]');
+  await expect(second).toBeVisible();
+  await waitForScrollSettled(scroller);
+  // 把 10:00 附近摆到视口中段，避开 88px 吸顶头与边缘滚动触发带。
+  await scroller.evaluate((element) => {
+    const card = document.querySelector<HTMLElement>('[data-session-id="c4-first"]')!;
+    element.scrollTop += card.getBoundingClientRect().top - element.getBoundingClientRect().top - 200;
+  });
+  await waitForScrollSettled(scroller);
+
+  // 两张完全同时的卡各占半栏；落库布局写在 data-lane-* 上，命中判横向就靠它。
+  await expect(first).toHaveAttribute("data-lane-left", "0");
+  await expect(first).toHaveAttribute("data-lane-width", "50");
+  await expect(second).toHaveAttribute("data-lane-left", "50");
+  const firstBox = await first.boundingBox();
+  const secondBox = await second.boundingBox();
+  if (!firstBox || !secondBox) throw new Error("两张并排卡必须都可见");
+  expect(secondBox.x).toBeGreaterThan(firstBox.x + firstBox.width / 2);
+
+  // 真指针抓起右栏那一张，纵向穿过第一张的时间区间，横向一直留在自己那一栏。
+  // 目标刻度取 10:33（非 15 分钟整格）：落库必须吸附到 10:30，证明「自由分钟 + 既有吸附」。
+  const laneX = secondBox.x + secondBox.width / 2;
+  const dropY = await track.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top + 633 / 1440 * rect.height;
+  }) + 6;
+  await page.mouse.move(laneX, secondBox.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(laneX, dropY, { steps: 8 });
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "dragging");
+  // 中段 + 纵向交叠在旧语义下是「同时安排／插入并后移」；现在 lane 空白不构成命中。
+  await expect(page.getByRole("status", { name: "拖拽排程预览" })).toContainText("松开放置");
+  await expect(page.locator('[data-yielding="true"]')).toHaveCount(0);
+  await page.mouse.up();
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
+  await expect.poll(async () => (await storedSession(page, "c4-second"))?.startLocal).toBe("10:30");
+  expect((await storedSession(page, "c4-second"))?.endLocal).toBe("11:30");
+  // 第一张一动不动：错开靠的是落点，不是级联推移。
+  expect((await storedSession(page, "c4-first"))?.startLocal).toBe("10:00");
+  await expect(page.getByRole("button", { name: /撤销时间修改/ })).toBeVisible();
+
+  // 一次手势 = 一个撤销项：撤销后两张回到完全同时，并排栏恢复。
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await storedSession(page, "c4-second"))?.startLocal).toBe("10:00");
+
+  // 反向路径仍在：指针压回第一张那一栏的上 25% 边带，仍是插入并让位。
+  await page.waitForTimeout(320);
+  const edgeBox = await first.boundingBox();
+  if (!edgeBox) throw new Error("边带回归需要目标卡可见");
+  await page.mouse.move(laneX, dropY, { steps: 2 });
+  await page.mouse.down();
+  await page.mouse.move(edgeBox.x + edgeBox.width / 2, edgeBox.y + 4, { steps: 8 });
+  await expect(page.getByRole("status", { name: "拖拽排程预览" })).toContainText("插入并后移");
+  await expect(first).toHaveAttribute("data-yielding", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-drag-phase", "idle");
+  expect((await storedSession(page, "c4-second"))?.startLocal).toBe("10:00");
 });
 
 test("course text is previewed and imported as one project transaction", async ({ page }) => {
@@ -464,10 +571,16 @@ test("phase 2 scheduling, time blocks and recurring habits persist as one action
   await expect(page.getByRole("button", { name: /撤销本次自动排程/ })).toBeVisible();
 
   await page.getByRole("button", { name: "日历", exact: true }).click();
-  await openCalendarMore(page);
-  await page.getByRole("button", { name: "时间块" }).click();
-  await page.getByRole("textbox", { name: "标题", exact: true }).fill("午休");
-  await page.getByRole("button", { name: "创建时间块" }).click();
+  // D15：时间块统一从空白拖选气泡创建，不再有「显示…」里的第二入口。
+  const blankTrack = page.locator(".calendar-day .day-track").first();
+  const blankBox = await blankTrack.boundingBox(); if (!blankBox) throw new Error("week day track must be visible");
+  const blankPoint = (hour: number) => blankBox.y + blankBox.height * hour / 24;
+  await blankTrack.dispatchEvent("pointerdown", { pointerId: 9, button: 0, clientX: blankBox.x + blankBox.width / 2, clientY: blankPoint(8) });
+  await blankTrack.dispatchEvent("pointerup", { pointerId: 9, button: 0, clientX: blankBox.x + blankBox.width / 2, clientY: blankPoint(9) });
+  const blankBubble = page.getByRole("dialog", { name: "空白时段操作" });
+  await blankBubble.getByRole("button", { name: "时间块", exact: true }).click();
+  await blankBubble.getByRole("textbox", { name: "标题", exact: true }).fill("午休");
+  await blankBubble.getByRole("button", { name: "创建时间块" }).click();
   await expect(page.locator(".calendar-time-block", { hasText: "午休" })).toHaveCount(1);
 
   await page.getByRole("button", { name: "今日", exact: true }).click();
@@ -723,7 +836,8 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
   });
   await expect(page.getByRole("button", { name: "回到现在" })).toBeVisible();
   await page.getByRole("button", { name: "回到现在" }).click();
-  await expect(page.getByRole("button", { name: "回到现在" })).toHaveCount(0);
+  // C1／#2：「回到现在」常驻，落定后仍在（箭头改为定位图标装饰）。
+  await expect(page.getByRole("button", { name: "回到现在" })).toBeVisible();
 
   await page.getByRole("checkbox", { name: "显示实际记录" }).uncheck();
   await expect(page.locator(".calendar-actual-record")).toHaveCount(0);
@@ -732,6 +846,70 @@ test("phase 3 M2 keeps planned and actual time separate and returns to the live 
   await expect(page.locator(".calendar-session", { hasText: "验证计划实际" })).toContainText("00:00–23:59");
   const planned = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase1.workspace") ?? "{}").executionSessions?.[0]);
   expect(planned).toMatchObject({ startLocal: "00:00", endLocal: "23:59" });
+});
+
+/**
+ * C3／D14：「时间进行到哪了」与「任务完成了多少」在卡片上一眼可分 ——
+ * 卡顶满宽任务进度帽 vs 卡底内缩时间胶囊（位置/宽度/形态三重分离），
+ * 进行中的卡带「剩余 X 分钟」按档取舍，now 线为实线。
+ */
+test("phase C3 separates the elapsed-time and task-progress bars and prints the remaining time", async ({ page }) => {
+  await page.evaluate(() => {
+    const now = new Date();
+    const today = new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    const tomorrow = new Date(now.getTime() - now.getTimezoneOffset() * 60_000 + 86_400_000).toISOString().slice(0, 10);
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: "day", calendarAnchors: { day: today, week: today, month: today },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+    }));
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [
+        { id: "task-c3-run", projectId: null, title: "双层条验证", progress: 60, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 0 },
+        { id: "task-c3-next", projectId: null, title: "明日安排", progress: 20, status: "active", deadlineLocal: null, estimatedMinutes: 60, sortOrder: 1 },
+      ],
+      executionSessions: [
+        { id: "session-c3-run", taskId: "task-c3-run", localDate: today, endLocalDate: today, startLocal: "00:00", endLocal: "23:59", timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" },
+        { id: "session-c3-next", taskId: "task-c3-next", localDate: tomorrow, endLocalDate: tomorrow, startLocal: "10:00", endLocal: "11:00", timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" },
+      ],
+      executionRecords: [],
+    }));
+  });
+  await page.reload();
+  const running = page.locator(".calendar-session.current-schedule", { hasText: "双层条验证" });
+  await expect(running).toBeVisible();
+  const progress = running.locator(".session-task-progress");
+  const elapsed = running.locator(".session-elapsed");
+  await expect(progress).toBeVisible();
+  await expect(elapsed).toBeVisible();
+  const cardBox = await running.boundingBox();
+  const progressBox = await progress.boundingBox();
+  const elapsedBox = await elapsed.boundingBox();
+  expect(cardBox && progressBox && elapsedBox).toBeTruthy();
+  // 位置分离：进度帽贴卡顶、时间胶囊贴卡底，两者相距大半个卡高。
+  expect(progressBox!.y).toBeGreaterThanOrEqual(cardBox!.y - 1);
+  expect(progressBox!.y).toBeLessThan(cardBox!.y + cardBox!.height / 2);
+  expect(elapsedBox!.y + elapsedBox!.height).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height - 12);
+  expect(elapsedBox!.y).toBeGreaterThan(cardBox!.y + cardBox!.height / 2);
+  // 形态与宽度分离：满宽平头帽 vs 内缩圆角胶囊。
+  expect(progressBox!.width).toBeGreaterThan(elapsedBox!.width + 8);
+  // 「剩余」文字按档取舍：standard/detailed 出文字，compact 只留双层条。
+  await expect(running.locator(".session-remaining")).toHaveText(/^剩余 (?:\d+ 分钟|\d+ 小时(?: \d+ 分)?)$/);
+  await page.getByRole("button", { name: "紧凑" }).click();
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-calendar-zoom", "compact");
+  await expect(running.locator(".session-elapsed")).toBeVisible();
+  await expect(running.locator(".session-task-progress")).toBeVisible();
+  await expect(running.locator(".session-remaining")).toBeHidden();
+  await page.getByRole("button", { name: "详细" }).click();
+  await expect(running.locator(".session-remaining")).toBeVisible();
+  // 未开始的卡只有任务进度帽：没有时间条，也没有剩余文字。
+  const later = page.locator(".calendar-session[data-session-id='session-c3-next']");
+  await expect(later.locator(".session-task-progress")).toHaveCount(1);
+  await expect(later.locator(".session-elapsed")).toHaveCount(0);
+  await expect(later.locator(".session-remaining")).toHaveCount(0);
+  // now 线虚改实。
+  const nowLineStyle = await page.locator(".calendar-now-line").evaluate((element) => getComputedStyle(element, "::before").borderTopStyle);
+  expect(nowLineStyle).toBe("solid");
 });
 
 test("phase 3 M3 zooms around the pointed time and keeps schedule facts unchanged", async ({ page }) => {
@@ -816,6 +994,179 @@ test("phase 3 M3 zooms around the pointed time and keeps schedule facts unchange
   await page.keyboard.up("Control");
   await expect(page.locator(".calendar-page")).toHaveAttribute("data-calendar-scale", "52");
   await expect.poll(async () => Math.abs((await currentNoonY()) - dayBefore)).toBeLessThanOrEqual(2);
+});
+
+/** 一块「滚动容器 + 基准轨道」：日视图用中段面板，周视图用指定那一列。 */
+type CalendarSurface = { scroller: Locator; track: Locator; centre: () => Promise<number>; reanchor?: () => Promise<void> };
+type DensityPreset = "紧凑" | "标准" | "详细";
+const DENSITY_ATTRIBUTE = { 紧凑: "compact", 标准: "standard", 详细: "detailed" } as const;
+
+/**
+ * 切档保位用例的夹具：三张卡把有效日撑满（凌晨／中央／深夜），
+ * 于是全天模式的轨道是 24 小时线性映射，中央刻度与滚动偏移的关系可预测。
+ */
+async function seedDensityFixture(page: Page, view: "day" | "week") {
+  const anchor = "2026-08-05";
+  await page.clock.setFixedTime(new Date(`${anchor}T12:00:00`));
+  await page.evaluate(({ day, view: initialView }) => {
+    localStorage.clear();
+    localStorage.setItem("daymark.phase0.preferences", JSON.stringify({
+      lastPage: "calendar", calendarView: initialView, calendarDayMode: "fullDay",
+      calendarAnchors: { day, week: day, month: day },
+      calendarZoom: { day: "standard", week: "standard", month: "standard" },
+      calendarScale: { day: 168, week: 84, month: 108 },
+      defaultTimeSlots: [
+        { id: "slot-c4-morning", label: "上午专注", start: "09:00", end: "12:00", weekdays: [0, 1, 2, 3, 4, 5, 6] },
+        { id: "slot-c4-afternoon", label: "下午专注", start: "14:00", end: "18:00", weekdays: [0, 1, 2, 3, 4, 5, 6] },
+      ],
+      snapMinutes: 15, showActualRecords: false,
+    }));
+    const now = new Date();
+    const session = (id: string, startLocal: string, endLocal: string) => ({ id, taskId: "c4-zoom-task", localDate: day, endLocalDate: day, startLocal, endLocal, timeZone: "local", utcOffsetMinutes: -now.getTimezoneOffset(), status: "scheduled" });
+    localStorage.setItem("daymark.phase1.workspace", JSON.stringify({
+      projects: [], progressEvents: [], executionRecords: [], timeBlocks: [], recurringHabits: [], habitOccurrences: [], rescuePromptedSessionIds: [],
+      tasks: [{ id: "c4-zoom-task", projectId: null, title: "中央那张卡", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: 60, sessionMinutes: 60, sortOrder: 0, kind: "task" }],
+      executionSessions: [session("c4-zoom-card", "10:30", "11:30"), session("c4-zoom-early", "02:00", "03:00"), session("c4-zoom-late", "23:00", "23:30")],
+    }));
+  }, { day: anchor, view });
+  await page.reload();
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+
+/**
+ * 把某个逻辑分钟摆到视口中央：切档前采样、切档后复采都用它。
+ * `trackYForMinute` 给的是**客户端**坐标，所以要减掉滚动容器自己的上沿，不能只减半高。
+ */
+async function centreMinuteOn(surface: CalendarSurface, minute: number) {
+  const y = await trackYForMinute(surface.track, minute);
+  await surface.scroller.evaluate((element, value) => { element.scrollTop += value - (element.getBoundingClientRect().top + element.clientHeight / 2); }, y);
+  await waitForScrollSettled(surface.scroller);
+}
+
+async function setDensityPreset(page: Page, label: DensityPreset, surface: CalendarSurface) {
+  await page.getByRole("button", { name: label, exact: true }).click();
+  await expect(page.locator(".calendar-page")).toHaveAttribute("data-calendar-zoom", DENSITY_ATTRIBUTE[label]);
+  await waitForScrollSettled(surface.scroller);
+}
+
+const scrollBounds = (surface: CalendarSurface) => surface.scroller.evaluate((element) => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+
+/**
+ * 一次「摆中央 → 三档来回」的漂移检查，返回真正断言过的次数。
+ *
+ * 目标档放不下「同一刻居中」时浏览器把 scrollTop 钳在 0 或末尾，中央时刻必然偏移
+ * （全量读数见 docs/reports/calendar-c4-implementation.md §4：108 组里 23 组被钳位，
+ * 未钳位的 85 组最大漂移 0.7 分钟）。钳位的那一次不计入判据，由边界用例单独钉「精确钳位」。
+ */
+async function densityDriftChecks(page: Page, surface: CalendarSurface, minute: number, where: string) {
+  await surface.reanchor?.();
+  // 轨道先要在：基准轨道消失说明锚点被推到别的日子，读数是那天的刻度，测的就不是切档了。
+  await expect.poll(async () => surface.track.count(), `${where}：基准轨道不在基准面板上`).toBe(1);
+  await centreMinuteOn(surface, minute);
+  const before = await surface.centre();
+  const start = await scrollBounds(surface);
+  if (start.top <= 0 || start.top >= start.max) return 0;
+  let checks = 0;
+  for (const label of ["紧凑", "详细", "标准"] as const) {
+    await setDensityPreset(page, label, surface);
+    const state = await scrollBounds(surface);
+    if (state.top <= 0 || state.top >= state.max) continue;
+    expect(Math.abs(await surface.centre() - before), `${where}：${label} 档切档后的中央分钟漂移`).toBeLessThanOrEqual(1);
+    checks += 1;
+  }
+  return checks;
+}
+
+const DAY_ANCHOR = "2026-08-05";
+const daySurfaceOf = (page: Page): CalendarSurface => ({
+  scroller: page.locator(".continuous-day-axis"),
+  track: page.locator(`.continuous-day-panel[data-calendar-date="${DAY_ANCHOR}"] .day-track`),
+  centre: () => calendarCentreMinute(page, ".continuous-day-axis", `.continuous-day-panel[data-calendar-date="${DAY_ANCHOR}"] .day-track`),
+  // 日视图的锚点会被「滚进隔壁那天」推走（`scrollTop >= nextStart`），推走之后 8/5 只剩
+  // 44px 带子、基准轨道消失。每次测量前把它拉回今天，用例测的才是切档而不是平移。
+  reanchor: async () => {
+    await page.getByRole("button", { name: "回到今天" }).click();
+    await waitForScrollSettled(page.locator(".continuous-day-axis"));
+  },
+});
+const weekSurfaceOf = (page: Page): CalendarSurface => ({
+  scroller: page.locator(".calendar-viewport"),
+  track: page.locator(`.calendar-day[data-day-date="${DAY_ANCHOR}"] .day-track`),
+  centre: () => calendarCentreMinute(page, ".calendar-viewport", `.calendar-day[data-day-date="${DAY_ANCHOR}"] .day-track`),
+});
+
+test("calendar C4 keeps the centre logical minute across density presets in the day view", async ({ page }) => {
+  await seedDensityFixture(page, "day");
+  const axis = page.locator(".continuous-day-axis");
+  const daySurface = daySurfaceOf(page);
+  const card = page.locator('.calendar-session[data-session-id="c4-zoom-card"]');
+  await waitForScrollSettled(axis);
+  let checks = 0;
+
+  // 全天模式：中段任意时刻，紧凑／详细／标准来回。
+  checks += await densityDriftChecks(page, daySurface, 630, "全天 10:30");
+  checks += await densityDriftChecks(page, daySurface, 900, "全天 15:00");
+  checks += await densityDriftChecks(page, daySurface, 1200, "全天 20:00");
+  // 正在看的卡：切到最密的紧凑档后仍在视口内。
+  await centreMinuteOn(daySurface, 630);
+  await setDensityPreset(page, "紧凑", daySurface);
+  await expect(card).toBeInViewport();
+
+  // 贴顶：小档放不下「凌晨居中」，浏览器钳在 scrollTop 0 —— 这条钉钳位精确，不跳回中段。
+  await centreMinuteOn(daySurface, 630);
+  await setDensityPreset(page, "详细", daySurface);
+  await axis.evaluate((element) => { element.scrollTop = 0; });
+  await waitForScrollSettled(axis);
+  await setDensityPreset(page, "紧凑", daySurface);
+  await expect.poll(async () => axis.evaluate((element) => element.scrollTop)).toBe(0);
+
+  // 贴底 = 被观看那一天靠后的一段：它下面还有「后一天」整块面板，不发生钳位，中央时刻照样保住。
+  // 不取今天的 24:00 整点：那正是三日缓冲的换日判据（`scrollTop >= nextStart` 会推锚点），
+  // 测的就变成平移而不是切档。整条轴最末一段的钳位行为由 scale-anchor.mjs 的读数覆盖。
+  checks += await densityDriftChecks(page, daySurface, 1290, "全天 21:30");
+
+  // 默认时段模式：轨道同时有折叠条与展开段，两条路径都保住。
+  await page.getByRole("button", { name: "默认时段" }).click();
+  await waitForScrollSettled(axis);
+  checks += await densityDriftChecks(page, daySurface, 960, "默认时段 16:00");
+  checks += await densityDriftChecks(page, daySurface, 1020, "默认时段 17:00");
+  // 采样点落在折叠条上时取区间中点（与 `sampleCalendarPosition` 同一判据）：带子高度只随
+  // 界面缩放变化，所以从最高的详细档切到标准档不能漂（切到紧凑会先撞上钳位，上面那条已跳过）。
+  await setDensityPreset(page, "详细", daySurface);
+  await centreMinuteOn(daySurface, 780);
+  const bandBefore = await daySurface.centre();
+  await setDensityPreset(page, "标准", daySurface);
+  const bandState = await scrollBounds(daySurface);
+  expect(bandState.top > 0 && bandState.top < bandState.max, "折叠条用例需要可居中，否则换更高的起点档").toBe(true);
+  expect(Math.abs(await daySurface.centre() - bandBefore), "折叠条中点漂移").toBeLessThanOrEqual(1);
+  checks += 1;
+  // 折叠带**展开态**：点开一条折叠条后，同一刻在切档前后不动。
+  await page.locator(".collapsed-time-gap").first().getByRole("button").click();
+  await waitForScrollSettled(axis);
+  checks += await densityDriftChecks(page, daySurface, 780, "展开后的原折叠段");
+
+  expect(checks, "至少要有若干次「可居中」的切档断言，否则这条用例会静默空转").toBeGreaterThanOrEqual(12);
+});
+
+test("calendar C4 keeps the centre logical minute across density presets in the week view, without writing the preference", async ({ page }) => {
+  await seedDensityFixture(page, "week");
+  const weekSurface = weekSurfaceOf(page);
+  await waitForScrollSettled(weekSurface.scroller);
+  let checks = 0;
+  for (const minute of [540, 720, 900]) checks += await densityDriftChecks(page, weekSurface, minute, `周 ${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`);
+  expect(checks, "周视图同样要有若干次可居中的切档断言").toBeGreaterThanOrEqual(6);
+
+  // 切档是程序性滚动：偏好里的浏览位置仍是切档前那一刻，没被程序化落位改写（规格 §5.2）。
+  await centreMinuteOn(weekSurface, 720);
+  await waitForScrollSettled(weekSurface.scroller);
+  await page.waitForTimeout(400);
+  const centreBefore = await weekSurface.centre();
+  await setDensityPreset(page, "紧凑", weekSurface);
+  await page.waitForTimeout(400);
+  const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem("daymark.phase0.preferences") ?? "{}").calendarPositions?.week);
+  expect(remembered, "用户滚动应先写下浏览位置").toBeTruthy();
+  expect(Math.abs(remembered.minute - centreBefore), `偏好里的浏览位置被切档改写：${remembered.minute} vs 切档前 ${centreBefore.toFixed(1)}`).toBeLessThanOrEqual(1);
+  expect(Math.abs(await weekSurface.centre() - centreBefore), "周视图切档后的中央分钟漂移").toBeLessThanOrEqual(1);
 });
 
 test("phase 3 M4 folds non-default hours and retains only a successful drag expansion", async ({ page }) => {
@@ -1227,29 +1578,40 @@ test("phase 3 M6 exposes month summaries, week all-day overflow and keyboard nav
   const detail = page.getByRole("complementary", { name: /2026-08-05.*详情/ });
   await expect(detail).toBeVisible();
   await expect.poll(() => detail.evaluate((element) => getComputedStyle(element).position)).toBe("absolute");
+  // 月视图保留详情：X 可关（Esc 与再次点同一格在组件测试里钉住）。
+  await page.getByRole("button", { name: "关闭日期详情" }).click();
+  await expect(detail).toHaveCount(0);
 
   await page.getByRole("button", { name: "周", exact: true }).click();
   const allDay = page.getByRole("region", { name: "全天标记" });
   const allDayChip = allDay.getByRole("button", { name: /截止 4 项/ });
   await expect(allDayChip).toBeVisible();
   await allDayChip.click();
-  const allDayPanel = page.getByRole("dialog", { name: /全天标记/ });
-  await expect(allDayPanel.locator("[data-all-day-marker]")).toHaveCount(4);
-  await allDayPanel.locator("[data-all-day-marker]").first().click();
-  await expect(allDayPanel).toHaveCount(0);
-  await expect(page.locator('[data-day-date="2026-08-05"]')).toHaveClass(/selected/);
+  // D17：周视图点一天（包括全天 chip）直接进入该日日视图，不再有右侧详情。
+  await expect(page.getByRole("button", { name: "日", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("8月5日");
+  await expect(page.locator(".calendar-date-details")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "周", exact: true }).click();
   const viewport = page.getByRole("region", { name: "日历时间网格" });
   const stickyHeader = page.locator(".week-sticky-header");
   await viewport.evaluate((element) => { element.scrollTop = 420; });
   await expect.poll(async () => Math.abs(((await stickyHeader.boundingBox())?.y ?? 0) - ((await viewport.boundingBox())?.y ?? 0))).toBeLessThanOrEqual(2);
-  const header = page.getByRole("button", { name: /选中 2026-08-05/ }); await header.focus(); await page.keyboard.press("PageDown");
-  await expect(page.getByRole("button", { name: /选中 2026-08-12/ })).toBeFocused();
-  // 日期头 Enter 只选中日期，不切日视图。
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "周", exact: true })).toHaveAttribute("aria-pressed", "true");
+  // 键盘创建通道仍在：时间光标 Enter 打开空白气泡（指针单击才是「打开这一天」）。
   // 周视图不是网格：时间光标是 `group`（P4-11 方案 B），键盘路径不变。
-  const track = page.getByRole("group", { name: "2026-08-12 09:00 空白时间" }); await track.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
+  const track = page.getByRole("group", { name: "2026-08-05 09:00 空白时间" }); await track.focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "空白时段操作" })).toContainText("09:15–09:45");
+  await page.keyboard.press("Escape");
+  // 焦点归还由浮层宿主在清掉 inert 后**延迟一帧**执行（floating-panel.tsx:120）。等两帧让归还落定再继续：
+  // 否则紧随的 header.focus() 会被稍后到达的归还抢走，PageDown 落错处理器（2026-10-27 C3 全量里
+  // 该用例 1/4 红即此竞态；本夹具无执行时段，与 C3 的卡片改动无交集）。
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))));
+  // 日期头 Enter 直接进入日视图（D17）。
+  const header = page.getByRole("button", { name: /打开 2026-08-05/ }); await header.focus(); await page.keyboard.press("PageDown");
+  await expect(page.getByRole("button", { name: /打开 2026-08-12/ })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "日", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("8月12日");
 });
 
 /**
@@ -1591,7 +1953,8 @@ test("phase 4 M9 records 'back to now' as the remembered browsing position", asy
     return parsed.calendarPositions?.week?.minute ?? null;
   });
 
-  // 先手动滚到时间轴顶端，让「回到现在」出现。周视图没有三日缓冲，滚动不会被应用自己改写。
+  // C1 起「回到现在」常驻；先手动滚到时间轴顶端，验证一次明确的回位请求仍写偏好。
+  // 周视图没有三日缓冲，滚动不会被应用自己改写。
   const viewport = page.locator(".calendar-viewport");
   await viewport.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
   await expect(page.getByRole("button", { name: "回到现在" })).toBeVisible();

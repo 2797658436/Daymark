@@ -3,8 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { dragEdgeScrollVelocity } from "./useCalendarViewport";
 import { clockMinutes, segmentMinuteAtOffset, segmentOffsetAtMinute, type TimelineSegment } from "../lib/calendarTimeline";
 import {
-  resizeChanges, resolveCalendarDrop, sessionMinutes,
-  type CalendarDropIntent, type CalendarDropMode, type SessionPlacementChange,
+  laneXSpan, resizeChanges, resolveCalendarDrop, sessionHitAtPoint, sessionMinutes,
+  type CalendarDropIntent, type CalendarDropMode, type SessionHitCard, type SessionPlacementChange,
 } from "../lib/calendarPlacement";
 import type { ExecutionSession, Task } from "../lib/native";
 import type { AppSettings } from "../lib/settings";
@@ -234,19 +234,19 @@ function offsetForMinute(track: HTMLElement, minute: number): number {
  *
  * 命中判定读**原计划几何**而不是卡片当前 DOM 位置：插入预览会把目标卡真的往后挪（§171），
  * 若按挪动后的位置判定，指针停在原上缘时目标就从指针下消失 —— 预览会在「插入」和「放置」
- * 之间闪，松手重算又会得到与预览不同的落点。原计划几何只由当天时段与轨道分段决定，
+ * 之间闪，松手重算又会得到与预览不同的落点。纵向原计划几何只由当天时段与轨道分段决定，
  * 拖动中保持不动，预览与提交才会落在同一张卡上。
  *
- * 横向同理**只看整列**：横向决定的是「哪一列」，不是「哪一张卡」。B2 的重叠预演（§177）
- * 会按松手后的结果把同组的卡提前分成并排栏，若仍按卡片当前的 `rect.left/right` 判定，
- * 指针停在列中央时反而落到「预览栏」之外、目标卡从指针下消失 —— 预览显示「同时安排」，
- * 松手却按 `place` 落库（实测差 30 分钟）。并行组里指针真的压着哪一张仍然优先。
+ * 横向读**该卡片自己的并排栏**（C4／D16，`laneXSpan`）：两张卡并排时，第二张的指针哪怕与
+ * 第一张纵向交叠，只要落在自己那一栏的空刻上就不构成命中，于是走 `place` 自由错开。
+ * 栏的百分比取自 `concurrentLayouts` 的**落库布局**（卡片上的 `data-lane-*`），不是 DOM 的
+ * `rect.left/right` —— §177 的重叠预演会提前把同组的卡分成并排栏，读 DOM 会让目标从指针下
+ * 消失、预览与松手分叉（实测差 30 分钟那次）。
  */
 function sessionAtPoint(track: HTMLElement, x: number, y: number, sourceId: string, sessions: ExecutionSession[]): { sessionId: string; ratio: number } | null {
   const trackRect = track.getBoundingClientRect();
   if (trackRect.width <= 0 || trackRect.height <= 0) return null;
-  if (x < trackRect.left || x > trackRect.right) return null;
-  let best: { sessionId: string; ratio: number; area: number; onPointer: boolean } | null = null;
+  const cards: SessionHitCard[] = [];
   for (const card of Array.from(track.querySelectorAll<HTMLElement>(".calendar-session"))) {
     const sessionId = card.dataset.sessionId ?? "";
     if (!sessionId || sessionId === sourceId) continue;
@@ -257,13 +257,13 @@ function sessionAtPoint(track: HTMLElement, x: number, y: number, sourceId: stri
     const start = clockMinutes(session.startLocal);
     const top = trackRect.top + offsetForMinute(track, start);
     const height = Math.max(offsetForMinute(track, start + sessionMinutes(session)) - offsetForMinute(track, start), rect.height);
-    if (height <= 0 || y < top || y > top + height) continue;
-    const candidate = { sessionId, ratio: (y - top) / height, area: rect.width * height, onPointer: x >= rect.left && x <= rect.right };
-    if (!best) { best = candidate; continue; }
-    if (candidate.onPointer !== best.onPointer) { if (candidate.onPointer) best = candidate; continue; }
-    if (candidate.area < best.area) best = candidate;
+    const laneLeft = Number(card.dataset.laneLeft);
+    const laneWidth = Number(card.dataset.laneWidth);
+    const layout = Number.isFinite(laneLeft) && Number.isFinite(laneWidth) ? { left: laneLeft, width: laneWidth } : null;
+    const span = laneXSpan({ left: trackRect.left, width: trackRect.width }, layout);
+    cards.push({ sessionId, top, height, left: span.left, right: span.right });
   }
-  return best ? { sessionId: best.sessionId, ratio: best.ratio } : null;
+  return sessionHitAtPoint(cards, x, y);
 }
 
 /** 指针下的时间块（§185/186：块参与落点命中）。 */

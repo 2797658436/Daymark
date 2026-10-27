@@ -83,13 +83,21 @@ export function FloatingPanel({ children, label, onClose, wide = false, anchor: 
 
   useLayoutEffect(() => {
     const panel = ref.current!;
+    /**
+     * 点锚点：调用方只有坐标、没有尺寸（松手点那种 `DOMRect(x, y, 0, 0)`）。
+     * 它仍是有效锚点，只要坐标不在原点；全 0 的矩形才是真正的「没有锚点」
+     * （断开连接的元素、默认构造的 DOMRect），拿它定位会把气泡甩到左上角。
+     */
+    const isPointAnchor = (rect: DOMRect | null | undefined) => Boolean(rect && (rect.width || rect.height || rect.left || rect.top));
     const place = () => {
       // 锚元素可能已经随宿主列表卸载（任务池里刚完成的那一行就是这样）：断开连接的
       // 节点 getBoundingClientRect() 全为 0，此时必须退回调用方捕获的矩形。
       // 全 0 的矩形一律当作「没有锚点」——它会把气泡甩到窗口左上角盖住页头。
       const live = anchorElement?.isConnected ? anchorElement.getBoundingClientRect() : null;
-      const supplied = suppliedAnchor && (suppliedAnchor.width || suppliedAnchor.height) ? suppliedAnchor : null;
-      const triggerRect = trigger?.getBoundingClientRect() ?? null;
+      const supplied = suppliedAnchor && isPointAnchor(suppliedAnchor) ? suppliedAnchor : null;
+      // `body`／`html` 的矩形是整个视口，不是「用户刚才点的地方」。把 0×0 的点锚点
+      // 误判成无锚点时，它会退到 body，再把气泡钳到 (12,12)（#5 的根因）。
+      const triggerRect = trigger && trigger !== document.body && trigger !== document.documentElement ? trigger.getBoundingClientRect() : null;
       const anchor = (live && (live.width || live.height) ? live : null)
         ?? supplied
         ?? (triggerRect && (triggerRect.width || triggerRect.height) ? triggerRect : null);

@@ -307,6 +307,8 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
   const draggingRef = useRef(false);
   const settleRef = useRef<number | null>(null);
   const zoomAnchorRef = useRef<ZoomAnchorMeasurement | null>(null);
+  /** 哪一档 scale 已由指针锚点补偿落位：密度切档保位据此让开，避免一次切档两次补偿。 */
+  const scaleAnchorOwnedRef = useRef<number | null>(null);
   /** 应用自己刚写过的程序化滚动位置：只有落在这个位置上的 scroll 事件才算「不是用户滚动」。 */
   const programmaticTopRef = useRef<number | null>(null);
   /** 最近一次程序化写入的位置；按**位置**失效，而不是按时间窗（滚动事件可能被推迟很多帧）。 */
@@ -534,9 +536,39 @@ export function useCalendarViewport(options: UseCalendarViewportOptions): Calend
     const pending = pendingRef.current;
     if (pending && priorityOf(pending.reason) > CALENDAR_SCROLL_PRIORITY.zoomAnchor) cancelPending();
     compensateZoomAnchor(anchor, rootRef.current);
+    // 这次 scale 变化已经由指针锚点落位，下面的密度切档保位必须让开。
+    scaleAnchorOwnedRef.current = scale;
     // 缩放补偿是程序性滚动：只把视图停在指针所指的时间上，不是用户在挑选位置。
     markProgrammaticSettle(anchor.scroller);
   }, [cancelPending, markProgrammaticSettle, rootRef, scale]);
+
+  /**
+   * 密度切档（点「紧凑／标准／详细」）保持视口中央的逻辑时刻。
+   *
+   * 切档只改**内容高度**：`scrollTop` 的像素不变、浏览器往往不派发 scroll 事件，
+   * ResizeObserver 又因 client 尺寸未变而不触发 —— 每小时像素从 84 变 216 时，同一个
+   * scrollTop 指到的时刻漂移约 60%，用户看到的就是「跳到别的地方」（实测 #3）。
+   *
+   * 走的是**逻辑位置**那条通道，不是 Ctrl+滚轮的指针锚点：后者的定义是「指针下那一刻不动」，
+   * 按钮根本没有可锚的指针位置；而验收口径本身就是「视口中央的逻辑分钟不变」，与
+   * `{date, minute, viewportRatio}` 这份单一真相同构 —— 尺寸变化用的也是它（上面的
+   * ResizeObserver），两条路径共用一份换算才不会各写一套锚点。
+   * 落位仍由 `applyPosition` 完成，因此它天然是程序性滚动：只刷内存，不写偏好（规格 §5.2）。
+   */
+  const previousScaleRef = useRef(scale);
+  useLayoutEffect(() => {
+    const previous = previousScaleRef.current;
+    previousScaleRef.current = scale;
+    if (previous === scale) return;
+    if (view !== "day" && view !== "week") return;
+    // 这次变化归 Ctrl+滚轮的锚点补偿（上面那个 effect 先跑，它会把这一档标成自己拥有）。
+    if (scaleAnchorOwnedRef.current === scale) return;
+    if (draggingRef.current) return;
+    const sampled = latestRef.current && latestRef.current.view === view ? latestRef.current.position : null;
+    const position = sampled ?? calendarPositions[view];
+    if (!position) return;
+    applyPosition(position, view, dateRef.current);
+  }, [applyPosition, scale, view]);
 
   // 用户滚动：采样当前位置。滚动停止 300ms 后写成「已停下」的内存值，并且 ——
   // 只有这一次位置变化确实来自用户 —— 才把同一个值交给偏好写入。
