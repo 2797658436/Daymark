@@ -115,14 +115,14 @@ function rescueScenario(endLocal = "13:00") {
 describe("phase 1 manual alpha", () => {
   it("restores the Today page with accessible navigation and task pool", async () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
-    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(/\d+月\d+日星期/);
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(/\d+月\d+日 星期/);
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeVisible();
     expect(screen.getByRole("complementary", { name: /任务池/ })).toBeVisible();
     const results = await axe.run(document.body, { rules: { "color-contrast": { enabled: false } } });
     expect(results.violations).toEqual([]);
   });
 
-  it("separates the current focus, review, timeline and due facts on the today page", async () => {
+  it("renders one timeline, keeps the passed session in place and moves the finished list to the side column", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-05T12:00:00"));
     const backend = new MemorySettingsBackend();
@@ -143,25 +143,84 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
     await screen.findByRole("heading", { name: /8月5日/, level: 1 });
 
-    const nowCard = document.querySelector<HTMLElement>(".now-card")!;
-    expect(within(nowCard).getByRole("heading", { name: "正在推进" })).toBeVisible();
-    expect(nowCard).toHaveTextContent("还剩 30 分钟");
-    expect(within(nowCard).getByRole("button", { name: "开始本次" })).toBeVisible();
+    // 页头不再有事实摘要行：「2 个执行时段 · 1 个待回顾」那种计数已经下放到卡片头。
+    expect(document.querySelector(".today-subtitle")).toBeNull();
+    expect(document.querySelector(".now-card")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "待回顾", level: 2 })).toBeNull();
 
-    const review = screen.getByRole("heading", { name: "待回顾", level: 2 }).closest("section")!;
-    expect(review).toHaveTextContent("需要回顾");
-    const currentRow = document.querySelector(".today-session.is-current")!;
-    expect(currentRow).toHaveTextContent("正在推进");
-    expect(currentRow).toHaveTextContent("现在");
-    expect(document.querySelector(".today-session.is-past")).toHaveTextContent("需要回顾");
+    const currentRow = document.querySelector<HTMLElement>(".today-row.is-current")!;
+    expect(within(currentRow).getByText("正在推进")).toBeVisible();
+    // 剩余时间是倒计时（`剩 30:00`），不是「剩 30 分钟」——后者看不出时间在走。
+    expect(currentRow).toHaveTextContent("剩 30:00");
+    expect(within(currentRow).getByRole("button", { name: "开始" })).toBeVisible();
+    // 「现在」不再用 chip 说：整行的橙色底与实心点已经在说。
+    expect(currentRow.querySelector(".today-chip.is-now")).toBeNull();
+
+    // 已经过去、还没做完的时段留在时间轴上，不写「未推进」，也不挂「已过」标签。
+    const pastRow = document.querySelector<HTMLElement>(".today-row.is-past")!;
+    expect(pastRow).toHaveTextContent("需要回顾");
+    expect(pastRow.querySelector(".today-chip.is-past")).toBeNull();
+    expect(pastRow).not.toHaveTextContent("未推进");
 
     const due = document.querySelector<HTMLElement>(".today-due")!;
     expect(within(due).getByText("临期任务")).toBeVisible();
     expect(within(due).queryByText("更晚的截止")).not.toBeInTheDocument();
+    // 临期条目只写名字与天数，进度控件已经收进气泡里。
+    expect(due.querySelector(".progress-control")).toBeNull();
 
-    const completed = screen.getByText("今日完成 1 项").closest("details")!;
-    expect(completed).not.toHaveAttribute("open");
-    expect(completed).toHaveTextContent("今天做完");
+    // 行内进度条本身就是控件：不再有「百分比按钮 + 进度气泡」这道中转。
+    const rowSlider = within(currentRow).getByRole("slider", { name: "正在推进 完成度" });
+    expect(rowSlider).toHaveValue("65");
+    expect(document.querySelector(".today-progress-panel")).toBeNull();
+    expect(currentRow.querySelector(".today-pct")).toBeNull();
+
+    const done = document.querySelector<HTMLElement>(".today-done")!;
+    expect(within(done).getByText("今天做完")).toBeVisible();
+
+    // 左下角「待续」：只有 review-task 排过期次、今天也没有后续时段。
+    const carry = document.querySelector<HTMLElement>(".carry-toggle")!;
+    expect(carry).toHaveTextContent("待续");
+    expect(carry).toHaveTextContent("1");
+    vi.useRealTimers();
+  });
+
+  /**
+   * 临期气泡的「在轴上查看」= 滚回轴上那一段并亮 4 秒，不是跳去日历。
+   * 「编辑任务」收成只带图标的方按钮（还有边框），不再和「在轴上查看」抢一行宽度。
+   */
+  it("reveals the session on the axis from the due bubble and flashes it for four seconds", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-05T12:00:00"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, checkInEnabled: true };
+    const initial: WorkspaceSnapshot = {
+      ...structuredClone(EMPTY_WORKSPACE),
+      tasks: [{
+        id: "due-task", projectId: null, title: "临期任务", progress: 20, status: "active", deadlineLocal: "2026-08-06",
+        estimatedMinutes: 60, sessionMinutes: 60, priority: "normal", sortOrder: 0, kind: "task",
+      }],
+      executionSessions: [{
+        id: "s-next", taskId: "due-task", localDate: "2026-08-05", endLocalDate: "2026-08-05", startLocal: "14:00", endLocal: "15:00",
+        timeZone: "Asia/Shanghai", utcOffsetMinutes: 480, status: "scheduled",
+      }],
+    };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
+    await screen.findByRole("heading", { name: /8月5日/, level: 1 });
+
+    await user.click(screen.getByRole("button", { name: /^临期任务，/ }));
+    const bubble = await screen.findByRole("dialog", { name: "临期任务 临期操作" });
+    expect(within(bubble).getByRole("button", { name: "编辑任务 临期任务" })).toBeVisible();
+
+    const row = document.querySelector<HTMLElement>('[data-session-id="s-next"]')!;
+    expect(row).not.toHaveClass("is-flash");
+    await user.click(within(bubble).getByRole("button", { name: "在轴上查看" }));
+    expect(screen.queryByRole("dialog", { name: "临期任务 临期操作" })).toBeNull();
+    expect(row).toHaveClass("is-flash");
+
+    // 4 秒后自己熄灭，不留一个常亮的高亮。
+    act(() => { vi.advanceTimersByTime(4100); });
+    expect(row).not.toHaveClass("is-flash");
     vi.useRealTimers();
   });
 
@@ -1072,7 +1131,7 @@ describe("phase 1 manual alpha", () => {
       expect(previous.querySelector(".day-track")).toBeNull();
       expect(previous.querySelector(".calendar-day-band")).toHaveTextContent("8月4日");
       // 带子仍然是「这一天」的归属：aria-label 里带上日期与当日事实。
-      expect(previous.querySelector(".calendar-day-band")).toHaveAttribute("aria-label", "前一天 8月4日星期二 · 无安排");
+      expect(previous.querySelector(".calendar-day-band")).toHaveAttribute("aria-label", "前一天 8月4日 星期二 · 无安排");
 
       await user.click(within(previous).getByRole("button", { name: /展开前一天 8月4日/ }));
       expect(previous).not.toHaveClass("is-previous-collapsed");
@@ -3464,7 +3523,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
  */
 describe("phase 4 P4-06 deadline view", () => {
   const NAVIGATION: Array<[PageId, string, string | RegExp]> = [
-    ["today", "今日", /\d+月\d+日星期/],
+    ["today", "今日", /\d+月\d+日 星期/],
     ["calendar", "日历", "8月3日 — 8月9日"],
     ["deadlines", "截止", "截止事项"],
     ["projects", "项目", "项目"],
@@ -3704,10 +3763,15 @@ describe("completion records", () => {
     await user.click(screen.getByRole("button", { name: `标记 ${title} 已完成` }));
   }
 
-  /** 展开「今日完成」并取出那一行：它是补写／编辑的事后入口。 */
-  async function openTodayRow(user: ReturnType<typeof userEvent.setup>, title = "写周报") {
-    await user.click(await screen.findByText("今日完成 1 项"));
-    return within(document.querySelector<HTMLElement>(".today-completed-list")!).getByRole("button", { name: new RegExp(`^${title}`) });
+  /**
+   * 取出右列「今天完成」里的那一行：它是补写／编辑的事后入口。
+   *
+   * 2026-10-28 起完成项从时间轴卡底部的折叠区移到右列（与临期同宽），直接列出、不再折叠，
+   * 所以这里不再需要先点开 summary。`user` 参数保留，调用点不受影响。
+   */
+  async function openTodayRow(_user: ReturnType<typeof userEvent.setup>, title = "写周报") {
+    await screen.findByRole("heading", { name: "今天完成", level: 2 });
+    return within(document.querySelector<HTMLElement>(".today-done")!).getByRole("button", { name: new RegExp(`^${title}`) });
   }
 
   const bubble = () => screen.findByRole("dialog", { name: "完成记录：写周报" });
@@ -3756,7 +3820,8 @@ describe("completion records", () => {
       await waitFor(() => expect(native.applyProgress).toHaveBeenCalledWith(expect.objectContaining({ toProgress: 100 })));
       // 完成事实照常写入，事后入口不受开关影响。
       const row = await openTodayRow(user);
-      expect(row.textContent).toContain("未填写完成记录");
+      // 右列只放任务名，事实文案（完成于 / 未填写完成记录 / 图片数）收进 title。
+      expect(row.getAttribute("title")).toContain("未填写完成记录");
 
       await user.click(row);
       const panel = await bubble();
@@ -3775,8 +3840,8 @@ describe("completion records", () => {
       expect(String(record.completedAtUtc).startsWith("2026-08-05")).toBe(true);
       expect(images).toEqual([]);
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "完成记录：写周报" })).toBeNull());
-      // 今日完成行把记录内容摊开在事实位上，不再说「未填写」。
-      expect((await openTodayRow(user)).textContent).toContain("合适");
+      // 今天完成行只写任务名，记录内容（适应程度 / 感受标签 / 小结）收进 title。
+      expect((await openTodayRow(user)).getAttribute("title")).toContain("合适");
     } finally {
       vi.useRealTimers();
     }

@@ -626,7 +626,8 @@ test("running execution ends with a manual progress summary and remains after re
 
   await page.reload();
   await expect(page.getByRole("button", { name: "结束本次" })).toHaveCount(0);
-  await expect(page.getByRole("slider", { name: "完成第一章 完成度" }).first()).toHaveValue("45");
+  // 行内进度条本身就是滑块（2026-10-28 去掉进度气泡）：值直接读控件的 value。
+  await expect(page.getByRole("slider", { name: "完成第一章 完成度" })).toHaveValue("45");
 });
 
 test("light and dark shells have no automated accessibility violations", async ({ page }) => {

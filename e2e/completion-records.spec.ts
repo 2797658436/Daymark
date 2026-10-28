@@ -46,10 +46,9 @@ async function dropImages(page: Page, zone: ReturnType<Page["locator"]>, files: 
   }, payload);
 }
 
-/** 「今日完成」是一个 details：只在收起状态时点开它，重复点会把它折回去。 */
+/** 2026-10-28 起「今天完成」在右列、直接列出（不再折叠），等第一行出现就行。 */
 async function expandTodayCompleted(page: Page) {
-  if (await page.locator(".today-completed-row").first().isVisible().catch(() => false)) return;
-  await page.getByText(/今日完成 \d+ 项/).click();
+  await page.locator(".today-done-item").first().waitFor();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -120,12 +119,11 @@ test("completes a task, records it with an image, and reverts it back to 75%", a
   expect(images).toHaveLength(2);
   expect(["image/webp", "image/jpeg"]).toContain(images[0].mime);
 
-  // ⑤ 跨重启：今日完成那一行把记录摊开在事实位上。
+  // ⑤ 跨重启：今天完成那一行仍在右列，记录内容收在 title 里（窄列只写任务名）。
   await page.reload();
-  await page.getByText(/今日完成 1 项/).click();
-  const todayRow = page.locator(".today-completed-row", { hasText: TASK });
-  await expect(todayRow).toContainText("合适");
-  await expect(todayRow).toContainText("2 张图片");
+  const todayRow = page.locator(".today-done-item", { hasText: TASK });
+  await expect(todayRow).toHaveAttribute("title", /合适/);
+  await expect(todayRow).toHaveAttribute("title", /2 张图片/);
 
   // ⑥ 事后编辑 → 撤回：进度回到 75%，内容保留但只读。
   await todayRow.click();
@@ -139,7 +137,7 @@ test("completes a task, records it with an image, and reverts it back to 75%", a
   await expect(page.locator(".completion-toast")).toContainText("已撤回完成，进度回到 75%");
 
   await expect(page.locator(".task-card", { hasText: TASK })).toHaveText(/75/);
-  await expect(page.getByText(/今日完成 1 项/)).toHaveCount(0);
+  await expect(page.locator(".today-done-item", { hasText: TASK })).toHaveCount(0);
   const after = await page.evaluate(() => {
     const snapshot = JSON.parse(localStorage.getItem("daymark.phase1.workspace") ?? "{}") as { completionRecords: Record<string, unknown>[]; progressEvents: { fromProgress: number; toProgress: number }[] };
     return { record: snapshot.completionRecords[0] ?? null, events: snapshot.progressEvents.slice(-2) };
@@ -163,17 +161,16 @@ test("stays silent with the prompt off, and 补写 from the today row still work
   await expect(page.getByRole("dialog", { name: /^完成记录：/ })).toHaveCount(0);
   await expect(page.locator(".completion-toast")).toHaveCount(0);
 
-  await page.getByText(/今日完成 1 项/).click();
-  await expect(page.locator(".today-completed-row", { hasText: "关掉开关也能补写" })).toContainText("未填写完成记录");
-  await page.locator(".today-completed-row", { hasText: "关掉开关也能补写" }).click();
+  const unfilled = page.locator(".today-done-item", { hasText: "关掉开关也能补写" });
+  await expect(unfilled).toHaveAttribute("title", /未填写完成记录/);
+  await unfilled.click();
   const bubble = page.getByRole("dialog", { name: "完成记录：关掉开关也能补写" });
   await expect(bubble.getByRole("heading", { name: "已完成" })).toBeVisible();
   await bubble.getByRole("button", { name: "吃力" }).click();
   await bubble.getByRole("button", { name: "保存记录" }).click();
   await expect(bubble).toHaveCount(0);
   await page.reload();
-  await page.getByText(/今日完成 1 项/).click();
-  await expect(page.locator(".today-completed-row", { hasText: "关掉开关也能补写" })).toContainText("吃力");
+  await expect(page.locator(".today-done-item", { hasText: "关掉开关也能补写" })).toHaveAttribute("title", /吃力/);
 });
 
 test("does not stack a second bubble and keeps the just-completed row as the anchor", async ({ page }) => {
@@ -246,17 +243,17 @@ test("keeps the completion surfaces free of automated accessibility violations",
     } else {
       // 深色这一轮走事后入口：同一份内容在编辑态再过一次（已存图片只有数量，不铺开）。
       await expandTodayCompleted(page);
-      await page.locator(".today-completed-row", { hasText: title }).click();
+      await page.locator(".today-done-item", { hasText: title }).click();
       await expect(bubble.getByRole("heading", { name: "编辑完成记录" })).toBeVisible();
       expect(await violations(), await violationDetails()).toEqual([]);
       await page.keyboard.press("Escape");
       await expect(bubble).toHaveCount(0);
     }
 
-    // 今日完成那一行（展开态）。
-    // 先等淡出结束：那 160ms 里整行是半透明的，axe 会拍到动画中间帧的对比度而不是任何一个稳定态。
+    // 今天完成那一行（右列，不再折叠）。
+    // 先等淡出结束：任务池里那行有 160ms 的淡出，axe 会拍到动画中间帧的对比度而不是稳定态。
     await expandTodayCompleted(page);
-    await expect(page.locator(".today-completed-row", { hasText: title })).toBeVisible();
+    await expect(page.locator(".today-done-item", { hasText: title })).toBeVisible();
     await expect(page.locator(".task-card.is-leaving")).toHaveCount(0);
     expect(await violations(), await violationDetails()).toEqual([]);
 

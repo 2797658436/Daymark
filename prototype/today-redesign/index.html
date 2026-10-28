@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>今日页改版原型 v2 · Daymark</title>
+<style>
+/* ============ 令牌：直接取自 src/styles.css :root（暖杏 / 浅色） ============ */
+:root{
+  --bg:#f5f4f0; --panel:#ffffff; --panel-strong:#faf9f6; --panel-raised:#fefeff;
+  --line:#dedbd4; --line-soft:#ece9e2; --line-strong:#c9c4b8;
+  --text:#24231f; --muted:#706d66; --muted-strong:#56534d;
+  --accent:#d2693b; --accent-strong:#a94724; --accent-soft:#fbe8da; --accent-softer:#fbf2eb;
+  --success:#39745a; --danger:#a83a35; --focus:#176d86;
+  --shadow-low:0 1px 2px rgb(35 31 27/6%),0 1px 1px rgb(35 31 27/4%);
+  --shadow-float:0 2px 6px rgb(35 31 27/8%),0 8px 24px rgb(35 31 27/10%);
+  --shadow-modal:0 8px 24px rgb(35 31 27/16%),0 24px 56px rgb(35 31 27/18%);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:400 14px/22px "Segoe UI Variable Text","Microsoft YaHei UI",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;cursor:pointer}
+h1,h2,h3,p{margin:0}
+
+/* ============ 外壳 ============ */
+.app{display:grid;grid-template-columns:72px minmax(0,1fr);height:100vh;overflow:hidden}
+.nav{
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:14px 0 12px; background:color-mix(in srgb,var(--panel) 62%,var(--bg));
+  border-right:1px solid var(--line-soft);
+}
+.brand{
+  width:34px;height:34px;margin-bottom:12px;border-radius:10px;
+  display:grid;place-items:center;background:var(--accent-strong);color:#fff;
+  font-weight:600;font-size:15px;
+}
+.nav-item{
+  width:60px;padding:7px 0 6px;border:0;border-radius:10px;background:transparent;
+  display:grid;justify-items:center;gap:3px;color:var(--muted-strong);font-size:10px;
+}
+.nav-item svg{width:19px;height:19px}
+.nav-item.is-active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
+.nav-item.is-ghost{opacity:.85}
+.nav-spacer{flex:1}
+.nav-sep{width:28px;height:1px;background:var(--line-soft);margin:6px 0}
+
+.main{overflow-y:auto;padding:0 28px 96px}
+.stage{max-width:1080px;margin:0 auto}
+
+/* ============ 原型工具条（本轮新增，不是产品 UI） ============ */
+.toolbar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  margin:0 -28px 14px;padding:8px 28px;
+  background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--line-soft);
+}
+.toolbar .tag{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--muted)}
+.seg{display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--panel);border:1px solid var(--line-soft)}
+.seg button{
+  border:0;background:transparent;border-radius:999px;padding:4px 11px;
+  font-size:12px;font-weight:500;color:var(--muted-strong);
+}
+.seg button[aria-pressed="true"]{background:var(--accent-strong);color:#fff}
+.toolbar .sep{width:1px;height:18px;background:var(--line)}
+
+/* ============ 页头 ============ */
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+.page-head h1{font-size:28px;line-height:36px;font-weight:600;letter-spacing:-.01em}
+.btn{
+  min-height:36px;padding:0 12px;border:1px solid var(--line);border-radius:10px;
+  background:var(--panel);display:inline-flex;align-items:center;gap:6px;
+  font-size:13px;color:var(--text);box-shadow:var(--shadow-low);
+}
+.btn:hover{background:var(--panel-strong)}
+.btn svg{width:15px;height:15px}
+.btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:#fff;box-shadow:none}
+.btn.primary:hover{background:#873718}
+.btn.ghost{min-height:30px;padding:0 9px;border-color:transparent;background:transparent;color:var(--muted-strong);box-shadow:none;font-size:12px;gap:4px}
+.btn.ghost:hover{background:var(--panel-strong);border-color:var(--line-soft);color:var(--text)}
+.btn.ghost svg{width:13px;height:13px}
+.icon-btn{
+  width:30px;height:30px;display:grid;place-items:center;border:1px solid transparent;
+  border-radius:8px;background:transparent;color:var(--muted-strong);
+}
+.icon-btn:hover{border-color:var(--line-soft);background:var(--panel-strong);color:var(--text)}
+.icon-btn svg{width:15px;height:15px}
+
+/* ============ 两栏 ============ */
+.split{display:grid;grid-template-columns:minmax(0,1fr) 172px;gap:16px;align-items:start}
+.card{
+  background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;
+  box-shadow:var(--shadow-low);
+}
+.card-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  padding:14px 16px 10px;
+}
+.card-head h2{font-size:16px;line-height:24px;font-weight:600}
+.card-head .count{font-size:12px;color:var(--muted)}
+
+/* ============ 方案 A：列表轴 ============ */
+.tl{list-style:none;margin:0;padding:0 8px 8px}
+.row{
+  --tw:54px;position:relative;display:grid;
+  grid-template-columns:var(--tw) 16px minmax(0,1fr);
+  align-items:center;gap:10px;padding:9px 8px;border-radius:10px;cursor:grab;
+}
+.row+.row{margin-top:1px}
+.row::before{
+  content:"";position:absolute;top:0;bottom:0;left:calc(8px + var(--tw) + 10px + 7px);
+  width:1px;background:var(--line-soft);
+}
+.row:first-child::before{top:50%}
+.row:last-child::before{bottom:50%}
+.row>*{position:relative;z-index:1}
+.row:hover{background:var(--panel-strong)}
+.row .t{display:grid;gap:1px;text-align:right;color:var(--muted);font-size:11px;line-height:15px}
+.row .t b{color:var(--text);font-size:12.5px;font-weight:600}
+.row .pin{
+  width:9px;height:9px;justify-self:center;border-radius:999px;
+  border:2px solid var(--line-strong);background:var(--panel);
+}
+.row .body{display:grid;gap:6px;min-width:0}
+.row .line{display:flex;align-items:center;gap:8px;min-width:0}
+.row .line .grow{flex:1;min-width:4px}
+.row .title{display:flex;align-items:center;gap:7px;min-width:0;flex:0 1 auto}
+.row .title strong{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:13.5px;font-weight:600;
+}
+.chip{
+  flex:none;padding:1px 7px;border:1px solid var(--line);border-radius:999px;
+  font-size:11px;font-weight:600;line-height:16px;color:var(--muted-strong);background:var(--panel-strong);
+}
+.chip.now{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));background:var(--accent-soft);color:var(--accent-strong)}
+.chip.past{background:transparent;border-style:dashed;color:var(--muted)}
+.chip.due{border-color:color-mix(in srgb,var(--danger) 32%,var(--line));color:var(--danger);background:var(--panel)}
+.progress{display:flex;align-items:center;gap:7px;min-width:0}
+.progress .bar{flex:1;height:5px;border-radius:999px;background:var(--line-soft);overflow:hidden}
+.progress .bar span{display:block;height:100%;border-radius:999px;background:var(--success)}
+.progress .num{font-size:11.5px;color:var(--muted-strong);font-weight:600}
+.progress.inline{flex:0 0 116px}
+.acts{display:flex;align-items:center;gap:4px}
+
+.row.is-past .t b,.row.is-past .title strong{color:var(--muted-strong);font-weight:500}
+.row.is-past .pin{background:var(--panel-strong)}
+.row.is-past .progress .bar span{background:color-mix(in srgb,var(--success) 55%,var(--line))}
+
+/* —— 当前行：整行放大，承担原来「现在」模块的全部职责 ——
+   两行式：第一行标题与剩余时间，第二行进度条 + 主操作。
+   这样横向空白被进度条吃掉，行不会再「断成两半」。 */
+.row.is-current{
+  padding:12px 12px 13px;border-radius:12px;cursor:default;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 62%,var(--panel)) 0%,color-mix(in srgb,var(--accent-soft) 14%,var(--panel)) 100%);
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+.row.is-current:hover{background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 70%,var(--panel)) 0%,color-mix(in srgb,var(--accent-soft) 20%,var(--panel)) 100%)}
+.row.is-current .t b{font-size:14px;color:var(--accent-strong)}
+.row.is-current .pin{border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 16%,transparent);width:10px;height:10px}
+.row.is-current .body{gap:9px}
+.row.is-current .title strong{font-size:20px;line-height:28px;font-weight:600}
+.row.is-current .remain{flex:none;font-size:13px;font-weight:600;color:var(--accent-strong);white-space:nowrap}
+.row.is-current .progress{flex:1 1 auto;max-width:480px}
+.row.is-current .progress .bar{height:7px}
+.row.is-current .progress .num{font-size:12px;min-width:32px}
+
+/* 空档中的「现在」行：没有安排时，这一行就是「现在」模块 */
+.now-gap{
+  position:relative;
+  display:grid;grid-template-columns:var(--tw,54px) 16px minmax(0,1fr);
+  align-items:center;gap:10px;margin:2px 0;padding:12px 8px 13px;list-style:none;
+  border:1px dashed color-mix(in srgb,var(--accent) 34%,var(--line));border-radius:12px;
+  background:color-mix(in srgb,var(--accent-soft) 30%,var(--panel));
+}
+.now-gap .t{display:grid;text-align:right;font-size:11px;color:var(--accent-strong);font-weight:600;line-height:15px}
+.now-gap .t b{font-size:12.5px}
+/* 空档行也要把轨道接上，否则时间轴在「现在」这里断成两截。
+   用真实占位元素而不是 ::before —— 后者在 grid 容器里会变成网格项，被塞进第一格。 */
+.now-gap .rail{
+  justify-self:center;align-self:stretch;width:1px;
+  background:repeating-linear-gradient(to bottom,var(--line-strong) 0 4px,transparent 4px 8px);
+}
+.now-gap .body{display:grid;gap:4px;min-width:0}
+.now-gap .line{display:flex;align-items:center;gap:8px;min-width:0}
+.now-gap .line .grow{flex:1;min-width:4px}
+.now-gap .body strong{font-size:16px;line-height:24px;font-weight:600}
+.now-gap .body .hint{font-size:12px;color:var(--muted-strong)}
+.now-gap .body .hint b{color:var(--accent-strong);font-weight:600}
+
+/* 空档提示（底部） */
+.gap-row{
+  display:flex;align-items:center;gap:8px;margin:4px 8px 8px;padding:9px 12px;
+  border:1px dashed var(--line);border-radius:10px;color:var(--muted);font-size:12px;
+  background:transparent;width:calc(100% - 16px);text-align:left;
+}
+.gap-row:hover{border-color:var(--accent);color:var(--accent-strong);background:var(--accent-softer)}
+.gap-row svg{width:14px;height:14px}
+
+/* 右列：临期 + 今天完成，两张卡同宽堆叠 */
+.side{display:grid;gap:12px;align-content:start;min-width:0}
+.done-card .card-head{padding-bottom:6px}
+.done-list2{display:grid;gap:1px;padding:0 8px 10px}
+.done-row{
+  display:flex;align-items:center;gap:7px;width:100%;min-width:0;
+  padding:7px 8px;border:0;border-radius:8px;background:transparent;
+  text-align:left;font-size:12px;color:var(--muted-strong);
+}
+.done-row:hover{background:var(--panel-strong);color:var(--text)}
+.done-row svg{width:12px;height:12px;flex:none;color:var(--success)}
+.done-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ============ 临期窄列 ============ */
+.due .card-head{padding-bottom:6px}
+.due-list{display:grid;padding:0 8px 10px}
+.due-item{
+  display:grid;gap:1px;padding:9px 8px;border:0;border-radius:9px;background:transparent;
+  text-align:left;width:100%;
+}
+.due-item:hover{background:var(--panel-strong)}
+.due-item .nm{
+  display:flex;align-items:center;gap:5px;min-width:0;font-size:12.5px;font-weight:500;color:var(--text);
+}
+.due-item .nm svg{width:12px;height:12px;flex:none}
+.due-item .nm span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.due-item .when{font-size:11px;color:var(--muted);padding-left:17px}
+.due-item.overdue .nm svg{color:var(--danger)}
+.due-item.overdue .when{color:var(--danger)}
+.due-item.soon .nm svg{color:var(--muted-strong)}
+.due-item.has-today .nm span{color:var(--muted-strong)}
+.due-item .on-axis{
+  margin-left:4px;padding:0 4px;border-radius:4px;background:var(--accent-softer);
+  color:var(--accent-strong);font-size:10px;font-weight:600;line-height:15px;
+}
+
+/* ============ 方案 B：真时间轴（流式分段） ============ */
+.axis2{padding:4px 16px 12px 8px}
+.axis2 .seg{display:grid;grid-template-columns:58px minmax(0,1fr);height:var(--h)}
+.axis2 .seg .railcell{
+  display:flex;flex-direction:column;align-items:flex-end;gap:1px;
+  padding:8px 8px 0 0;font-size:11px;line-height:14px;color:var(--muted);
+}
+.axis2 .seg .railcell b{font-size:12px;font-weight:600;color:var(--muted-strong)}
+.axis2 .seg .trackcell{position:relative;border-left:1px solid var(--line-soft);padding:2px 0 2px 10px}
+.blk{
+  position:relative;z-index:2;height:100%;border:1px solid var(--line-soft);border-radius:10px;
+  background:var(--panel);box-shadow:var(--shadow-low);padding:6px 10px;
+  display:grid;align-content:start;gap:3px;overflow:hidden;
+}
+.blk .top{display:flex;align-items:center;gap:6px;min-width:0}
+.blk .top strong{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blk .sub{font-size:11px;color:var(--muted)}
+.blk.past{
+  border-style:dashed;border-color:var(--line-strong);
+  background:color-mix(in srgb,var(--accent-soft) 16%,var(--panel));
+  box-shadow:none;
+}
+.blk.past .top strong{color:var(--muted-strong);font-weight:500}
+.blk.now{
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line));
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent-soft) 72%,var(--panel)) 0%,var(--panel) 100%);
+  box-shadow:var(--shadow-low),inset 3px 0 0 var(--accent);gap:2px;
+}
+.blk.now .top strong{font-size:16px;line-height:24px}
+.blk.now .meter{display:flex;align-items:center;gap:7px;margin-top:1px}
+.blk.now .meter .bar{flex:1;max-width:220px;height:6px;border-radius:999px;background:color-mix(in srgb,var(--line) 70%,transparent);overflow:hidden}
+.blk.now .meter .bar span{display:block;height:100%;border-radius:999px;background:var(--success)}
+.blk.now .meter em{font-style:normal;font-size:11px;font-weight:600;color:var(--muted-strong)}
+.blk .inline-acts{display:flex;gap:3px;margin-left:4px}
+.blk .inline-acts .btn{min-height:24px;font-size:11px;padding:0 7px;border-radius:7px}
+.gapband{
+  position:relative;z-index:1;height:100%;border-radius:10px;
+  border:1px dashed var(--line);background:
+    repeating-linear-gradient(135deg,color-mix(in srgb,var(--line-soft) 42%,transparent) 0 6px,transparent 6px 12px);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  color:var(--muted);font-size:11.5px;text-align:center;padding:4px 10px;
+}
+.gapband.live{
+  border-color:color-mix(in srgb,var(--accent) 38%,var(--line));
+  background:color-mix(in srgb,var(--accent-soft) 40%,var(--panel));
+  color:var(--accent-strong);
+}
+.gapband.live strong{font-size:14px;font-weight:600}
+.gapband.live .hintline{font-size:11.5px;color:var(--muted-strong)}
+.gapband.live .hintline b{color:var(--accent-strong)}
+.nowmark{position:absolute;left:0;right:0;height:0;pointer-events:none}
+/* 指针式游标：卡片几乎占满轨道宽度，横贯线会被卡面盖掉只剩一截像 bug，
+   所以只在轨道左边缘画一小段指针 + 圆点，纵向位置表达「现在在块里的哪一段」。 */
+.nowmark .line{position:absolute;left:-6px;top:0;width:22px;height:2px;background:var(--accent);opacity:.9;z-index:3}
+.nowmark .pin{
+  position:absolute;left:-6px;top:-4px;width:9px;height:9px;border-radius:999px;
+  background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 20%,transparent);
+  z-index:3;
+}
+.note-line{
+  display:flex;align-items:center;gap:6px;margin:2px 8px 8px;padding:7px 11px;border-radius:9px;
+  background:var(--accent-softer);color:var(--accent-strong);font-size:11.5px;
+}
+.note-line svg{width:13px;height:13px;flex:none}
+
+/* ============ 底部两枚常驻浮钮 ============
+   右下角属于任务池（产品里 `.task-pool-toggle` 是 fixed right:18 bottom:18, 44px, z-index 31）。
+   待续是任务池的一个筛选视图，但它出现在左下角 —— 左＝回头看，右＝往前做，两者不抢位。 */
+.pool-fab{
+  position:fixed;right:18px;bottom:18px;z-index:31;height:44px;
+  display:inline-flex;align-items:center;gap:7px;padding:0 14px;
+  border:1px solid var(--line);border-radius:999px;background:var(--panel);
+  color:var(--accent-strong);box-shadow:var(--shadow-float);font-weight:600;font-size:13px;
+}
+.pool-fab:hover{background:var(--panel-strong)}
+.pool-fab svg{width:18px;height:18px}
+.fab{
+  position:fixed;left:88px;bottom:18px;z-index:31;height:44px;
+  display:inline-flex;align-items:center;gap:7px;padding:0 14px;
+  border-radius:999px;border:1px solid var(--line);background:var(--panel);
+  box-shadow:var(--shadow-float);font-size:13px;font-weight:600;color:var(--text);
+}
+.fab:hover{background:var(--panel-strong);border-color:var(--line-strong)}
+.fab svg{width:16px;height:16px;color:var(--muted-strong)}
+.fab .n{
+  display:grid;place-items:center;min-width:18px;height:18px;padding:0 4px;border-radius:999px;
+  background:var(--accent-strong);color:#fff;font-size:10.5px;
+}
+.scrim{
+  position:fixed;inset:0;z-index:70;background:rgb(35 31 27/18%);
+  opacity:0;pointer-events:none;transition:opacity .16s;
+}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{
+  position:fixed;z-index:71;left:88px;bottom:74px;width:360px;max-height:min(70vh,520px);
+  display:flex;flex-direction:column;border:1px solid var(--line);border-radius:18px;
+  background:var(--panel);box-shadow:var(--shadow-modal);
+  transform:translateY(8px) scale(.99);opacity:0;pointer-events:none;
+  transition:opacity .16s,transform .16s cubic-bezier(.2,0,0,1);
+}
+.drawer.on{opacity:1;transform:none;pointer-events:auto}
+.drawer-head{padding:14px 16px 10px;border-bottom:1px solid var(--line-soft)}
+.drawer-head h3{font-size:15px;font-weight:600;display:flex;align-items:center;gap:7px}
+.drawer-head p{margin-top:3px;font-size:12px;color:var(--muted)}
+.drawer-list{overflow-y:auto;padding:6px 8px}
+.carry{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;
+  padding:10px 8px;border-radius:10px;
+}
+.carry:hover{background:var(--panel-strong)}
+.carry strong{font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.carry .sub{font-size:11px;color:var(--muted)}
+.carry .sub em{font-style:normal;color:var(--muted-strong)}
+.drawer-foot{
+  padding:9px 14px 12px;border-top:1px solid var(--line-soft);
+  font-size:11.5px;line-height:17px;color:var(--muted);
+}
+.drawer-foot b{color:var(--muted-strong);font-weight:600}
+
+/* ============ 气泡 ============ */
+.pop{
+  position:fixed;z-index:80;width:250px;padding:12px 14px;border:1px solid var(--line);
+  border-radius:14px;background:var(--panel);box-shadow:var(--shadow-float);
+  opacity:0;pointer-events:none;transform:translateY(4px);transition:opacity .12s,transform .12s;
+}
+.pop.on{opacity:1;pointer-events:auto;transform:none}
+.pop h4{font-size:13.5px;font-weight:600;margin:0}
+.pop .sub{margin-top:2px;font-size:11.5px;color:var(--muted)}
+.pop .rows{display:grid;gap:2px;margin:10px -6px 0}
+.pop .rows button{
+  display:flex;align-items:center;gap:8px;padding:7px 8px;border:0;border-radius:8px;
+  background:transparent;text-align:left;font-size:12.5px;
+}
+.pop .rows button:hover{background:var(--panel-strong)}
+.pop .rows svg{width:14px;height:14px;color:var(--muted-strong)}
+.pop .note{margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft);font-size:11px;line-height:16px;color:var(--muted)}
+
+/* ============ 说明脚注 ============ */
+.legend{
+  max-width:1080px;margin:18px auto 0;padding:14px 16px;border-radius:14px;
+  border:1px dashed var(--line);background:color-mix(in srgb,var(--panel) 60%,transparent);
+  font-size:12px;line-height:19px;color:var(--muted-strong);
+}
+.legend h3{font-size:12.5px;font-weight:600;color:var(--text);margin:0 0 6px}
+.legend ul{margin:0;padding-left:18px;display:grid;gap:3px}
+.legend .warn{color:var(--danger)}
+
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="nav" aria-label="主导航">
+    <div class="brand">D</div>
+    <button class="nav-item is-active" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+      今日</button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+      日历</button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>
+      截止</button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+      项目</button>
+    <button class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V9M10 18V5M16 18v-6M22 18H2"/></svg>
+      回顾</button>
+    <div class="nav-sep"></div>
+    <button class="nav-item is-ghost">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/></svg>
+      数据</button>
+    <button class="nav-item is-ghost">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 11.5 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 11a2 2 0 1 1 0 4Z"/></svg>
+      设置</button>
+    <div class="nav-spacer"></div>
+    <span style="width:8px;height:8px;border-radius:999px;background:var(--success)" title="已保存"></span>
+  </aside>
+
+  <main class="main">
+    <div class="stage">
+      <div class="toolbar">
+        <span class="tag">原型 v2 · 已去掉顶部「现在」条</span>
+        <div class="sep"></div>
+        <div class="seg" role="group" aria-label="方案">
+          <button type="button" data-scheme="A" aria-pressed="true">A · 列表轴</button>
+          <button type="button" data-scheme="B" aria-pressed="false">B · 真时间轴</button>
+        </div>
+        <div class="sep"></div>
+        <div class="seg" role="group" aria-label="场景">
+          <button type="button" data-scene="live" aria-pressed="true">时段进行中</button>
+          <button type="button" data-scene="gap" aria-pressed="false">当前空档</button>
+        </div>
+      </div>
+
+      <header class="page-head">
+        <h1>10月27日 星期二</h1>
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>打开日历</button>
+      </header>
+
+      <div class="split">
+        <section class="card" id="axisCard" aria-label="今天的时间轴"></section>
+
+        <div class="side">
+          <aside class="card due" aria-label="临期">
+            <div class="card-head"><h2>临期</h2><span class="count">2</span></div>
+            <div class="due-list">
+              <button class="due-item overdue has-today" data-pop="due">
+                <span class="nm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>
+                  <span>写开题报告</span><span class="on-axis">今天</span>
+                </span>
+                <span class="when">逾期 2 天</span>
+              </button>
+              <button class="due-item soon" data-pop="due2">
+                <span class="nm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>
+                  <span>实现数据采集模块</span>
+                </span>
+                <span class="when">还有 6 天</span>
+              </button>
+            </div>
+          </aside>
+
+          <aside class="card done-card" aria-label="今天完成">
+            <div class="card-head"><h2>今天完成</h2><span class="count">2</span></div>
+            <div class="done-list2">
+              <button class="done-row" data-pop="doneItem" data-title="装好 Matplotlib 环境" data-time="18:20">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12 5 5L20 6"/></svg>
+                <span>装好 Matplotlib 环境</span>
+              </button>
+              <button class="done-row" data-pop="doneItem" data-title="整理开题报告提纲" data-time="21:05">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12 5 5L20 6"/></svg>
+                <span>整理开题报告提纲</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+    </div>
+  </main>
+</div>
+
+<button class="pool-fab" aria-label="打开任务池">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13h4l2 3h4l2-3h4"/><path d="M5.5 5h13l1.5 8v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4Z"/></svg>
+  任务池
+</button>
+
+<button class="fab" id="fab">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg>
+  待续<span class="n">3</span>
+</button>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="待续">
+  <div class="drawer-head">
+    <h3>待续 3 项</h3>
+    <p>安排过、还没做完的任务。留多久都行，不会累积成欠账。</p>
+  </div>
+  <div class="drawer-list">
+    <div class="carry">
+      <strong>整理参考文献</strong>
+      <button class="btn ghost" style="min-height:28px;border-color:var(--line)">排到今天</button>
+      <span class="sub"><em>昨天 14:00</em> 的时段没做完 · 25%</span>
+    </div>
+    <div class="carry">
+      <strong>跑通数据清洗脚本</strong>
+      <button class="btn ghost" style="min-height:28px;border-color:var(--line)">排到今天</button>
+      <span class="sub"><em>昨天 20:00</em> 的时段没做完 · 0%</span>
+    </div>
+    <div class="carry">
+      <strong>读 3 篇论文</strong>
+      <button class="btn ghost" style="min-height:28px;border-color:var(--line)">排到今天</button>
+      <span class="sub"><em>10月25日</em> 的时段没做完 · 40%</span>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    它们本来就在<b>任务池</b>里。这个按钮只是把「排过期次、还没完」的那一批捞出来，可以拖到时间轴任意位置。
+  </div>
+</aside>
+
+<div class="pop" id="pop"></div>
+
+<script>
+/* ---------------- 数据 ---------------- */
+const SCENES = {
+  live: {
+    nowText: '23:26',
+    nowMinutes: 23 * 60 + 26,
+    sessions: [
+      { from: '08:30', to: '09:30', start: 510, end: 570, title: 'Matplotlib 可视化', progress: 30, state: 'past' },
+      { from: '22:45', to: '23:45', start: 1365, end: 1425, title: '写开题报告', progress: 45, state: 'current', remain: '剩 19 分钟', due: '逾期 2 天' }
+    ]
+  },
+  gap: {
+    nowText: '14:20',
+    nowMinutes: 14 * 60 + 20,
+    sessions: [
+      { from: '08:30', to: '09:30', start: 510, end: 570, title: 'Matplotlib 可视化', progress: 30, state: 'past' },
+      { from: '22:45', to: '23:45', start: 1365, end: 1425, title: '写开题报告', progress: 45, state: 'future', due: '逾期 2 天' }
+    ]
+  }
+};
+
+/* 顶部统计行已删除：段数写在各卡片头里（今天 2 段 · 1 段已过 / 临期 2 / 今天完成 2），
+   页头只留日期和「打开日历」。 */
+
+const ICON = {
+  cal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+};
+
+/* 已完成不再挂在卡片底部：它属于右列（和临期同宽），见 HTML 里的 .done-card。 */
+
+/* ---------------- 方案 A ---------------- */
+/* 普通行：单行内联 —— 标题、状态、进度条、操作全在一行。
+   之前是「标题 / 进度」两行 + 最右两列操作，中间空出 400px；内联后行高压到 51px。 */
+function rowPast(s) {
+  return `<li class="row is-past">
+    <span class="t"><b>${s.from}</b><span>${s.to}</span></span>
+    <span class="pin" aria-hidden="true"></span>
+    <div class="body">
+      <div class="line">
+        <div class="title"><strong>${s.title}</strong><span class="chip past">已过</span></div>
+        <div class="progress inline"><span class="bar"><span style="width:${s.progress}%"></span></span><span class="num">${s.progress}%</span></div>
+        <span class="grow"></span>
+        <div class="acts">
+          <button class="btn ghost" data-pop="record">记录实际</button>
+          <button class="btn ghost" data-pop="later">挪到之后</button>
+        </div>
+      </div>
+    </div>
+  </li>`;
+}
+
+function rowFuture(s) {
+  return `<li class="row">
+    <span class="t"><b>${s.from}</b><span>${s.to}</span></span>
+    <span class="pin" aria-hidden="true"></span>
+    <div class="body">
+      <div class="line">
+        <div class="title"><strong>${s.title}</strong>${s.due ? `<span class="chip due">${s.due}</span>` : ''}</div>
+        <div class="progress inline"><span class="bar"><span style="width:${s.progress}%"></span></span><span class="num">${s.progress}%</span></div>
+        <span class="grow"></span>
+        <div class="acts">
+          <button class="btn ghost" data-pop="early">${ICON.play}提前开始</button>
+          <button class="icon-btn" aria-label="在日历中查看">${ICON.cal}</button>
+        </div>
+      </div>
+    </div>
+  </li>`;
+}
+
+/* 当前行 = 原来的「现在」模块。两行式：
+   ① 标题 + 状态 + 剩余时间（右上角，橙色）
+   ② 进度条拉满 + 百分比 + 主操作 —— 横向空白被进度条吃掉，行不再「断成两半」。 */
+function rowCurrent(s) {
+  return `<li class="row is-current">
+    <span class="t"><b>${s.from}</b><span>${s.to}</span></span>
+    <span class="pin" aria-hidden="true"></span>
+    <div class="body">
+      <div class="line">
+        <div class="title"><strong>${s.title}</strong><span class="chip now">现在</span>${s.due ? `<span class="chip due">${s.due}</span>` : ''}</div>
+        <span class="grow"></span>
+        <span class="remain">${s.remain}</span>
+      </div>
+      <div class="line">
+        <div class="progress"><span class="bar"><span style="width:${s.progress}%"></span></span><span class="num">${s.progress}%</span></div>
+        <span class="grow"></span>
+        <div class="acts">
+          <button class="btn primary">${ICON.stop}结束本次</button>
+          <button class="icon-btn" aria-label="在日历中查看">${ICON.cal}</button>
+        </div>
+      </div>
+    </div>
+  </li>`;
+}
+
+/* 空档中的「现在」行：时间列写真实时刻，和上下行的时间是同一个序列。 */
+function gapRowA(scene) {
+  const nextStart = scene.sessions.find((s) => s.state === 'future');
+  const wait = nextStart ? Math.round((nextStart.start - scene.nowMinutes) / 60) : 0;
+  return `<li class="now-gap">
+    <span class="t"><b>${scene.nowText}</b><span>现在</span></span>
+    <span class="rail" aria-hidden="true"></span>
+    <div class="body">
+      <div class="line">
+        <strong>这段时间是空的</strong>
+        <span class="grow"></span>
+        <button class="btn primary" style="min-height:32px;font-size:12.5px;padding:0 11px">${ICON.plus}安排一段</button>
+      </div>
+      <div class="line">
+        <span class="hint">${nextStart ? `下一次 <b>${nextStart.from}</b> 开始，还有 ${wait} 小时；空着的部分不用补满。` : '今天剩下的时间都空着。'}</span>
+      </div>
+    </div>
+  </li>`;
+}
+
+function renderA(scene) {
+  let html = `<div class="card-head"><h2>今天</h2><span class="count">2 段 · 1 段已过</span></div><ol class="tl">`;
+  let placed = false;
+  for (const s of scene.sessions) {
+    if (!placed && scene.nowMinutes < s.start) { html += gapRowA(scene); placed = true; }
+    if (s.state === 'current') {
+      html += rowCurrent(s);
+      placed = true;
+    } else if (s.state === 'past') {
+      html += rowPast(s);
+    } else {
+      html += rowFuture(s);
+    }
+  }
+  if (!placed) html += gapRowA(scene);
+  html += `</ol>`;
+  // 空档行已经把「还有多少空着」说过了，底部再说一遍就是重复。
+  if (scene.sessions.some((s) => s.state === 'current')) {
+    html += `<button class="gap-row">${ICON.plus}今天还有 13 小时没排 · 把待续拖进来</button>`;
+  }
+  return html;
+}
+
+/* ---------------- 方案 B ---------------- */
+function segBlock(s) {
+  const h = s.state === 'current' ? 92 : 58;
+  let inner;
+  if (s.state === 'past') {
+    inner = `<div class="blk past">
+      <div class="top"><strong>${s.title}</strong><span class="chip past">已过</span>
+        <div class="inline-acts">
+          <button class="btn ghost" data-pop="record">记录实际</button>
+          <button class="btn ghost" data-pop="later">挪到之后</button>
+        </div>
+      </div>
+      <div class="sub">${s.from}–${s.to} · ${s.progress}%</div>
+    </div>`;
+  } else if (s.state === 'current') {
+    inner = `<div class="blk now">
+      <div class="top"><strong>${s.title}</strong><span class="chip now">现在</span>${s.due ? `<span class="chip due">${s.due}</span>` : ''}
+        <div class="inline-acts">
+          <button class="btn primary" style="min-height:26px;font-size:11.5px;padding:0 9px">${ICON.stop}结束本次</button>
+          <button class="icon-btn" style="width:26px;height:26px" aria-label="在日历中查看">${ICON.cal}</button>
+        </div>
+      </div>
+      <div class="sub">${s.from}–${s.to} · 手动完成度 ${s.progress}% · <b style="color:var(--accent-strong)">${s.remain}</b></div>
+      <div class="meter"><span class="bar"><span style="width:${s.progress}%"></span></span><em>${s.progress}%</em></div>
+    </div>
+    <div class="nowmark" style="top:64px"><span class="pin"></span><div class="line"></div></div>`;
+  } else {
+    inner = `<div class="blk">
+      <div class="top"><strong>${s.title}</strong>${s.due ? `<span class="chip due">${s.due}</span>` : ''}
+        <div class="inline-acts"><button class="btn ghost" data-pop="early">${ICON.play}提前开始</button></div>
+      </div>
+      <div class="sub">${s.from}–${s.to} · ${s.progress}%</div>
+    </div>`;
+  }
+  return `<div class="seg" style="--h:${h}px">
+    <div class="railcell"><b>${s.from}</b><span>${s.to}</span></div>
+    <div class="trackcell">${inner}</div>
+  </div>`;
+}
+
+function gapSeg(scene) {
+  const isLive = scene.nowMinutes > 570 && scene.nowMinutes < 1365;
+  if (isLive) {
+    const next = scene.sessions.find((s) => s.state === 'future');
+    const wait = Math.round((next.start - scene.nowMinutes) / 60);
+    return `<div class="seg" style="--h:124px">
+      <div class="railcell"><b>${scene.nowText}</b><span>现在</span></div>
+      <div class="trackcell">
+        <div class="gapband live">
+          <strong>这段时间是空的</strong>
+          <span class="hintline">下一次 <b>${next.from}</b> 开始，还有 ${wait} 小时 · 空着也不用补满</span>
+          <button class="btn" style="min-height:28px;font-size:12px;padding:0 10px;margin-top:2px">${ICON.plus}安排一段</button>
+        </div>
+        <div class="nowmark" style="top:56px"><span class="pin"></span><div class="line"></div></div>
+      </div>
+    </div>`;
+  }
+  return `<div class="seg" style="--h:64px">
+    <div class="railcell"><span>空档</span></div>
+    <div class="trackcell"><div class="gapband">空档 13 小时 15 分 · 点这里安排</div></div>
+  </div>`;
+}
+
+function renderB(scene) {
+  let html = `<div class="card-head"><h2>今天</h2><span class="count">2 段 · 16 小时里用了 2 小时</span></div>`;
+  html += `<div class="axis2">`;
+  html += segBlock(scene.sessions[0]);
+  html += gapSeg(scene);
+  html += segBlock(scene.sessions[1]);
+  html += `</div>`;
+  html += `<div class="note-line">${ICON.clock}当前块按真实时长占轨道；块内要同时放下标题、进度和主操作，所以它比按比例算出的高度略高 —— 这是 B 方案要付的代价。</div>`;
+  return html;
+}
+
+/* ---------------- 说明 ---------------- */
+const LEGENDS = {
+  A: `<h3>方案 A · 列表轴（去掉顶部状态条）</h3>
+    <ul>
+      <li>当前行<b>两行式</b>：第一行标题 20px + 状态 + 剩余时间；第二行进度条拉满 + 主操作。横向空白被进度条吃掉，行不再「断成两半」。</li>
+      <li>普通行<b>单行内联</b>：标题、状态、进度条、操作一行放完，行高 51px。与当前行形成 96 : 51 的强对比，层级靠行高差而不是面板。</li>
+      <li>「现在 23:26」分隔线已去掉 —— 它比当前行还抢眼，还把轨道切断；「现在」由当前行的 chip + 橙色底 + 实心点表达，轨道保持连续。</li>
+      <li>空着的时候由虚线框的「现在」行承担，时间列写真实时刻（14:20），和上下行在同一个时间序列里。</li>
+      <li>整页比原版少约 140px，第一屏能多看到 2–3 段安排。</li>
+      <li>底部两枚浮钮：<b>右下「任务池」</b>（产品里只在任务池收起时出现）、<b>左下「待续」</b>。左＝回头看，右＝往前做，互不抢位。待续抽屉也从左下角展开。</li>
+    </ul>`,
+  B: `<h3>方案 B · 真时间轴（去掉顶部状态条）</h3>
+    <ul>
+      <li>当前块放大到 92px，装着标题、现在、进度、结束本次 —— 它是整条轴上唯一实心的强调块。</li>
+      <li>空档带在「现在落在空档里」时会变成可选状态（虚线强调框 + 游标），不只是灰条。</li>
+      <li>游标线仍然只在卡片之间露出来，不穿字。</li>
+      <li><span class="warn">代价</span>：当前块比按比例算出的高度多占 20px 才能放下操作，时间比例的「诚实」在最重要的那一块上打了折。</li>
+    </ul>`
+};
+
+/* ---------------- 状态与渲染 ---------------- */
+let scheme = 'A';
+let sceneKey = 'live';
+
+const card = document.getElementById('axisCard');
+const legend = document.getElementById('legend');
+const pop = document.getElementById('pop');
+
+function render() {
+  const scene = SCENES[sceneKey];
+  card.innerHTML = scheme === 'A' ? renderA(scene) : renderB(scene);
+  legend.innerHTML = LEGENDS[scheme];
+  closePop();
+}
+
+document.querySelectorAll('[data-scheme]').forEach((b) => b.addEventListener('click', () => {
+  scheme = b.dataset.scheme;
+  document.querySelectorAll('[data-scheme]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.scheme === scheme)));
+  render();
+}));
+document.querySelectorAll('[data-scene]').forEach((b) => b.addEventListener('click', () => {
+  sceneKey = b.dataset.scene;
+  document.querySelectorAll('[data-scene]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.scene === sceneKey)));
+  render();
+}));
+
+/* ---------------- 抽屉 ---------------- */
+const drawer = document.getElementById('drawer');
+const scrim = document.getElementById('scrim');
+const fab = document.getElementById('fab');
+function toggleDrawer(on) {
+  const next = on ?? !drawer.classList.contains('on');
+  drawer.classList.toggle('on', next);
+  scrim.classList.toggle('on', next);
+  fab.setAttribute('aria-expanded', String(next));
+  closePop();
+}
+fab.addEventListener('click', () => toggleDrawer());
+scrim.addEventListener('click', () => toggleDrawer(false));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { toggleDrawer(false); closePop(); } });
+
+/* ---------------- 气泡 ---------------- */
+const POPS = {
+  record: `<h4>记录这次实际投入</h4>
+    <div class="sub">08:30–09:30 的时段已经过了。这一步是可选的 —— 不点也不会有任何后果。</div>
+    <div class="rows">
+      <button>按计划记 60 分钟</button>
+      <button>补填实际起止时间</button>
+      <button>打开任务改完成度</button>
+    </div>
+    <div class="note">原来这里是「更新进度／继续安排／本次未推进」。去掉「未推进」之后，时段就留在轴上，等你哪次想起再处理。</div>`,
+  later: `<h4>挪到之后</h4>
+    <div class="sub">整段移走，任务和进度都不动。</div>
+    <div class="rows">
+      <button>今天 23:45 之后</button>
+      <button>明天上午</button>
+      <button>选一个时间…</button>
+    </div>
+    <div class="note">也可以直接把这行拖到轴上别的位置 —— 和日历里的拖拽是同一套。</div>`,
+  early: `<h4>提前开始</h4>
+    <div class="sub">22:45 开始。现在开始会记成提前启动，不算错过。</div>
+    <div class="rows">
+      <button>就现在开始</button>
+      <button>改成现在的时间段</button>
+      <button>保持原计划</button>
+    </div>
+    <div class="note">没有「现在」卡片之后，提前开始就落在这一行上。</div>`,
+  due: `<h4>写开题报告</h4>
+    <div class="sub">逾期 2 天 · 手动进度 45% · 今天 22:45 有安排</div>
+    <div class="rows">
+      <button>更新进度</button>
+      <button>在时间轴上定位</button>
+      <button>改截止日期</button>
+      <button>打开任务详情</button>
+    </div>
+    <div class="note">临期条目只做提醒和入口，不在这里画进度条 —— 改数字的地方只有一处。</div>`,
+  due2: `<h4>实现数据采集模块</h4>
+    <div class="sub">还有 6 天（11月2日）· 手动进度 0% · 今天没有安排</div>
+    <div class="rows">
+      <button>安排到今天</button>
+      <button>自动排程</button>
+      <button>更新进度</button>
+      <button>打开任务详情</button>
+    </div>
+    <div class="note">没有排进今天的临期任务，就在这里给一个「安排到今天」的入口。</div>`,
+  doneItem: `<h4>{title}</h4>
+    <div class="sub">今天 {time} 标记完成 · 手动完成度 100%</div>
+    <div class="rows">
+      <button>查看完成记录</button>
+      <button>撤回完成</button>
+      <button>打开任务详情</button>
+    </div>
+    <div class="note">完成项挪到右列之后，时间轴只留今天真正排过的东西 —— 它不再是「排过的」和「做完的」两套清单。</div>`
+};
+function openPop(name, anchor, vars) {
+  let html = POPS[name] || '';
+  if (vars) for (const key of Object.keys(vars)) html = html.split(`{${key}}`).join(vars[key] ?? '');
+  pop.innerHTML = html;
+  pop.classList.add('on');
+  const r = anchor.getBoundingClientRect();
+  const w = 250, h = pop.offsetHeight || 200;
+  let left = Math.min(r.right - w, window.innerWidth - w - 16);
+  left = Math.max(16, left);
+  let top = r.bottom + 8;
+  if (top + h > window.innerHeight - 16) top = Math.max(16, r.top - h - 8);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+function closePop() { pop.classList.remove('on'); }
+document.addEventListener('click', (e) => {
+  const trigger = e.target.closest('[data-pop]');
+  if (trigger) {
+    e.stopPropagation();
+    openPop(trigger.dataset.pop, trigger, { title: trigger.dataset.title, time: trigger.dataset.time });
+    return;
+  }
+  if (!e.target.closest('#pop')) closePop();
+});
+
+render();
+</script>
+</body>
+</html>

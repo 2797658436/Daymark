@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneReachedNow, milestoneSummary, orderedMilestoneTasks,
+  carryOverTasks, createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneReachedNow, milestoneSummary, orderedMilestoneTasks,
   pendingReviewSessions, projectProgress, projectTaskCounts, projectTasksOf, taskTitleOf,
 } from "./workspaceSelectors";
 import { EMPTY_WORKSPACE, type ExecutionSession, type Project, type ProjectMilestone, type Task, type WorkspaceSnapshot } from "./native";
@@ -106,6 +106,44 @@ describe("pending review", () => {
     expect(isPendingReviewIn(index, snapshot.executionSessions[0], NOON)).toBe(true);
     expect(isPendingReviewIn(index, snapshot.executionSessions[1], NOON)).toBe(false);
     expect(pendingReviewSessions(index, NOON).map((item) => item.id)).toEqual(["s-1"]);
+  });
+});
+
+describe("carry over", () => {
+  const past = session("s-past", { taskId: "t-1", startLocal: "09:00", endLocal: "10:00" });
+  const yesterday = session("s-yesterday", { taskId: "t-2", localDate: "2026-03-06", endLocalDate: "2026-03-06", startLocal: "14:00", endLocal: "15:00" });
+  const ahead = session("s-ahead", { taskId: "t-3", startLocal: "20:00", endLocal: "21:00" });
+
+  it("keeps a task whose session has passed and nothing is scheduled ahead", () => {
+    const index = createWorkspaceIndex(workspace({ tasks: [task("t-1")], executionSessions: [past] }));
+    expect(carryOverTasks(index, NOON).map((entry) => entry.task.id)).toEqual(["t-1"]);
+    // 指向的正是那条已经过去的时段，界面用它显示「09:00 的时段没做完」。
+    expect(carryOverTasks(index, NOON)[0].session.id).toBe("s-past");
+  });
+
+  it("drops a task that still has a session ahead today", () => {
+    const index = createWorkspaceIndex(workspace({ tasks: [task("t-1"), task("t-3")], executionSessions: [past, ahead, session("s-past-3", { taskId: "t-3", startLocal: "08:00", endLocal: "08:30" })] }));
+    // t-3 既有一段过去的、也有一段还没开始的 —— 它在今天的轴上，不进抽屉。
+    expect(carryOverTasks(index, NOON).map((entry) => entry.task.id)).toEqual(["t-1"]);
+  });
+
+  it("ignores completed, cancelled and never-scheduled tasks", () => {
+    const index = createWorkspaceIndex(workspace({
+      tasks: [task("t-1", { progress: 100 }), task("t-2", { status: "completed" }), task("t-4")],
+      executionSessions: [past, yesterday, session("s-cancel", { taskId: "t-4", status: "cancelled" })],
+    }));
+    expect(carryOverTasks(index, NOON)).toEqual([]);
+  });
+
+  it("orders by the most recent passed session", () => {
+    const index = createWorkspaceIndex(workspace({ tasks: [task("t-2"), task("t-1")], executionSessions: [yesterday, past] }));
+    // 03-07 10:00 比 03-06 15:00 更近。
+    expect(carryOverTasks(index, NOON).map((entry) => entry.task.id)).toEqual(["t-1", "t-2"]);
+  });
+
+  it("counts an explicitly missed session the same as one that simply ran out", () => {
+    const index = createWorkspaceIndex(workspace({ tasks: [task("t-1")], executionSessions: [session("s-missed", { taskId: "t-1", status: "missed", localDate: "2026-03-05", endLocalDate: "2026-03-05" })] }));
+    expect(carryOverTasks(index, NOON).map((entry) => entry.session.id)).toEqual(["s-missed"]);
   });
 });
 

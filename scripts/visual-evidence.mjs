@@ -762,13 +762,14 @@ function scenarios(port) {
       },
       {
         name: `completion-today-rows-${appearance}`,
-        crop: ".today-completed",
+        crop: ".today-side",
         seed: {
           port, clock, viewport: { width: 1200, height: 900 }, preferences: preference({ lastPage: "today", appearance }), workspace: completionWorkspace(),
         },
+        // 2026-10-28 起「今天完成」不再折叠在时间轴卡底部，而是右列一张与临期同宽的卡：
+        // 直接列出、点开就是补写入口，所以这里只等第一行出现。
         act: async (page) => {
-          await page.getByText(/今日完成 \d+ 项/).click();
-          await page.locator(".today-completed-row").first().waitFor();
+          await page.locator(".today-done-item").first().waitFor();
         },
       },
       {
@@ -782,7 +783,7 @@ function scenarios(port) {
         },
       },
       // 960×640 + 200%：最窄视口配上最大根字号，检查气泡不裁字、动作条仍在窗口内。
-      // 入口换成今日页临期卡的进度条 —— 960 宽时任务池是覆盖面板，压住的就是这块。
+      // 入口走任务池：960 宽时它是覆盖面板 —— 气泡要压在这一层上面仍然完整。
       {
         name: `completion-bubble-960-200-${appearance}`,
         crop: ".completion-panel",
@@ -791,19 +792,21 @@ function scenarios(port) {
           preferences: preference({ lastPage: "today", appearance, scale: 200 }),
           workspace: completionWorkspace(),
         },
-        act: async (page) => openCompletionBubble(page, { via: "today", title: "还在推进的任务" }),
+        act: async (page) => {
+          await page.getByRole("button", { name: "打开任务池" }).click();
+          await openCompletionBubble(page, { via: "pool", title: "还在推进的任务" });
+        },
       },
       // 今日完成那一行是「标题 + 事实」两段都带省略的：200% 下先挤掉谁，只有这里看得见。
       {
         name: `completion-today-rows-960-200-${appearance}`,
-        crop: ".today-completed",
+        crop: ".today-side",
         seed: {
           port, clock, viewport: { width: 960, height: 640 },
           preferences: preference({ lastPage: "today", appearance, scale: 200 }), workspace: completionWorkspace(),
         },
         act: async (page) => {
-          await page.getByText(/今日完成 \d+ 项/).click();
-          await page.locator(".today-completed-row").first().waitFor();
+          await page.locator(".today-done-item").first().waitFor();
         },
       },
     ]),

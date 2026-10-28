@@ -247,106 +247,206 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .header-actions, .summary-pills, .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .summary-pills span, .muted-chip { border: 1px solid var(--line-soft); background: var(--panel); color: var(--muted); border-radius: 999px; padding: .38rem .72rem; font-size: .75rem; transition: border-color .12s ease, background .12s ease; }
 .summary-pills span:hover { border-color: var(--line); background: var(--panel-strong); }
-.surface-card, .now-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease; }
+.surface-card { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 14px; transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease; }
 .surface-card { padding: 18px 20px; box-shadow: var(--shadow-low); }
 .surface-card:hover { border-color: var(--line); }
-.now-card { padding: 18px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-left: 3px solid var(--accent); border-color: var(--line-soft); border-left-color: var(--accent); background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 38%, var(--panel)) 0%, var(--panel) 70%); box-shadow: var(--shadow-low); }
-/* 今日页：页头只留日期与事实摘要；「现在」是唯一行动焦点，待回顾紧随其后，
-   时间线与临期在可用宽度足够时并排。宽度断点用 rem —— 200% 界面缩放下
-   同样的 CSS 宽度只剩一半可读空间，px 断点会漏掉。 */
+/* 今日页（2026-10-28 改版）。
+   一条时间轴承担全部：已过的时段留在原位、当前时段整行放大、空档由一条「现在」行交代。
+   页头只留日期与主操作；段数写进卡片头；右列只放「今天之外」的两种事实（临期、今天完成）。
+   宽度断点用 rem —— 200% 界面缩放下同样的 CSS 宽度只剩一半可读空间，px 断点会漏掉。 */
 .today-page { container-type: inline-size; }
-.today-header { align-items: flex-start; }
-.today-heading { min-width: 0; }
+.today-header { align-items: center; }
 .today-date { font-size: clamp(1.375rem, 1.05rem + 1.1cqi, 1.75rem); line-height: 1.3; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.today-subtitle { margin: 4px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--muted); font-size: .8rem; }
-.today-subtitle > span { white-space: nowrap; }
-.today-subtitle > span + span::before { content: "·"; margin-right: 8px; color: var(--line-strong); }
-.today-subtitle .is-review { color: var(--accent-strong); }
-.today-header .header-actions { padding-top: 2px; }
-.now-card.is-live { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 58%, var(--panel)) 0%, var(--panel) 72%); }
-.now-main { flex: 1 1 auto; min-width: 0; }
-.now-eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.now-dot { width: .5rem; height: .5rem; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
-.now-card h2 { margin: 0; font-size: 1.75rem; line-height: 2.25rem; letter-spacing: -.01em; overflow-wrap: anywhere; }
-.now-card p { margin: 4px 0 0; color: var(--muted-strong); font-size: .82rem; }
-.now-actions { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
-.today-quiet-action { min-height: 2.75rem; display: inline-flex; align-items: center; gap: 8px; padding: 0 .5rem; border: 0; border-radius: .625rem; background: transparent; color: var(--muted-strong); font: inherit; font-size: .78rem; }
-.today-quiet-action:hover { background: var(--panel-strong); color: var(--accent-strong); }
-.today-quiet-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.today-review { padding-bottom: 12px; }
-.today-review .section-heading { padding-bottom: 4px; }
-.today-review-list { display: grid; }
-.today-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
-.today-review-main { display: grid; gap: 2px; min-width: 0; }
-.today-review-main strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .84rem; }
-.today-review-main span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
-.today-review-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
-.today-review-actions .button { min-height: 2.75rem; padding-inline: .75rem; font-size: .78rem; }
-.today-review-actions .button-quiet { color: var(--muted-strong); }
-.today-main { display: grid; gap: 16px; align-items: start; }
-.today-main.has-aside { grid-template-columns: minmax(0, 1.7fr) minmax(15rem, .9fr); }
-.today-timeline-card { padding-bottom: 12px; }
-.today-timeline { list-style: none; margin: 0; padding: 0; display: grid; }
-.today-session { --today-time-width: 4.25rem; position: relative; display: grid; grid-template-columns: var(--today-time-width) 1.125rem minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 8px; border-top: 1px solid var(--line-soft); border-radius: 10px; transition: background .12s ease; }
-.today-session:first-child { border-top: 0; }
-.today-session::before { content: ""; position: absolute; z-index: 0; top: 0; bottom: 0; left: calc(8px + var(--today-time-width) + 12px + .5625rem); width: 1px; background: var(--line-soft); }
-.today-session:first-child::before { top: 50%; }
-.today-session:last-child::before { bottom: 50%; }
-.today-session:only-child::before { display: none; }
-.today-session > * { position: relative; z-index: 1; }
-.today-session:hover:not(.is-current) { background: var(--panel-strong); }
-.today-session.is-current { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 82%, var(--panel)) 0%, color-mix(in srgb, var(--accent-soft) 34%, var(--panel)) 100%); border-top-color: transparent; box-shadow: inset 3px 0 0 var(--accent); }
-.today-session time { display: grid; gap: 2px; color: var(--muted); font-size: .75rem; line-height: 1.35; font-variant-numeric: tabular-nums; }
-.today-session time strong { color: var(--text); font-size: .82rem; font-weight: 600; }
-.today-session.is-past time strong, .today-session.is-past .today-session-title strong { color: var(--muted-strong); }
-.today-session-dot { width: .5625rem; height: .5625rem; justify-self: center; border: 2px solid var(--line-strong); border-radius: 999px; background: var(--panel); }
-.today-session.is-past .today-session-dot { border-color: var(--line-strong); background: var(--line-soft); }
-.today-session.is-current .today-session-dot { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
-.today-session-main { display: grid; gap: 2px; min-width: 0; }
-.today-session-main > .progress-control { max-width: 26rem; }
-.today-session-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.today-session-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .84rem; }
-.today-status { flex: none; padding: .08rem .45rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted-strong); font-size: .75rem; font-weight: 600; line-height: 1.4; }
-.today-status.is-now { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent-strong); }
-.today-status.is-review { background: var(--panel-strong); color: var(--muted-strong); }
-.today-session-actions { display: flex; align-items: center; gap: 2px; }
-.today-session-actions .icon-action { border-color: transparent; background: transparent; }
-.today-session-actions .icon-action:hover { border-color: var(--line-soft); background: var(--panel); }
-.today-completed { margin-top: 8px; border-top: 1px solid var(--line-soft); padding-top: 2px; }
-.today-completed > summary { min-height: 2.75rem; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: var(--muted-strong); font-size: .78rem; cursor: pointer; list-style: none; }
-.today-completed > summary::-webkit-details-marker { display: none; }
-.today-completed > summary svg:first-child { color: var(--success); }
-.today-completed > summary svg:last-child { margin-left: auto; transition: transform .12s ease; }
-.today-completed[open] > summary svg:last-child { transform: rotate(180deg); }
-.today-completed-list { display: grid; }
-/* 一行是一个按钮（规格 0007 §5.2：点击 = 补写／编辑完成记录），所以自带
-   按钮重置：无边框、透明底、左对齐、整行可点。命中区由 min-height 44px 保证。 */
-.today-completed-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 2.75rem; padding: 8px; border: 0; border-top: 1px solid var(--line-soft); background: transparent; color: var(--muted-strong); font: inherit; font-size: .78rem; text-align: left; cursor: pointer; transition: background .12s ease; }
-.today-completed-row:hover, .today-completed-row:focus-visible { background: var(--panel-strong); }
-.today-completed-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.today-completed-row svg { flex: none; color: var(--success); }
-.today-completed-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
-/* 事实行（完成于 · 适应程度 · 图片数）可收缩：960×640 下任务名再长也不能把它顶出气泡。 */
-.today-completed-row span { min-width: 0; margin-left: auto; flex: 0 1 auto; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.today-due { min-width: 0; }
-.today-due-list { display: grid; }
-.today-due-row { display: grid; gap: 4px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
-.today-due-row:first-child { border-top: 0; }
-.today-due-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; min-width: 0; }
-.today-due-head strong { min-width: 0; overflow-wrap: anywhere; font-size: .84rem; font-weight: 600; }
-.today-due-state { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: .75rem; white-space: nowrap; }
-.today-due-state.is-overdue { color: var(--danger); }
-.today-due-state.is-today { color: var(--accent-strong); }
-.today-due-state.is-soon { color: var(--muted-strong); }
-.today-due-row .progress-control { grid-template-columns: minmax(0, 1fr) 2.25rem; }
+.today-header .header-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+
+.today-layout { display: grid; grid-template-columns: minmax(0, 1fr) 13rem; gap: 16px; align-items: start; }
+/* 今日页的两张卡都自己管内边距：`.surface-card` 的 18/20 是给正文卡用的，
+   套在 13rem 的右列上会把可用宽度再吃掉 40px（任务名因此被截成 3 个字）。 */
+.today-axis { padding: 0 0 10px; }
+.today-side { display: grid; gap: 12px; align-content: start; min-width: 0; }
+
+.today-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
+.today-card-head h2 { margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; }
+.today-card-head > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+/* 时间轴卡只剩计数（标题「今天」已删）：靠右当注脚，与行的内容右边缘对齐（8 + 8）。 */
+.today-card-head.is-count-only { justify-content: flex-end; padding: 10px 16px 2px; }
+.today-side .today-card-head { padding: 12px 12px 4px; }
+.today-side .today-card-head h2 { font-size: .8125rem; line-height: 1.25rem; }
+
+/* —— 时间轴 —— */
+.today-timeline { list-style: none; margin: 0; padding: 0 8px 6px; display: grid; }
+.today-row, .today-gap-row { --today-time-width: 3.5rem; display: grid; grid-template-columns: var(--today-time-width) 1rem minmax(0, 1fr); align-items: center; gap: 10px; padding: 8px; border-radius: 10px; transition: background .12s ease; }
+.today-row time, .today-gap-row time { display: grid; gap: 1px; text-align: right; color: var(--muted); font-size: .75rem; line-height: .9375rem; font-variant-numeric: tabular-nums; }
+.today-row time strong, .today-gap-row time strong { color: var(--text); font-size: .8125rem; font-weight: 600; }
+.today-row:hover { background: var(--panel-strong); }
+/* 第二列是**真实元素**画的轨道。不能用 ::before —— 它在 grid 容器里会变成一个
+   网格项，被塞进第一格（原型实测：虚线跑到时间列中间）。 */
+.today-row-rail { position: relative; align-self: stretch; display: grid; place-items: center; }
+.today-row-rail::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--line-soft); }
+.today-row:first-child .today-row-rail::before, .today-gap-row:first-child .today-row-rail::before { top: 50%; }
+.today-row:last-child .today-row-rail::before, .today-gap-row:last-child .today-row-rail::before { bottom: 50%; }
+.today-row:only-child .today-row-rail::before { top: 50%; bottom: 50%; }
+.today-row-dot { position: relative; z-index: 1; width: .5625rem; height: .5625rem; border: 2px solid var(--line-strong); border-radius: 999px; background: var(--panel); }
+.today-row.is-past .today-row-dot { background: var(--line-soft); }
+
+.today-row-body { display: grid; gap: 6px; min-width: 0; }
+.today-row-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 标题**不**吃剩余空间：它一 grow，紧跟其后的截止徽标就被推到进度条边上，「6 天」离任务名
+   隔着一大片空白。改成 flex-grow:0 + 可收缩，留白统一交给后面的 `margin-left:auto`（meter／
+   remaining／操作组各一处），于是徽标黏在名字右侧，进度条那一组被推到行尾。 */
+.today-row-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 600; }
+.today-row.is-past .today-row-title, .today-row.is-past time strong { color: var(--muted-strong); font-weight: 500; }
+.today-row-acts { flex: none; display: flex; align-items: center; gap: 4px; }
+
+.today-chip { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: .0625rem .4375rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-strong); color: var(--muted-strong); font-size: .75rem; font-weight: 600; line-height: 1rem; }
+.today-chip.is-past { border-style: dashed; background: transparent; color: var(--muted); }
+.today-chip.is-now { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); background: var(--accent-soft); color: var(--accent-strong); }
+.today-chip.is-due { border-color: color-mix(in srgb, var(--danger) 32%, var(--line)); background: var(--panel); color: var(--danger); }
+/* 完整文案优先：能写「还有 6 天」就不缩成「6 天」。短形态只在极窄容器（200% 界面缩放）里顶上，
+   否则整个 chip 会把任务名挤成一个字。两份文案同时渲染、靠容器查询切换，JS 不参与测量。 */
+.today-chip .deadline-short { display: none; }
+
+/* 右侧一组（进度条 → 百分比 → 操作）整体靠右：这一条 margin 是行内唯一的分隔点。 */
+/* 行内进度条 = 控件本身（2026-10-28 去掉「进度气泡」）。
+   外观**沿用设置页那条滑动条**：标准 `.range-bar`（带边框的轨道盒 + 桃色填充 + 高把手）原样复用，
+   平时用 `:not(:hover):not(:focus-within)` 把轨道压成一条 5px 细线 —— 静止时它就是进度条，
+   悬浮／聚焦才变回滑块。盒子高度固定 36px（沿用 `--range-bar` 的 2.25rem），
+   所以形态切换不会把整行顶高。 */
+.today-progress { flex: none; display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
+.today-progress-bar.range-bar { flex: none; width: 88px; }
+.today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-track { inset: 50% 0 auto; height: .3125rem; padding: 0; border: 0; border-radius: 999px; background: var(--line-soft); transform: translateY(-50%); }
+.today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-fill { border-radius: 999px; background: var(--success); }
+.today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-thumb { opacity: 0; }
+.today-progress-bar.range-bar .range-thumb { transition: opacity .12s ease; }
+.today-row.is-past .today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-fill { background: color-mix(in srgb, var(--success) 55%, var(--line)); }
+.today-progress-value { flex: none; min-width: 2.25rem; color: var(--muted-strong); font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+/* 当前行：进度条撑满剩余宽度（轨道盒照样是 36px 高，不额外加粗）。 */
+.today-row.is-current .today-progress { flex: 1 1 auto; max-width: 30rem; }
+.today-row.is-current .today-progress-bar.range-bar { flex: 1 1 auto; width: auto; }
+.today-quiet { display: inline-flex; align-items: center; gap: .25rem; min-height: 2rem; padding: 0 .5rem; border: 1px solid transparent; border-radius: .5rem; background: transparent; color: var(--muted-strong); font: inherit; font-size: .75rem; cursor: pointer; }
+.today-quiet:hover { border-color: var(--line-soft); background: var(--panel); color: var(--text); }
+.today-quiet:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* 从临期气泡「在轴上查看」跳过来时，目标行亮 4 秒（两次脉冲后淡出）。
+   用 outline 而不是 box-shadow：当前行的 `inset 3px 0 0` 左侧条不能被动画覆盖掉。 */
+@keyframes today-row-flash {
+  0% { outline-color: color-mix(in srgb, var(--accent) 88%, transparent); }
+  25% { outline-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+  50% { outline-color: color-mix(in srgb, var(--accent) 88%, transparent); }
+  75% { outline-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+  100% { outline-color: transparent; }
+}
+.today-row.is-flash { outline: 2px solid transparent; outline-offset: 2px; animation: today-row-flash 4s ease-in-out; }
+@media (prefers-reduced-motion: reduce) {
+  /* 减少动态：不闪，直接给一圈静态高亮，4 秒后由状态清掉。 */
+  .today-row.is-flash { animation: none; outline-color: var(--accent); }
+}
+
+/* —— 当前行：唯一的「现在」模块，两行式（标题+剩余 / 进度+主操作） —— */
+/* 压缩后 102px（原 116）：上内边距 20 + 标题 26 + 行间距 4 + 进度行 44 + 下内边距 8。
+   进度条那行被 44px 主操作撑着、条只占中间 7px，所以上内边距仍要比下内边距大，
+   标题到卡片上沿（23）与标题到进度条（25）才差不多。 */
+.today-row.is-current { padding: 20px 12px 8px; border-radius: 12px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 62%, var(--panel)) 0%, color-mix(in srgb, var(--accent-soft) 14%, var(--panel)) 100%); box-shadow: inset 3px 0 0 var(--accent); }
+.today-row.is-current:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-soft) 70%, var(--panel)) 0%, color-mix(in srgb, var(--accent-soft) 20%, var(--panel)) 100%); }
+/* 进度条那行是「底」：它高 44px（主操作撑的），条只占中间 7px，所以上内边距要比下内边距大，
+   标题到卡片上沿与标题到条的光学距离才相等（20+3 ≈ 3+4+18.5）。 */
+.today-row.is-current .today-row-body { gap: 4px; }
+.today-row.is-current .today-row-title { font-size: 1.25rem; line-height: 1.625rem; }
+/* 时间列跟着整行上下居中 —— 它标注的是「这一刻」，要和轨道上的点同轴，不是跟着标题走。
+   当前行的时间比普通行大一号（15/13px，行高 18px）：它是这一行的锚，缩在 12px 里读不出来。 */
+.today-row.is-current time { align-self: center; font-size: .8125rem; line-height: 1.125rem; }
+.today-row.is-current time strong { font-size: .9375rem; color: var(--accent-strong); }
+.today-row.is-current .today-row-dot { width: .625rem; height: .625rem; border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+/* 倒计时放右上角：紧跟在标题／徽标后面时那一串太挤（标题 + 逾期 + 倒计时挤成一团）。 */
+.today-remain { flex: none; margin-left: auto; color: var(--accent-strong); font-size: .8125rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* —— 空档：这一行就是「现在」 —— */
+.today-gap-row { margin: 2px 0; padding: 10px 8px; border: 1px dashed color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--accent-soft) 30%, var(--panel)); }
+.today-gap-row time { color: var(--accent-strong); font-weight: 600; }
+.today-gap-row time strong { font-size: .8125rem; color: var(--accent-strong); }
+.today-gap-row .today-row-rail::before { background: repeating-linear-gradient(to bottom, var(--line-strong) 0 4px, transparent 4px 8px); }
+.today-gap-row .today-row-dot { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+/* 空档只有一行：「无任务」比普通行标题大一档（它是这一行的主语），剩余时间跟在它右侧，
+   「添加」靠右并与这一行同轴居中 —— 行内唯一的 44px 元素就是它，其余都跟着它居中。 */
+.today-gap-title { flex: none; font-size: 1.0625rem; line-height: 1.5rem; font-weight: 600; }
+.today-gap-note { margin: 0 0 0 2px; flex: 0 1 auto; min-width: 0; color: var(--muted-strong); font-size: .8125rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.today-gap-row .button { margin-left: auto; }
+/* 时间轴末尾的「添加任务」：一条虚线空行，读起来是「这里还能放一段」。 */
+.today-gap-hint { display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 2px 8px 4px; padding: 9px 12px; border: 1px dashed var(--line); border-radius: 10px; background: transparent; color: var(--muted-strong); font: inherit; font-size: .8125rem; text-align: left; cursor: pointer; }
+.today-gap-hint svg { flex: none; color: var(--accent); }
+.today-gap-hint:hover { border-color: var(--accent); background: var(--accent-softer); color: var(--accent-strong); }
+.today-gap-hint:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* —— 右列：临期只写名字与天数，动作在气泡里；今天完成只写名字 —— */
+.today-due { min-width: 0; padding: 0; }
+.today-due-list, .today-done-list { display: grid; padding: 0 8px 10px; }
+.today-due-item, .today-done-item { display: grid; gap: 1px; width: 100%; min-width: 0; padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; text-align: left; font: inherit; cursor: pointer; }
+.today-due-item:hover, .today-done-item:hover { background: var(--panel-strong); }
+.today-due-item:focus-visible, .today-done-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.today-done { padding: 0; }
+.today-due-name { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text); font-size: .8125rem; }
+.today-due-name svg { flex: none; }
+.today-due-name > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.today-due-name em { flex: none; padding: 0 .25rem; border-radius: 4px; background: var(--accent-softer); color: var(--accent-strong); font-size: .75rem; font-style: normal; font-weight: 600; line-height: 1.125rem; }
+.today-due-when { padding-left: 1.0625rem; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.today-due-item.is-overdue .today-due-name svg, .today-due-item.is-overdue .today-due-when { color: var(--danger); }
+.today-due-item.is-today .today-due-name svg, .today-due-item.is-today .today-due-when { color: var(--accent-strong); }
+.today-due-item.is-soon .today-due-name svg, .today-due-item.is-soon .today-due-when { color: var(--muted-strong); }
+.today-done-item { grid-auto-flow: column; align-items: center; justify-content: start; gap: 7px; color: var(--muted-strong); font-size: .75rem; }
+.today-done-item:hover { color: var(--text); }
+.today-done-item svg { flex: none; color: var(--success); }
+.today-done-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* —— 三个锚定气泡共用骨架 —— */
+.today-pop-body { display: grid; gap: 8px; min-width: 15rem; }
+.today-pop-body h2 { margin: 0; font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
+.today-pop-meta { margin: 0; color: var(--muted); font-size: .75rem; }
+.today-pop-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* 「编辑任务」只留图标：方框和同排按钮等高（44px）、有边框，不再用文字按钮占位置。 */
+.today-pop-icon { flex: none; width: 2.75rem; padding: 0; color: var(--muted-strong); }
+.today-pop-icon:hover:not(:disabled) { color: var(--text); }
+.today-pop-icon svg { display: block; }
+/* 「挪到之后」只有标题 + 两个选择：内容多少就多宽，不留右侧空白。 */
+.floating-panel.today-move-panel { width: max-content; max-width: calc(100vw - 24px); }
+.today-move-panel .today-pop-body { min-width: 0; }
+.today-move-panel .today-pop-actions { flex-wrap: nowrap; }
+.today-move-panel .button { white-space: nowrap; }
+
+/* —— 待续浮钮与抽屉（2026-10-28）——
+   固定左下角：右下角归任务池浮钮（`.task-pool-toggle`，right:18 bottom:18，z-index 31）。
+   left 跟着侧栏宽度（4.375rem）走，200% 缩放下两者一起放大，不会错位。 */
+.carry-toggle { position: fixed; z-index: 31; left: calc(4.375rem + 18px); bottom: 18px; height: 44px; min-height: 44px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); box-shadow: var(--shadow-float); font: inherit; font-size: .8125rem; font-weight: 600; cursor: pointer; }
+.carry-toggle:hover { background: var(--panel-strong); border-color: var(--line-strong); }
+.carry-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.carry-count { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px 1px; border-radius: 999px; background: var(--accent-strong); color: #fff; font-size: .75rem; font-weight: 600; line-height: 1; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.carry-scrim { position: fixed; z-index: 70; inset: 0; border: 0; padding: 0; background: rgb(22 17 12 / 18%); cursor: default; }
+.carry-drawer { position: fixed; z-index: 71; left: calc(4.375rem + 18px); bottom: calc(18px + 44px + 12px); width: min(22.5rem, calc(100vw - 4.375rem - 36px)); max-height: min(70vh, 32rem); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: var(--shadow-modal); overflow: hidden; }
+.carry-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 12px 10px 16px; }
+.carry-head h2 { margin: 0; font-size: .9375rem; font-weight: 600; }
+.carry-note { margin: 0; padding: 0 16px 10px; color: var(--muted); font-size: .75rem; line-height: 1.25rem; }
+.carry-list { overflow-y: auto; padding: 0 8px 10px; display: grid; gap: 1px; }
+.carry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; padding: 9px 8px; border-radius: 10px; }
+.carry-row:hover { background: var(--panel-strong); }
+.carry-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8125rem; font-weight: 600; }
+.carry-schedule { grid-row: 1 / 3; grid-column: 2; align-self: center; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); color: var(--text); font: inherit; font-size: .75rem; cursor: pointer; }
+.carry-schedule:hover { background: var(--accent-softer); border-color: var(--accent); color: var(--accent-strong); }
+.carry-schedule:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.carry-meta { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.carry-foot { margin: 0; padding: 9px 16px 12px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: .75rem; line-height: 1.125rem; }
+
 @container (max-width: 44rem) {
-  .today-main.has-aside { grid-template-columns: minmax(0, 1fr); }
-  .today-review-row { grid-template-columns: minmax(0, 1fr); }
-  .today-review-actions { justify-content: flex-start; }
-  .now-card { align-items: stretch; flex-direction: column; }
-  .now-actions { justify-content: flex-start; }
+  .today-layout { grid-template-columns: minmax(0, 1fr); }
+  .today-side { grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+  .today-progress-bar.range-bar { width: 72px; }
+  /* 200% 之类的高缩放下容器查询按 rem 触发：当前行标题降一档，别只剩一个字。 */
+  .today-row.is-current .today-row-title { font-size: 1rem; line-height: 1.5rem; }
   .rescue-card { align-items: stretch; flex-direction: column; }
   .rescue-actions { width: 100%; }
+}
+/* 再窄一档（200% 缩放时容器只有 20rem 左右）：截止徽标换成短形态，把宽度还给任务名。 */
+@container (max-width: 30rem) {
+  .today-chip .deadline-long { display: none; }
+  .today-chip .deadline-short { display: inline; }
 }
 .section-heading, .panel-heading, .project-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
@@ -2344,11 +2444,16 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 
 /* 三档适应程度：可以全不选（规格 §3.1「不预选」），再点一次取消。 */
 .completion-fits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.completion-fit { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 2.75rem; padding: 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-strong); color: var(--muted-strong); font: inherit; font-size: .8rem; font-weight: 500; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
-.completion-fit:hover { border-color: var(--line-strong); background: var(--panel); color: var(--text); }
+.completion-fit { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 2.75rem; padding: 0 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted-strong); font: inherit; font-size: .8rem; font-weight: 500; cursor: pointer; transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.completion-fit:hover { border-color: var(--line-strong); background: var(--panel-strong); color: var(--text); }
 .completion-fit:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* 选中同时改三件事：更深底、重描边、显示勾 —— 色盲与黑白打印下也读得出来。 */
-.completion-fit.is-selected { border-color: var(--accent-strong); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-strong); font-weight: 600; }
+/* 选中比未选中明显更深一档：三个白色方块并排时，「选了哪个」要一眼看得出。
+   底色用 --accent-tint（比 --accent-soft 深）、文字改用 --text：深橙字压在深橙底上只有 4.29:1，
+   达不到 4.5 的小字标准（axe 会红）；强调色交给描边和对勾。 */
+.completion-fit.is-selected { border-color: var(--accent-strong); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent-strong); color: var(--text); font-weight: 600; }
+.completion-fit.is-selected:hover { background: var(--accent-tint); color: var(--text); }
+.completion-fit.is-selected svg { color: var(--accent-strong); }
 .completion-fit svg { flex: none; }
 
 .completion-note-field textarea { width: 100%; min-height: 5rem; font-size: .8rem; line-height: 1.5; }
@@ -2368,7 +2473,7 @@ button.review-calendar-day:hover { background: var(--accent-soft); border-color:
 .completion-tag.is-selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-strong); font-weight: 600; }
 
 /* 图片区：整块是投放目标，所以给一圈虚线；缩略图 68px（rem，随缩放放大）。 */
-.completion-images { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed color-mix(in srgb, var(--muted) 40%, var(--line)); border-radius: 12px; background: var(--panel-strong); }
+.completion-images { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed color-mix(in srgb, var(--muted) 40%, var(--line)); border-radius: 12px; background: var(--panel); }
 .completion-images-hint { margin-left: auto; color: var(--muted); font-weight: 400; font-size: .75rem; text-align: right; }
 .completion-thumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .completion-thumb { position: relative; flex: none; width: 4.25rem; height: 4.25rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }

@@ -146,6 +146,46 @@ export function pendingReviewSessions(index: WorkspaceIndex, now: Date): Executi
   return index.workspace.executionSessions.filter((session) => isPendingReviewIn(index, session, now));
 }
 
+/**
+ * 「待续」：安排过、但还没做完的任务（今日页左下浮钮的数据源）。
+ *
+ * 三条同时成立才算 ——
+ *
+ * 1. 任务仍是 `active`、且没有完成；
+ * 2. 有至少一个**已经过去**的时段（`missed`，或 `scheduled` 但已结束）；
+ * 3. 今天没有尚未结束的时段 —— 有的话它就在今天的轴上，抽屉里再出现一次就是重复。
+ *
+ * 按最近一次过期时段的结束时刻倒序。它只读投影、不创建事实：抽屉里把任务排进今天
+ * 走的是和任务池完全相同的排程入口。
+ */
+export interface CarryOverEntry {
+  task: Task;
+  /** 最近一次已经过去、还没做完的那个时段，用于显示「昨天 14:00 的时段」。 */
+  session: ExecutionSession;
+}
+
+export function carryOverTasks(index: WorkspaceIndex, now: Date): CarryOverEntry[] {
+  const nowMs = now.getTime();
+  const entries: CarryOverEntry[] = [];
+  for (const task of index.workspace.tasks) {
+    if (task.status !== "active" || isTaskCompleted(task)) continue;
+    let latest: ExecutionSession | null = null;
+    let latestEnd = Number.NEGATIVE_INFINITY;
+    let stillAhead = false;
+    for (const session of index.sessionsByTaskId.get(task.id) ?? []) {
+      if (session.status === "cancelled" || session.status === "skipped") continue;
+      const end = localSessionEnd(session);
+      if (session.status === "scheduled" && end > nowMs) { stillAhead = true; break; }
+      if (session.status === "missed" || (session.status === "scheduled" && end <= nowMs)) {
+        if (end > latestEnd) { latest = session; latestEnd = end; }
+      }
+    }
+    if (stillAhead || !latest) continue;
+    entries.push({ task, session: latest });
+  }
+  return entries.sort((left, right) => localSessionEnd(right.session) - localSessionEnd(left.session));
+}
+
 function sessionEnded(session: ExecutionSession, now: Date) {
   return localSessionEnd(session) <= now.getTime();
 }

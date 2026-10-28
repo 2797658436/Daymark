@@ -24,6 +24,7 @@ import { WeekdayPicker } from "./components/ui/weekday-picker";
 import { TimeField } from "./components/ui/time-picker";
 import { SettingsChoice, SettingsRow, SettingsSection, SettingsToggleRow } from "./components/settings/settings-ui";
 import { CompletionBubble, type CompletionTarget } from "./components/completion/completion-bubble";
+import { CarryOverLauncher } from "./components/today/carry-over";
 import { DeadlinesPage } from "./components/deadlines/deadlines-page";
 import { ReviewPage, type ReviewSelection } from "./components/review/review-page";
 import { ProjectRail } from "./components/projects/project-rail";
@@ -36,7 +37,7 @@ import { resolveScheduleWindow, windowEndDate, type ScheduleWindowMode } from ".
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem, type ScheduleUnscheduledItem } from "./lib/scheduling";
 import { scheduleUnscheduledText } from "./lib/scheduleReasons";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
-import { createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
+import { carryOverTasks, createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { collapsedGapHeight, createCalendarTimeline, defaultSlotSlicesForWeekday, fullDayEffectiveRanges, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
 import { blockOverlapping, CARD_LANE_GUTTER_PX, concurrentLayouts, dropImpact, placeableSessions, resizeChanges, resolveCalendarDrop, type CalendarDropIntent, type CalendarDropMode, type SessionPlacementChange } from "./lib/calendarPlacement";
 import { calendarDayMarkers, calendarDaySummary, deadlineUrgency, deadlineUrgencyLabel, formatCompactMinutes, type CalendarMarker, type DeadlineUrgency } from "./lib/calendarSummary";
@@ -157,6 +158,13 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   const [weekGridAvailableWidth, setWeekGridAvailableWidth] = useState<number | null>(null);
   // 稳定索引在快照变更时重建一次（规格 §8）：列表渲染不再逐行扫描全量数组。
   const workspaceIndex = useMemo(() => createWorkspaceIndex(workspace), [workspace]);
+  /**
+   * 「待续」浮钮的数据：快照变了才重算，不跟着每次渲染走。
+   *
+   * 时钟取 `new Date()` 而不是订阅 `useCurrentTime` —— 那样整棵树每 30 秒重渲染一次，
+   * 而这个判据比较的是「时段是否已经结束」，分钟级偏差不影响结果。
+   */
+  const carryOver = useMemo(() => carryOverTasks(workspaceIndex, new Date()), [workspaceIndex]);
   const workspaceRef = useRef(workspace); const preferencesRef = useRef(preferences);
   workspaceRef.current = workspace; preferencesRef.current = preferences;
   const saveRevision = useRef(0);
@@ -715,7 +723,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {loadError && <div className="error-banner" role="alert"><CircleAlert size={18} />读取失败：{loadError}<Button variant="secondary" onClick={() => void reload()}>重试</Button></div>}
         {undoStack.length > 0 && undoToastOpen && <button className="undo-toast" onClick={() => void undo()} onMouseEnter={clearUndoToastTimer} onMouseLeave={dismissUndoToastLater} onFocus={clearUndoToastTimer} onBlur={dismissUndoToastLater}><RotateCcw size={16} />{undoStack.at(-1)?.label}（Ctrl+Z）</button>}
 
-        {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onSkipReview={async (session) => { await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(session) }); }} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} onRecordCompletion={openCompletionForEvent} />}
+        {page === "today" && <TodayPage index={workspaceIndex} workspace={workspace} preferences={preferences} running={running} onStart={startSession} onFinish={setFinishing} onProgress={updateProgress} onGoCalendar={(session) => { if (session) openCalendarSession(session.id); else { setCalendarFocusSessionId(null); updatePreferences({ lastPage: "calendar" }); } }} onDelay={async (session) => { const now = new Date(); await moveSession(session, session.localDate, minutesTime(now.getHours() * 60 + now.getMinutes() + 10)); }} onSkip={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "cancelled" })); pushUndo({ label: "恢复本次安排", run: () => native.updateExecutionSession(previous) }); }} onMove={moveSession} onRecordCompletion={openCompletionForEvent} onEditTask={(task, anchorElement) => setTaskEditorAnchor({ taskId: task.id, anchorElement })} />}
         {page === "calendar" && <CalendarPage workspace={workspace} index={workspaceIndex} preferences={preferences} focusSessionId={calendarFocusSessionId} onPreferences={updatePreferences} onCalendarPosition={rememberCalendarPosition} onSchedule={scheduleTask} onCreateTaskAt={createTaskAt} onMove={moveSession} rootRef={calendarRootRef} viewportDragRef={viewportDragRef} edgeScrollHoldRef={gapExpansionHoldRef} onProgress={updateProgress} onSkipReview={async (session) => { const previous = session; await commit(() => native.updateExecutionSession({ ...session, status: "missed" })); pushUndo({ label: "恢复待回顾时段", run: () => native.updateExecutionSession(previous) }); }} onCreateBlock={async (block) => { await commit(() => native.createTimeBlock(block)); }} onUpdateBlock={async (previous, next) => { await commit(() => native.updateTimeBlock(next)); pushUndo({ label: "恢复时间块", run: () => native.updateTimeBlock(previous) }); }} onDeleteBlock={async (id) => { await commit(() => native.deleteTimeBlock(id)); }} />}
         {page === "deadlines" && <DeadlinesPage index={workspaceIndex} filter={deadlinesView.filter} onFilterChange={(filter) => setDeadlinesView((current) => ({ ...current, filter }))}
           focusKey={deadlinesView.focusKey} onFocusKey={(key) => setDeadlinesView((current) => ({ ...current, focusKey: key }))}
@@ -745,6 +753,9 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         {hasTaskPool && !showTaskPool && <button className="task-pool-toggle" aria-label="打开任务池" onClick={() => poolUsesOverlay ? setPoolOverlayOpen(true) : setTaskPoolOpen(true)}><Inbox size={18} /><span>任务池</span></button>}
       </main>
 
+      {/* 待续浮钮固定左下角：右下角是任务池浮钮的位置，两者不抢位（左＝回头看，右＝往前做）。 */}
+      {page === "today" && <CarryOverLauncher entries={carryOver} today={toLocalDate(new Date())} onSchedule={(task) => setScheduling({ taskId: task.id, projectId: null })} />}
+
       {showTaskPool && (
         <>
         <section className="pool-splitter-region" aria-label="任务池宽度控制">
@@ -766,9 +777,10 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
           const event = progressEvent(task, progress);
           await commit(() => native.finishExecution(finishing.id, actualEndUtc, note, event));
           setFinishing(null);
-          // 模态对话框不能与气泡同帧叠开：先关掉对话框，再把气泡锚到今日页对应行（§3.1）。
+          // 模态对话框不能与气泡同帧叠开：先关掉对话框，再把气泡锚到今日页的当前行（§3.1）。
           if (!isCompletionPromptTarget(task, fromProgress, progress) || !preferences.completionRecordPrompt) return;
-          const card = document.querySelector<HTMLElement>(".now-card");
+          // 锚点从 `.now-card` 换成时间轴上的当前行 —— 改版后不再有「现在」大卡。
+          const card = document.querySelector<HTMLElement>(".today-row.is-current");
           openCompletion({ taskId: task.id, progressEventId: event.id, completedAtUtc: event.occurredAtUtc, progressBefore: fromProgress, record: null, imageCount: 0, anchorElement: card, anchorRect: card?.getBoundingClientRect() ?? null });
         }} />}
       {/* 完成记录气泡：任务池、项目、今日与日历都汇到这一个实例，同一时刻只开一个。 */}
@@ -883,29 +895,45 @@ function PageHeader({ eyebrow, title, actions, className, titleId, titleLabel, t
   </header>;
 }
 
-function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onSkipReview, onRecordCompletion }: {
-  /** 共享稳定索引；「待回顾」判断与任务查找都走同一处，不另写一份。 */
+/**
+ * 今日页（2026-10-28 改版）。
+ *
+ * **一条时间轴承担全部**：已过的时段留在原位、当前时段整行放大、空档由一条「现在」行交代。
+ * 此前同一批 `executionSessions` 被渲染了三遍 —— `nowState` 大卡、待回顾卡片、时间线各一遍，
+ * 首屏于是把同一件事说了两三次。现在只有一份。
+ *
+ * 三条约定：
+ * - 已过的时段**不写 `missed`**、不做裁决：留在轴上显示「已过」，可以更新进度，也可以挪到之后。
+ *   原来的「本次未推进」按钮从今日页移除（日历页的待回顾流程保持不变）。
+ * - 当前行是唯一的「现在」模块：标题、剩余时间、进度、主操作都在行内。
+ * - 右列只放「今天之外」的事实：临期（只写名字与天数，动作在气泡里）和今天完成。
+ */
+function TodayPage({ index, workspace, preferences, running, onStart, onFinish, onProgress, onGoCalendar, onDelay, onSkip, onMove, onRecordCompletion, onEditTask }: {
+  /** 共享稳定索引；时段与任务查找都走同一处，不另写一份。 */
   index: WorkspaceIndex;
   workspace: WorkspaceSnapshot; preferences: AppSettings; running: ExecutionRecord | null;
   onStart: (session: ExecutionSession) => Promise<void>; onFinish: (record: ExecutionRecord) => void;
   onProgress: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void>; onGoCalendar: (session?: ExecutionSession) => void;
-  onSkipReview: (session: ExecutionSession) => Promise<void>;
   onDelay: (session: ExecutionSession) => Promise<void>; onSkip: (session: ExecutionSession) => Promise<void>;
+  onMove: (session: ExecutionSession, localDate: string, startLocal: string) => Promise<void>;
   onRecordCompletion: (task: Task, event: ProgressEvent, record: CompletionRecordSummary | null, anchor: HTMLElement) => void;
+  onEditTask: (task: Task, anchorElement: HTMLElement) => void;
 }) {
   const now = useCurrentTime();
   const today = toLocalDate(now);
+  const nowMs = now.getTime();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const sessions = workspace.executionSessions.filter((item) => item.localDate <= today && item.endLocalDate >= today && item.status === "scheduled").sort(compareSessions);
-  const missed = workspace.executionSessions.filter((item) => item.localDate <= today && (item.endLocalDate ?? item.localDate) === today && (item.status === "missed" || isPendingReviewIn(index, item, now))).sort(compareSessions);
-  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
-  const current = sessions.find((session) => sessionContains(session, now)) ?? null;
-  const next = sessions.find((session) => localSessionStart(session) > now.getTime()) ?? null;
-  const startable = current ?? next;
+  // 正在记录的那一段也算「现在」：提前开始、或时段已经到点但还没结束本次时，
+  // 时钟不一定落在这个区间里，但「结束本次」必须始终有出口。
+  const runningSessionId = running?.sessionId ?? null;
+  const current = sessions.find((session) => sessionContains(session, now) || session.id === runningSessionId) ?? null;
+  const next = sessions.find((session) => localSessionStart(session) > nowMs) ?? null;
+  const passedCount = sessions.filter((session) => session !== current && localSessionEnd(session) <= nowMs).length;
   const rescue = preferences.checkInEnabled && preferences.rescuePromptsEnabled && !running
     ? workspace.executionSessions.find((session) => (session.status === "scheduled" || session.status === "missed") && session.localDate === today && workspace.rescuePromptedSessionIds.includes(session.id) && !workspace.executionRecords.some((record) => record.sessionId === session.id) && timeMinutes(session.startLocal) + preferences.checkInGraceMinutes < nowMinutes)
     : undefined;
   const due = workspace.tasks.filter((task) => task.status === "active" && task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7).sort(compareDeadlines);
-  const missedIds = new Set(missed.map((session) => session.id));
   const todayEvents = workspace.progressEvents.filter((event) => toLocalDate(new Date(event.occurredAtUtc)) === today);
   const completedToday = (() => {
     // 每个任务只看**最新一次**「到 100」：撤回再完成时，站着的事实是后一次。
@@ -922,129 +950,213 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
       .map((entry) => ({ ...entry, record: workspace.completionRecords.find((record) => record.progressEventId === entry.event.id) ?? null }))
       .sort((left, right) => right.event.occurredAtUtc.localeCompare(left.event.occurredAtUtc));
   })();
-  const runningTask = running ? index.tasksById.get(running.taskId) ?? null : null;
-  const runningSession = running?.sessionId ? index.sessionsById.get(running.sessionId) ?? null : null;
-  const currentTask = current ? index.tasksById.get(current.taskId) ?? null : null;
-  const nextTask = next ? index.tasksById.get(next.taskId) ?? null : null;
-  const runningMinutes = running ? Math.max(1, Math.round((now.getTime() - new Date(running.actualStartUtc).getTime()) / 60_000)) : 0;
-  const currentRemaining = current ? Math.max(1, Math.round((localSessionEnd(current) - now.getTime()) / 60_000)) : 0;
-  const nextWaiting = next ? Math.max(1, Math.round((localSessionStart(next) - now.getTime()) / 60_000)) : 0;
-  const nowState = running ? {
-    eyebrow: "正在记录",
-    title: runningTask?.title ?? "执行中的任务",
-    description: `始于 ${formatClock(running.actualStartUtc)} · 已进行 ${formatDuration(runningMinutes)} · 结束本次只结束这一段`,
-    live: true,
-  } : current ? {
-    eyebrow: "现在",
-    title: currentTask?.title ?? "未命名任务",
-    description: `${current.startLocal}–${current.endLocal} · 还剩 ${formatDuration(currentRemaining)} · 手动完成度 ${currentTask?.progress ?? 0}%`,
-    live: true,
-  } : next ? {
-    eyebrow: "下一项",
-    title: nextTask?.title ?? "未命名任务",
-    description: `${next.startLocal}–${next.endLocal} · ${formatDuration(nextWaiting)}后开始 · 手动完成度 ${nextTask?.progress ?? 0}%`,
-    live: false,
-  } : sessions.length ? {
-    eyebrow: "现在",
-    title: "今天的安排已经结束",
-    description: missed.length > 0 ? `还有 ${missed.length} 个时段等待确认；需要的话可以再从任务池安排一段。` : "需要的话可以再从任务池安排一段，或到回顾里看看今天的结果。",
-    live: false,
-  } : {
-    eyebrow: "现在",
-    title: "今天还没有安排",
-    description: "从任务池拖入，或打开日历，为今天留出一个真实时段。",
-    live: false,
+  const runningMinutes = running ? Math.max(1, Math.round((nowMs - new Date(running.actualStartUtc).getTime()) / 60_000)) : 0;
+  /** 今天有没有「已经排进轴上」的任务 —— 临期列用它决定要不要打「今天」角标。 */
+  const scheduledTaskIds = new Set(sessions.map((session) => session.taskId));
+
+  /** 临时层：临期条目、挪到之后。同一时刻只会有一个。 */
+  const [dueAnchor, setDueAnchor] = useState<{ taskId: string; element: HTMLElement } | null>(null);
+  const [moveAnchor, setMoveAnchor] = useState<{ session: ExecutionSession; element: HTMLElement } | null>(null);
+  const dueTask = dueAnchor ? index.tasksById.get(dueAnchor.taskId) ?? null : null;
+  /** 从临期气泡「在轴上查看」跳过去的那一段，会在轴上亮 4 秒。 */
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
+
+  /**
+   * 进入今日页时把当前行带进视野。
+   *
+   * 去掉顶部「现在」模块之后，当前行不再天然在首屏：一天排八段时它可能落在第五行。
+   * 只在**看不清**它的时候才滚（露出不足 64px 就算看不清），已经能看见就不动 ——
+   * 用户主动滚到别处、隔半分钟回来时不会被反复拽回来。
+   */
+  const currentRowRef = useRef<HTMLLIElement | null>(null);
+  const currentId = current?.id ?? null;
+  useEffect(() => {
+    const node = currentRowRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const visible = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+    if (visible >= Math.min(rect.height, 64)) return;
+    const reduceMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    node.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+  }, [currentId, today]);
+
+  /**
+   * 「在轴上查看」：滚到那一段，并让它亮 4 秒。
+   *
+   * 不走 `CSS.escape` —— 用属性逐行比对，测试环境（jsdom）也稳。
+   */
+  const revealSession = (session: ExecutionSession) => {
+    const node = [...document.querySelectorAll<HTMLElement>(".today-row")].find((row) => row.dataset.sessionId === session.id);
+    if (!node) return;
+    const reduceMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // `?.` 兜一下 jsdom：单元测试环境里没有 scrollIntoView，高亮本身并不依赖滚动。
+    node.scrollIntoView?.({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+    setFlashId(session.id);
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashId(null), 4000);
   };
+  /** 行类名统一出口：闪一下的那个状态也在这里拼，省得三处各写一遍。 */
+  const rowClass = (session: ExecutionSession, extra?: string) => ["today-row", extra, flashId === session.id ? "is-flash" : ""].filter(Boolean).join(" ");
+  /** 已过的行：留在原位、保持可读，但不与当前行争视觉重心。 */
+  const rowPast = (session: ExecutionSession) => {
+    const task = index.tasksById.get(session.taskId);
+    if (!task) return null;
+    return <li key={session.id} data-session-id={session.id} className={rowClass(session, "is-past")}>
+      <time dateTime={`${session.localDate}T${session.startLocal}`}><strong>{session.startLocal}</strong><span>{session.endLocal}</span></time>
+      <span className="today-row-rail" aria-hidden="true"><span className="today-row-dot" /></span>
+      <div className="today-row-body">
+        <div className="today-row-line">
+          <strong className="today-row-title" title={task.title}>{task.title}</strong>
+          {/* 「已过」也不再用 chip 说：时钟已经翻过这一行，弱化的标题与空心点就是事实本身。 */}
+          <RowProgress task={task} onCommit={onProgress} />
+          
+          <div className="today-row-acts">
+            <button type="button" className="today-quiet" onClick={(click) => setMoveAnchor({ session, element: click.currentTarget })}>挪到之后</button>
+            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+          </div>
+        </div>
+      </div>
+    </li>;
+  };
+
+  /** 当前行 = 唯一的「现在」模块：两行式，主操作落在行内。 */
+  const rowCurrent = (session: ExecutionSession) => {
+    const task = index.tasksById.get(session.taskId);
+    if (!task) return null;
+    const isRunning = running?.sessionId === session.id;
+    const urgent = task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7;
+    return <li key={session.id} data-session-id={session.id} className={rowClass(session, "is-current")} ref={currentRowRef}>
+      <time dateTime={`${session.localDate}T${session.startLocal}`}><strong>{session.startLocal}</strong><span>{session.endLocal}</span></time>
+      <span className="today-row-rail" aria-hidden="true"><span className="today-row-dot" /></span>
+      <div className="today-row-body">
+        <div className="today-row-line">
+          <strong className="today-row-title" title={task.title}>{task.title}</strong>
+          {/* 「现在」不再用 chip 说 —— 整行的橙色底与实心点已经在说。只有「正在记录」是额外事实。 */}
+          {isRunning && <span className="today-chip is-now">正在记录</span>}
+          {urgent && <span className="today-chip is-due"><Flag size={11} aria-hidden="true" /><span className="deadline-long">{deadlineLabel(today, task.deadlineLocal!)}</span><span className="deadline-short">{deadlineLabelShort(today, task.deadlineLocal!)}</span></span>}
+          <span className="today-remain">{isRunning ? `已进行 ${formatDuration(runningMinutes)}` : <>剩 <Countdown target={localSessionEnd(session)} /></>}</span>
+        </div>
+        <div className="today-row-line">
+          <RowProgress task={task} onCommit={onProgress} />
+
+          {isRunning
+            ? <Button variant="primary" onClick={() => onFinish(running!)}><Square size={16} aria-hidden="true" />结束本次</Button>
+            : preferences.checkInEnabled
+              ? <Button variant="primary" onClick={() => void onStart(session)}><Play size={16} aria-hidden="true" />开始</Button>
+              : <span className="muted-chip">开始／结束记录未开启</span>}
+          <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+        </div>
+      </div>
+    </li>;
+  };
+
+  /** 还没开始的行：保持紧凑，提前开始直接落在这一行上。 */
+  const rowFuture = (session: ExecutionSession) => {
+    const task = index.tasksById.get(session.taskId);
+    if (!task) return null;
+    const urgent = task.deadlineLocal && daysBetween(today, task.deadlineLocal) <= 7;
+    return <li key={session.id} data-session-id={session.id} className={rowClass(session)}>
+      <time dateTime={`${session.localDate}T${session.startLocal}`}><strong>{session.startLocal}</strong><span>{session.endLocal}</span></time>
+      <span className="today-row-rail" aria-hidden="true"><span className="today-row-dot" /></span>
+      <div className="today-row-body">
+        <div className="today-row-line">
+          <strong className="today-row-title" title={task.title}>{task.title}</strong>
+          {urgent && <span className="today-chip is-due"><Flag size={11} aria-hidden="true" /><span className="deadline-long">{deadlineLabel(today, task.deadlineLocal!)}</span><span className="deadline-short">{deadlineLabelShort(today, task.deadlineLocal!)}</span></span>}
+          <RowProgress task={task} onCommit={onProgress} />
+          
+          <div className="today-row-acts">
+            {preferences.checkInEnabled && <button type="button" className="today-quiet" onClick={() => void onStart(session)}><Play size={13} aria-hidden="true" />提前开始</button>}
+            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+          </div>
+        </div>
+      </div>
+    </li>;
+  };
+
+  /** 现在落在空档里：这一行就是「现在」，交代还要等多久。 */
+  const gapRow = () => <li key="today-gap" className="today-gap-row">
+    <time><strong>{formatLocalClock(now)}</strong><span>现在</span></time>
+    <span className="today-row-rail" aria-hidden="true"><span className="today-row-dot" /></span>
+    <div className="today-row-body">
+      {/* 单行：标题、剩余时间紧挨着，「添加」靠右并随行居中 —— 空档不是任务，撑两行只会显得有事要办。 */}
+      <div className="today-row-line">
+        <strong className="today-gap-title">无任务</strong>
+        <span className="today-gap-note">{next ? <>剩余 <Countdown target={localSessionStart(next)} /></> : "今天剩下的时间都空着"}</span>
+        <Button variant="primary" onClick={() => onGoCalendar()}>添加</Button>
+      </div>
+    </div>
+  </li>;
+  const rows: ReactNode[] = [];
+  let gapPlaced = false;
+  for (const session of sessions) {
+    if (!gapPlaced && !current && localSessionStart(session) > nowMs) { rows.push(gapRow()); gapPlaced = true; }
+    rows.push(session === current ? rowCurrent(session) : localSessionEnd(session) <= nowMs ? rowPast(session) : rowFuture(session));
+  }
+  if (!gapPlaced && !current) rows.push(gapRow());
+
   return <section className="page-stack today-page" aria-labelledby="today-title">
     <header className="page-header today-header">
-      <div className="today-heading">
-        <h1 id="today-title" className="today-date">{formatLongDate(today)}</h1>
-        <p className="today-subtitle">
-          <span>{sessions.length} 个执行时段</span>
-          {missed.length > 0 && <span className="is-review">{missed.length} 个待回顾</span>}
-          {due.length > 0 && <span>{due.length} 项临期</span>}
-          {completedToday.length > 0 && <span>{completedToday.length} 项完成</span>}
-        </p>
-      </div>
+      <h1 id="today-title" className="today-date">{formatLongDate(today)}</h1>
       <div className="header-actions">
         <Button onClick={() => onGoCalendar()}><CalendarDays size={16} aria-hidden="true" />打开日历</Button>
       </div>
     </header>
     {rescue && <section className="rescue-card" aria-labelledby="rescue-title"><div className="rescue-main"><span className="eyebrow">重新安排一下</span><h2 id="rescue-title">{taskTitle(workspace, rescue.taskId)}</h2><p>原定 {rescue.startLocal} 开始。选择一个现在容易做到的下一步。</p></div><div className="rescue-actions"><Button variant="primary" onClick={() => void onStart(rescue)}><Play size={16} aria-hidden="true" />现在开始</Button><Button onClick={() => void onDelay(rescue)}>延后 10 分钟</Button><Button onClick={() => onGoCalendar()}>重新选择时间</Button><Button onClick={() => void onSkip(rescue)}><Ban size={16} aria-hidden="true" />本次跳过</Button></div></section>}
-    <section className={nowState.live ? "now-card is-live" : "now-card"} aria-labelledby="now-title">
-      <div className="now-main">
-        <span className="eyebrow now-eyebrow">{nowState.live && <span className="now-dot" aria-hidden="true" />}{nowState.eyebrow}</span>
-        <h2 id="now-title">{nowState.title}</h2>
-        <p>{nowState.description}</p>
-      </div>
-      <div className="now-actions">
-        {running ? <Button variant="primary" onClick={() => onFinish(running)}><Square size={16} aria-hidden="true" />结束本次</Button>
-          : startable ? (preferences.checkInEnabled
-            ? <Button variant="primary" onClick={() => void onStart(startable)}><Play size={16} aria-hidden="true" />开始本次</Button>
-            : <span className="muted-chip">开始／结束记录未开启</span>)
-          : <Button variant="primary" onClick={() => onGoCalendar()}><CalendarDays size={16} aria-hidden="true" />去安排</Button>}
-        {(running || startable) && <button type="button" className="today-quiet-action" onClick={() => onGoCalendar(runningSession ?? startable ?? undefined)}><CalendarDays size={15} aria-hidden="true" />在日历中查看</button>}
-      </div>
-    </section>
-    {missed.length > 0 && <section className="surface-card today-review" aria-labelledby="today-review-title">
-      <div className="section-heading"><h2 id="today-review-title">待回顾</h2><span>{missed.length} 个时段等待确认</span></div>
-      <div className="today-review-list">{missed.map((session) => <article key={session.id} className="today-review-row">
-        <div className="today-review-main">
-          <strong title={taskTitle(workspace, session.taskId)}>{taskTitle(workspace, session.taskId)}</strong>
-          <span>{session.startLocal}–{session.endLocal} · {session.status === "missed" ? "本次未推进" : "时段已结束，等待确认"}</span>
-        </div>
-        <div className="today-review-actions">
-          <Button onClick={() => onGoCalendar(session)}>更新进度</Button>
-          <Button onClick={() => onGoCalendar(session)}>继续安排</Button>
-          {session.status === "scheduled" && <Button variant="quiet" onClick={() => void onSkipReview(session)}>本次未推进</Button>}
-        </div>
-      </article>)}</div>
-    </section>}
-    <div className={due.length > 0 ? "today-main has-aside" : "today-main"}>
-      <section className="surface-card today-timeline-card" aria-labelledby="today-timeline-title">
-        <div className="section-heading"><h2 id="today-timeline-title">今日时间线</h2><span>{sessions.length} 个执行时段</span></div>
-        {sessions.length ? <ol className="today-timeline">{sessions.map((session) => {
-          const task = index.tasksById.get(session.taskId); if (!task) return null;
-          const isRunning = running?.sessionId === session.id;
-          const isCurrent = isRunning || sessionContains(session, now);
-          const isPast = !isCurrent && localSessionEnd(session) <= now.getTime();
-          const isUpcoming = !isCurrent && localSessionStart(session) > now.getTime();
-          return <li key={session.id} className={["today-session", isCurrent ? "is-current" : isPast ? "is-past" : ""].filter(Boolean).join(" ")}>
-            <time dateTime={`${session.localDate}T${session.startLocal}`}><strong>{session.startLocal}</strong><span>{session.endLocal}</span></time>
-            <span className="today-session-dot" aria-hidden="true" />
-            <div className="today-session-main">
-              <div className="today-session-title">
-                <strong title={task.title}>{task.title}</strong>
-                {isRunning ? <span className="today-status is-now">正在记录</span> : isCurrent ? <span className="today-status is-now">现在</span> : missedIds.has(session.id) ? <span className="today-status is-review">{session.status === "missed" ? "未推进" : "待回顾"}</span> : null}
-              </div>
-              <ProgressControl task={task} onCommit={onProgress} />
-            </div>
-            <div className="today-session-actions">
-              <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
-              {preferences.checkInEnabled && !running && (isCurrent || isUpcoming) && <button type="button" className="icon-action" aria-label={`开始 ${task.title}`} onClick={() => void onStart(session)}><Play size={16} /></button>}
-            </div>
-          </li>;
-        })}</ol> : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
-        {completedToday.length > 0 && <details className="today-completed">
-          <summary><Check size={15} aria-hidden="true" /><span>今日完成 {completedToday.length} 项</span><ChevronDown size={15} aria-hidden="true" /></summary>
-          <div className="today-completed-list">{completedToday.map(({ task, event: completionEvent, record }) => <button type="button" key={task.id} className="today-completed-row" onClick={(click) => onRecordCompletion(task, completionEvent, record, click.currentTarget)}>
-            <Check size={13} aria-hidden="true" />
-            <strong title={task.title}>{task.title}</strong>
-            <span>{completionRowLabel(completionEvent, record)}</span>
-          </button>)}</div>
-        </details>}
+    <div className="today-layout">
+      <section className="surface-card today-axis" aria-label="今天的时间轴">
+        {/* 卡片头不再写「今天」—— 页面标题已经是今天的日期，卡片里再写一遍是重复。只剩计数，靠右当注脚。 */}
+        <div className="today-card-head is-count-only"><span>{sessions.length} 段{passedCount > 0 ? ` · ${passedCount} 段已过` : ""}</span></div>
+        {sessions.length
+          ? <ol className="today-timeline">{rows}</ol>
+          : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
+        {current && <button type="button" className="today-gap-hint" onClick={() => onGoCalendar()}><Plus size={14} aria-hidden="true" />添加任务</button>}
       </section>
-      {due.length > 0 && <aside className="surface-card today-due" aria-labelledby="today-due-title">
-        <div className="section-heading"><h2 id="today-due-title">临期</h2><span>{due.length} 项</span></div>
-        <div className="today-due-list">{due.map((task) => {
-          const urgency = deadlineUrgency(task.deadlineLocal!, today);
-          return <article key={task.id} className="today-due-row">
-            <div className="today-due-head"><strong title={task.title}>{task.title}</strong><span className={`today-due-state is-${urgency}`} title={formatShortDate(task.deadlineLocal!)}><Flag size={12} aria-hidden="true" />{deadlineLabel(today, task.deadlineLocal!)}</span></div>
-            <ProgressControl task={task} onCommit={onProgress} />
-          </article>;
-        })}</div>
-      </aside>}
+      <aside className="today-side" aria-label="今天之外">
+        {due.length > 0 && <section className="surface-card today-due" aria-labelledby="today-due-title">
+          <div className="today-card-head"><h2 id="today-due-title">临期</h2><span>{due.length}</span></div>
+          <div className="today-due-list">{due.map((task) => {
+            const urgency = deadlineUrgency(task.deadlineLocal!, today);
+            return <button type="button" key={task.id} className={`today-due-item is-${urgency}`}
+              aria-label={`${task.title}，${deadlineLabel(today, task.deadlineLocal!)}`}
+              onClick={(click) => { setMoveAnchor(null); setDueAnchor({ taskId: task.id, element: click.currentTarget }); }}>
+              <span className="today-due-name"><Flag size={12} aria-hidden="true" /><span title={task.title}>{task.title}</span>{scheduledTaskIds.has(task.id) && <em>今天</em>}</span>
+              <span className="today-due-when">{deadlineLabel(today, task.deadlineLocal!)}</span>
+            </button>;
+          })}</div>
+        </section>}
+        {completedToday.length > 0 && <section className="surface-card today-done" aria-labelledby="today-done-title">
+          <div className="today-card-head"><h2 id="today-done-title">今天完成</h2><span>{completedToday.length}</span></div>
+          <div className="today-done-list">{completedToday.map(({ task, event: completionEvent, record }) => <button type="button" key={task.id} className="today-done-item" title={completionRowLabel(completionEvent, record)} onClick={(click) => onRecordCompletion(task, completionEvent, record, click.currentTarget)}>
+            <Check size={12} aria-hidden="true" />
+            <span title={task.title}>{task.title}</span>
+          </button>)}</div>
+        </section>}
+      </aside>
     </div>
+    {dueAnchor && dueTask && <FloatingPanel className="today-due-panel" label={`${dueTask.title} 临期操作`} anchorElement={dueAnchor.element} closeOnOutsideClick onClose={() => setDueAnchor(null)}>
+      <div className="today-pop-body">
+        <h2>{dueTask.title}</h2>
+        <p className="today-pop-meta">{deadlineLabel(today, dueTask.deadlineLocal!)} · 手动进度 {dueTask.progress}%{scheduledTaskIds.has(dueTask.id) ? " · 今天已安排" : " · 今天还没排"}</p>
+        <ProgressControl task={dueTask} onCommit={onProgress} />
+        <div className="today-pop-actions">
+          {/* 「在轴上查看」不是跳到日历，而是滚回这条轴上的那一段并亮 4 秒 —— 同一份数据，只是换个地方看。 */}
+          <Button onClick={() => { const target = sessions.find((session) => session.taskId === dueTask.id) ?? null; setDueAnchor(null); if (target) revealSession(target); else onGoCalendar(); }}>{scheduledTaskIds.has(dueTask.id) ? "在轴上查看" : "安排一段"}</Button>
+          <Button className="today-pop-icon" aria-label={`编辑任务 ${dueTask.title}`} title="编辑任务" onClick={() => { const element = dueAnchor.element; setDueAnchor(null); onEditTask(dueTask, element); }}><Pencil size={16} aria-hidden="true" /></Button>
+        </div>
+      </div>
+    </FloatingPanel>}
+    {moveAnchor && <FloatingPanel className="today-move-panel" label="挪到之后" anchorElement={moveAnchor.element} closeOnOutsideClick onClose={() => setMoveAnchor(null)}>
+      {/* 只有标题和两个选择：整段移走不改变任务本身，不需要解释。 */}
+      <div className="today-pop-body">
+        <h2>挪到之后</h2>
+        <div className="today-pop-actions">
+          <Button onClick={() => { const session = moveAnchor.session; setMoveAnchor(null); void onMove(session, addDays(today, 1), session.startLocal); }}>明天同一时间</Button>
+          <Button onClick={() => { const session = moveAnchor.session; setMoveAnchor(null); onGoCalendar(session); }}>在日历里选时间</Button>
+        </div>
+      </div>
+    </FloatingPanel>}
   </section>;
 }
 
@@ -3887,6 +3999,26 @@ function ProgressControl({ task, onCommit, showComplete = false }: { task: Task;
   return <div ref={root} className={showComplete ? "progress-control has-complete" : "progress-control"}><RangeBar compact label={`${task.title} 完成度`} min={0} max={100} step={5} value={value} onChange={setValue} onPointerUp={commit} onKeyUp={commit} />{showComplete ? <div className="progress-side"><button type="button" className="progress-complete" aria-label={`标记 ${task.title} 已完成`} onClick={markComplete} disabled={task.progress === 100}>完成</button><span>{value}%</span></div> : <span>{value}%</span>}</div>;
 }
 
+/**
+ * 轴上的行内进度条 = 控件本身。
+ *
+ * 2026-10-28 起不再开「进度气泡」：同一个数摆两个入口，改一次要先进浮层再拖一次。
+ * 外观沿用设置页那条滑动条（标准 `RangeBar`，不传 compact）：平时把轨道压成 5px 细线，
+ * 悬浮／聚焦才还原成标准滑块。形态切换全在 CSS 里，这里只管值和提交；
+ * 锚点照旧传出去 —— 走到 100% 时「完成记录」气泡要贴在这一行上。
+ */
+function RowProgress({ task, onCommit }: { task: Task; onCommit: (task: Task, value: number, anchor: HTMLElement | null) => Promise<void> }) {
+  const [value, setValue] = useState(task.progress);
+  useEffect(() => setValue(task.progress), [task.progress]);
+  const root = useRef<HTMLSpanElement>(null);
+  const commit = () => { if (value !== task.progress) void onCommit(task, value, root.current); };
+  return <span ref={root} className="today-progress">
+    <RangeBar className="today-progress-bar" label={`${task.title} 完成度`} min={0} max={100} step={5} fillFromZero
+      value={value} onChange={setValue} onPointerUp={commit} onKeyUp={commit} formatValue={(next) => `${next}%`} />
+    <span className="today-progress-value" aria-hidden="true">{value}%</span>
+  </span>;
+}
+
 function useCurrentTime() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer); }, []);
@@ -3978,7 +4110,8 @@ function monthDates(anchor: string) { const first = `${anchor.slice(0, 7)}-01`; 
 function daysBetween(from: string, to: string) { return Math.round((new Date(`${to}T12:00:00`).getTime() - new Date(`${from}T12:00:00`).getTime()) / 86_400_000); }
 function deadlineLabel(today: string, deadline: string) { const days = daysBetween(today, deadline); return days < 0 ? `逾期 ${Math.abs(days)} 天` : days === 0 ? "今天截止" : days === 1 ? "明天截止" : `还有 ${days} 天`; }
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short" }).format(new Date(`${date}T12:00:00`)); }
-function formatLongDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date(`${date}T12:00:00`)); }
+/** 页头与日期详情用的长日期：`8月5日 星期三`（日与星期之间留一个空格，挤在一起读着黏）。 */
+function formatLongDate(date: string) { const value = new Date(`${date}T12:00:00`); return `${new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(value)} ${new Intl.DateTimeFormat("zh-CN", { weekday: "long" }).format(value)}`; }
 function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(new Date(`${date}T12:00:00`)); }
 /** 200% 界面缩放下页头放不下的紧凑日期：`8/5`。 */
 function compactMonthDay(date: string) { const value = new Date(`${date}T12:00:00`); return `${value.getMonth() + 1}/${value.getDate()}`; }
@@ -4015,5 +4148,43 @@ function formatClockMinutes(minutes: number) {
 }
 
 function formatDuration(minutes: number) { const hours = Math.floor(minutes / 60); const rest = minutes % 60; return hours === 0 ? `${rest} 分钟` : rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分钟`; }
+
+/**
+ * 截止标签的兜底短形态：只在容器窄到「还有 6 天」会把任务名挤成一个字时才用（200% 界面缩放）。
+ * 两份文案都渲染、用容器查询切换 —— 拿不到 CSS 之外的真实可用宽度，用 JS 量会抖。
+ */
+function deadlineLabelShort(today: string, deadline: string) {
+  const days = daysBetween(today, deadline);
+  return days < 0 ? `逾期 ${Math.abs(days)} 天` : days === 0 ? "今天" : days === 1 ? "明天" : `${days} 天`;
+}
+
+/**
+ * 倒计时：≥1 小时用 `h:mm:ss`，不足一小时用 `mm:ss`（59 分钟 → `59:00`）。
+ *
+ * 「还剩 30 分钟」是个不动的事实，「30:00」才看得出时间在走 —— 所以精确到秒，
+ * 并且向上取整：刚跳进来那一秒不会先显示 29:59。
+ */
+function formatCountdown(ms: number) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const two = (value: number) => String(value).padStart(2, "0");
+  return hours > 0 ? `${hours}:${two(minutes)}:${two(seconds)}` : `${two(minutes)}:${two(seconds)}`;
+}
+
+/**
+ * 每秒一跳的倒计时节点。
+ *
+ * 只有它自己重渲染 —— 把秒放进页面时钟会让整张今日页每秒重算一遍。
+ */
+function Countdown({ target }: { target: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <>{formatCountdown(target - now)}</>;
+}
 
 function hasFutureSchedule(session: ExecutionSession) { return session.status === "scheduled" && localSessionStart(session) > Date.now(); }

@@ -36,9 +36,16 @@ interface RangeBarProps {
   /** 提交前的可访问值文本，例如 `(v) => `${v}%``。拖动中也要跟着变。 */
   formatValue?: (value: number) => string;
   className?: string;
+  /**
+   * 填充块从 0 开始画，而不是「至少留出把手宽度」。
+   *
+   * 默认对齐把手是为了让 0% 也看得见一小块，可对于「平时就是一条普通进度条」的
+   * 行内控件，0% 时那一小块会读成一根多余的绿点 —— 那种场景传 true。
+   */
+  fillFromZero?: boolean;
 }
 
-export function RangeBar({ id, label, initialFocus, min, max, step, value, onChange, onPointerUp, onKeyUp, compact, dots, ariaValueText, commitOnRelease, formatValue, className }: RangeBarProps) {
+export function RangeBar({ id, label, initialFocus, min, max, step, value, onChange, onPointerUp, onKeyUp, compact, dots, ariaValueText, commitOnRelease, formatValue, className, fillFromZero }: RangeBarProps) {
   const [draft, setDraft] = useState<number | null>(null);
   const shown = draft ?? value;
   const span = max - min;
@@ -70,7 +77,7 @@ export function RangeBar({ id, label, initialFocus, min, max, step, value, onCha
               进度块在 100% 时仍然铺满整条轨道，只是端头被把手盖住。
               ⚠️ 百分比定位要求 `.range-inner` 是块级元素：它原本是 `<span>`（行内），
               绝对定位子元素的包含块宽度为 0，`left: 50%` 会被解析到右端（实测偏 79px）。 */}
-          <span className="range-fill" style={{ width: `max(var(--thumb-half), ${percent}%)` } as CSSProperties} />
+          <span className="range-fill" style={{ width: fillFromZero ? `${percent}%` : `max(var(--thumb-half), ${percent}%)` } as CSSProperties} />
           <span className="range-thumb" style={{ left: `clamp(var(--thumb-half), ${percent}%, calc(100% - var(--thumb-half)))` } as CSSProperties} />
         </span>
       </span>
