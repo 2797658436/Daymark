@@ -60,6 +60,11 @@ export interface AppSettings {
   defaultSessionMinutes: number;
   /** 自动排程的最低有效时长；合法区间见 `MINIMUM_SESSION_MINUTES_RANGE`。 */
   minimumSessionMinutes: number;
+  /**
+   * 「可用时间窗口」之上可选的每日时长上限（分钟）。`null` = 不限（默认，等同旧的默认时段
+   * 行为）；设值时当天累计排入封顶于此。合法区间见 `DAILY_BUDGET_MINUTES_RANGE`。
+   */
+  dailyScheduleBudgetMinutes: number | null;
   autoScheduleAssist: boolean;
   checkInEnabled: boolean;
   /**
@@ -100,6 +105,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   snapMinutes: 15,
   defaultSessionMinutes: 60,
   minimumSessionMinutes: 15,
+  dailyScheduleBudgetMinutes: null,
   autoScheduleAssist: false,
   checkInEnabled: false,
   completionRecordPrompt: true,
@@ -123,6 +129,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
  */
 export const MINIMUM_SESSION_MINUTES_RANGE = [5, 240] as const;
 export const MINIMUM_SESSION_MINUTES_PRESETS = [5, 10, 15, 20, 30] as const;
+/**
+ * 「可用时间窗口」之上的每日时长上限（分钟）的合法区间与常用预设。
+ * `null`（不限）不在区间内，由 `normalizeDailyBudget` 单独放行；启用上限时的默认填充值是预设里的 240。
+ */
+export const DAILY_BUDGET_MINUTES_RANGE = [30, 960] as const;
+export const DAILY_BUDGET_MINUTES_PRESETS = [60, 120, 180, 240, 360] as const;
 export const CHECK_IN_GRACE_MINUTES_RANGE = [1, 60] as const;
 export const CHECK_IN_GRACE_MINUTES_PRESETS = [3, 5, 10, 15] as const;
 
@@ -213,6 +225,7 @@ function normalizeSettings(value: unknown): AppSettings {
     snapMinutes: isOneOf(candidate.snapMinutes, ["off", 15, 30, 60] as const) ? candidate.snapMinutes : DEFAULT_SETTINGS.snapMinutes,
     defaultSessionMinutes: typeof candidate.defaultSessionMinutes === "number" && Number.isInteger(candidate.defaultSessionMinutes) && candidate.defaultSessionMinutes >= 5 && candidate.defaultSessionMinutes <= 240 ? candidate.defaultSessionMinutes : DEFAULT_SETTINGS.defaultSessionMinutes,
     minimumSessionMinutes: normalizeIntegerInRange(candidate.minimumSessionMinutes, MINIMUM_SESSION_MINUTES_RANGE, DEFAULT_SETTINGS.minimumSessionMinutes),
+    dailyScheduleBudgetMinutes: normalizeDailyBudget(candidate.dailyScheduleBudgetMinutes),
     autoScheduleAssist: typeof candidate.autoScheduleAssist === "boolean" ? candidate.autoScheduleAssist : DEFAULT_SETTINGS.autoScheduleAssist,
     checkInEnabled: typeof candidate.checkInEnabled === "boolean" ? candidate.checkInEnabled : DEFAULT_SETTINGS.checkInEnabled,
     completionRecordPrompt: typeof candidate.completionRecordPrompt === "boolean" ? candidate.completionRecordPrompt : DEFAULT_SETTINGS.completionRecordPrompt,
@@ -340,4 +353,12 @@ function isOneOf<T>(value: unknown, options: readonly T[]): value is T {
 /** 只接受区间内的整数分钟；小数、字符串、越界值一律回退默认值。 */
 function normalizeIntegerInRange(value: unknown, [minimum, maximum]: readonly [number, number], fallback: number) {
   return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
+/**
+ * 每日时长上限：只有区间内的整数分钟才启用上限；`null`、缺失、越界、小数、字符串一律视为
+ * 「不限」。回退目标是 `null`（不是 240）——否则老设置升级后会被静默加上限。
+ */
+function normalizeDailyBudget(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= DAILY_BUDGET_MINUTES_RANGE[0] && value <= DAILY_BUDGET_MINUTES_RANGE[1] ? value : null;
 }

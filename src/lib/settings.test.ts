@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CALENDAR_SCALE_RANGE, CHECK_IN_GRACE_MINUTES_PRESETS, CHECK_IN_GRACE_MINUTES_RANGE, MINIMUM_SESSION_MINUTES_PRESETS,
-  MINIMUM_SESSION_MINUTES_RANGE, PAGE_IDS, calendarScaleForZoom, DEFAULT_SETTINGS, SettingsRepository, type SettingsBackend,
+  CALENDAR_SCALE_RANGE, CHECK_IN_GRACE_MINUTES_PRESETS, CHECK_IN_GRACE_MINUTES_RANGE, DAILY_BUDGET_MINUTES_RANGE,
+  MINIMUM_SESSION_MINUTES_PRESETS, MINIMUM_SESSION_MINUTES_RANGE, PAGE_IDS, calendarScaleForZoom, DEFAULT_SETTINGS,
+  SettingsRepository, type SettingsBackend,
 } from "./settings";
 
 class MemoryBackend implements SettingsBackend {
@@ -161,6 +162,23 @@ describe("settings persistence", () => {
     };
     check(MINIMUM_SESSION_MINUTES_RANGE, MINIMUM_SESSION_MINUTES_PRESETS, DEFAULT_SETTINGS.minimumSessionMinutes);
     check(CHECK_IN_GRACE_MINUTES_RANGE, CHECK_IN_GRACE_MINUTES_PRESETS, DEFAULT_SETTINGS.checkInGraceMinutes);
+  });
+
+  it("keeps the daily schedule budget optional and never silently adds one", async () => {
+    const repository = new SettingsRepository(new MemoryBackend());
+    expect(repository.normalize(undefined).dailyScheduleBudgetMinutes).toBeNull();
+    expect(repository.normalize({ dailyScheduleBudgetMinutes: 240 }).dailyScheduleBudgetMinutes).toBe(240);
+    expect(repository.normalize({ dailyScheduleBudgetMinutes: 30 }).dailyScheduleBudgetMinutes).toBe(30);
+    expect(repository.normalize({ dailyScheduleBudgetMinutes: 960 }).dailyScheduleBudgetMinutes).toBe(960);
+    // 越界、小数、字符串、null 一律回退「不限」，绝不回退 240（否则老设置升级会被静默加上限）。
+    for (const value of [0, 29, 961, 12.5, "240", null] as const) {
+      expect(repository.normalize({ dailyScheduleBudgetMinutes: value }).dailyScheduleBudgetMinutes, `${String(value)} 应回退为不限`).toBeNull();
+    }
+    expect(DAILY_BUDGET_MINUTES_RANGE).toEqual([30, 960]);
+
+    const backend = new MemoryBackend();
+    await new SettingsRepository(backend).save({ ...DEFAULT_SETTINGS, dailyScheduleBudgetMinutes: 180 });
+    await expect(new SettingsRepository(backend).load()).resolves.toMatchObject({ dailyScheduleBudgetMinutes: 180 });
   });
 
   it("accepts turning calendar snapping off and rejects unknown snap values", () => {

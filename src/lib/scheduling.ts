@@ -45,6 +45,7 @@ export type ScheduleUnscheduledReason =
   | "fixed-start-busy"
   | "deadline-no-gap"
   | "gaps-too-short"
+  | "daily-budget-full"
   | "continuous-unavailable";
 
 export interface ScheduleUnscheduledItem {
@@ -72,12 +73,23 @@ export function buildSchedulePlan(input: {
   defaultTimeSlots: DefaultTimeSlot[];
   busy: BusyInterval[];
   minimumMinutes: number;
+  /** 可选的每日时长上限（分钟）；`null`／省略 = 不限，行为与旧版完全一致。 */
+  dailyBudgetMinutes?: number | null;
 }): SchedulePlan {
+  const budget = input.dailyBudgetMinutes ?? null;
   const gaps = buildGaps(input.startDate, input.days, input.defaultTimeSlots, input.busy);
-  const availableMinutes = gaps.reduce((sum, gap) => sum + (gap.end - gap.start >= input.minimumMinutes ? gap.end - gap.start : 0), 0);
+  // 不限上限：逐段累加（现状）。设上限：按天汇总合格空闲后封顶到预算，容量条才诚实反映「这次能排多少」。
+  const availableMinutes = budget == null
+    ? gaps.reduce((sum, gap) => sum + (gap.end - gap.start >= input.minimumMinutes ? gap.end - gap.start : 0), 0)
+    : [...gaps.reduce((byDate, gap) => {
+        if (gap.end - gap.start >= input.minimumMinutes) byDate.set(gap.date, (byDate.get(gap.date) ?? 0) + (gap.end - gap.start));
+        return byDate;
+      }, new Map<string, number>()).values()].reduce((sum, minutes) => sum + Math.min(minutes, budget), 0);
   const allocations: ScheduleAllocation[] = [];
   const unscheduledKeys: string[] = [];
   const unscheduled: ScheduleUnscheduledItem[] = [];
+  const usedByDate = new Map<string, number>();
+  const remainingFor = (date: string) => budget == null ? Number.POSITIVE_INFINITY : budget - (usedByDate.get(date) ?? 0);
   const ordered = [...input.items].sort((left, right) =>
     (left.deadlineLocal ?? "9999-12-31").localeCompare(right.deadlineLocal ?? "9999-12-31")
       || priorityRank(right.priority) - priorityRank(left.priority)
@@ -96,30 +108,35 @@ export function buildSchedulePlan(input: {
     }
     const fixedStart = item.fixedStartLocal ? timeToMinutes(item.fixedStartLocal) : null;
     const eligible = gaps
-      .map((gap, index) => ({ gap, index, start: fixedStart === null ? gap.start : Math.max(gap.start, fixedStart) }))
-      .filter(({ gap, start }) => (!item.fixedDate || gap.date === item.fixedDate)
+      .map((gap, index) => {
+        const start = fixedStart === null ? gap.start : Math.max(gap.start, fixedStart);
+        // 扣除当天已排入后剩余的可放分钟；不限上限时 remainingFor 为 Infinity，usableEnd 恒等于 gap.end。
+        const usableEnd = Math.min(gap.end, start + remainingFor(gap.date));
+        return { gap, index, start, usableEnd };
+      })
+      .filter(({ gap, start, usableEnd }) => (!item.fixedDate || gap.date === item.fixedDate)
         && (!deadline || gap.date <= deadline)
         && (fixedStart === null || (gap.start <= fixedStart && gap.end > fixedStart))
-        && gap.end - start >= input.minimumMinutes);
+        && usableEnd - start >= input.minimumMinutes);
     const full = item.targetMinutes >= input.minimumMinutes
-      ? eligible.find(({ gap, start }) => gap.end - start >= item.targetMinutes)
+      ? eligible.find(({ start, usableEnd }) => usableEnd - start >= item.targetMinutes)
       : undefined;
     const partial = [...eligible]
-      .filter(({ gap, start }) => gap.end - start >= input.minimumMinutes)
-      .sort((left, right) => (right.gap.end - right.start) - (left.gap.end - left.start) || left.gap.date.localeCompare(right.gap.date) || left.start - right.start)[0];
+      .sort((left, right) => (right.usableEnd - right.start) - (left.usableEnd - left.start) || left.gap.date.localeCompare(right.gap.date) || left.start - right.start)[0];
     const selected = full ?? partial;
     if (!selected) {
       unscheduledKeys.push(item.key);
-      unscheduled.push(explainUnscheduled(item, { deadline, fixedStart, gaps }));
+      unscheduled.push(explainUnscheduled(item, { deadline, fixedStart, gaps, minimumMinutes: input.minimumMinutes, budget, remainingFor }));
       continue;
     }
-    const minutes = Math.min(item.targetMinutes, selected.gap.end - selected.start);
+    const minutes = Math.min(item.targetMinutes, selected.usableEnd - selected.start);
     const start = selected.start;
     const end = start + minutes;
     const remaining: Gap[] = [];
     if (selected.gap.start < start) remaining.push({ ...selected.gap, end: start });
     if (end < selected.gap.end) remaining.push({ ...selected.gap, start: end });
     gaps.splice(selected.index, 1, ...remaining);
+    usedByDate.set(selected.gap.date, (usedByDate.get(selected.gap.date) ?? 0) + minutes);
     allocations.push({
       key: item.key,
       taskId: item.taskId,
@@ -147,18 +164,35 @@ function explainUnscheduled(item: ScheduleItem, context: {
   deadline: string | null;
   fixedStart: number | null;
   gaps: Gap[];
+  minimumMinutes: number;
+  budget: number | null;
+  remainingFor: (date: string) => number;
 }): ScheduleUnscheduledItem {
-  const { deadline, fixedStart, gaps } = context;
+  const { deadline, fixedStart, gaps, minimumMinutes, budget, remainingFor } = context;
   if (!gaps.length) return { key: item.key, reason: "no-slots", longestGapMinutes: 0 };
   const dayGaps = item.fixedDate ? gaps.filter((gap) => gap.date === item.fixedDate) : gaps;
   if (!dayGaps.length) return { key: item.key, reason: "no-gap-that-day", longestGapMinutes: 0 };
   const deadlineGaps = deadline ? dayGaps.filter((gap) => gap.date <= deadline) : dayGaps;
   if (!deadlineGaps.length) return { key: item.key, reason: "deadline-no-gap", longestGapMinutes: 0 };
+  // 每日上限模式：物理空档够长、但每个合格日的剩余预算都够不着最低有效时长时，原因不是
+  // 「空档太短」，而是「额度用完了」。不限上限（budget === null）时本函数恒返回 null，
+  // 判定顺序与旧版逐字一致。
+  const budgetBlocked = (candidates: Gap[], usable: (gap: Gap) => number): ScheduleUnscheduledItem | null => {
+    if (budget === null) return null;
+    const physical = candidates.filter((gap) => usable(gap) >= minimumMinutes);
+    if (!physical.length) return null;
+    const maxRemaining = Math.max(...physical.map((gap) => remainingFor(gap.date)));
+    return maxRemaining < minimumMinutes ? { key: item.key, reason: "daily-budget-full", longestGapMinutes: Math.max(0, maxRemaining) } : null;
+  };
   if (fixedStart === null) {
+    const blocked = budgetBlocked(deadlineGaps, (gap) => gap.end - gap.start);
+    if (blocked) return blocked;
     return { key: item.key, reason: "gaps-too-short", longestGapMinutes: Math.max(...deadlineGaps.map((gap) => gap.end - gap.start)) };
   }
   const around = deadlineGaps.filter((gap) => gap.start <= fixedStart && gap.end > fixedStart);
   if (!around.length) return { key: item.key, reason: "fixed-start-busy", longestGapMinutes: 0 };
+  const blocked = budgetBlocked(around, (gap) => gap.end - Math.max(gap.start, fixedStart));
+  if (blocked) return blocked;
   // 走到这里说明上面那段过滤同样没选中任何空档，而固定开始时间确实落在一段空档里 ——
   // 唯一还成立的原因就是这段空档短于最低有效时长。
   return { key: item.key, reason: "gaps-too-short", longestGapMinutes: Math.max(...around.map((gap) => gap.end - Math.max(gap.start, fixedStart))) };

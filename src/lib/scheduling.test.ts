@@ -208,3 +208,49 @@ describe("automatic scheduling unscheduled reasons", () => {
     expect(only(plan)).toEqual(["long:gaps-too-short:10"]);
   });
 });
+
+describe("automatic scheduling daily budget", () => {
+  it("leaves allocation unchanged when no budget is set", () => {
+    const base = { startDate: "2026-08-03", days: 1, items: [task("a", 60)], defaultTimeSlots: slots, busy: [], minimumMinutes: 15 };
+    expect(buildSchedulePlan(base).allocations).toEqual(buildSchedulePlan({ ...base, dailyBudgetMinutes: null }).allocations);
+  });
+
+  it("caps a day at the budget and reports daily-budget-full for the overflow", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 1,
+      items: [task("first", 60, { sortOrder: 0 }), task("second", 60, { sortOrder: 1 })],
+      defaultTimeSlots: slots, busy: [], minimumMinutes: 15, dailyBudgetMinutes: 60,
+    });
+    expect(plan.allocations).toEqual([expect.objectContaining({ key: "first", startLocal: "19:00", endLocal: "20:00", minutes: 60 })]);
+    expect(plan.unscheduled).toEqual([{ key: "second", reason: "daily-budget-full", longestGapMinutes: 0 }]);
+  });
+
+  it("spills overflow to the next day within the window", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2,
+      items: [task("first", 60, { sortOrder: 0 }), task("second", 60, { sortOrder: 1 })],
+      defaultTimeSlots: slots, busy: [], minimumMinutes: 15, dailyBudgetMinutes: 60,
+    });
+    expect(plan.allocations).toEqual([
+      expect.objectContaining({ key: "first", localDate: "2026-08-03", startLocal: "19:00", endLocal: "20:00" }),
+      expect.objectContaining({ key: "second", localDate: "2026-08-04", startLocal: "19:00", endLocal: "20:00" }),
+    ]);
+  });
+
+  it("reports capacity as the budget-capped sum per day", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 2, items: [],
+      defaultTimeSlots: slots, busy: [], minimumMinutes: 15, dailyBudgetMinutes: 60,
+    });
+    expect(plan.availableMinutes).toBe(120);
+  });
+
+  it("partially fills the remaining budget before closing the day", () => {
+    const plan = buildSchedulePlan({
+      startDate: "2026-08-03", days: 1, items: [task("big", 90)],
+      defaultTimeSlots: slots, busy: [], minimumMinutes: 15, dailyBudgetMinutes: 60,
+    });
+    expect(plan.allocations).toEqual([expect.objectContaining({ key: "big", minutes: 60, startLocal: "19:00", endLocal: "20:00" })]);
+    expect(plan.unscheduled).toEqual([]);
+  });
+});
