@@ -2,6 +2,7 @@ node_modules/
 _quarantine/
 .tmp/
 .workbuddy/
+.workbuddy-ai/
 dist/
 coverage/
 playwright-report/
