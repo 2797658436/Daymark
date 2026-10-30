@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { addAvailability, availabilityBlocks, moveAvailability, presetAvailability, removeAvailability, snapMinute, type AvailabilitySnap } from "./availability";
+import {
+  addAvailability, availabilityBlocks, availabilityFoldBands, availabilityMinuteAt, availabilityOffset, availabilitySpan,
+  availabilityVisibleHours, moveAvailability, presetAvailability, removeAvailability, snapMinute, type AvailabilitySnap,
+} from "./availability";
 import type { DefaultTimeSlot } from "./settings";
 
 const slot = (over: Partial<DefaultTimeSlot> & { id: string }): DefaultTimeSlot => ({ label: "可用时间", start: "19:00", end: "22:00", weekdays: [1], ...over });
@@ -81,5 +84,51 @@ describe("availability windows", () => {
     expect(snap(37, 0)).toBe(37);
     expect(snap(-10, 30)).toBe(0);
     expect(snap(1500, 30)).toBe(1440);
+  });
+});
+
+describe("availability grid layout", () => {
+  it("walks the day in hours when nothing is folded", () => {
+    expect(availabilityOffset(0)).toEqual({ hours: 0, strips: 0 });
+    expect(availabilityOffset(90)).toEqual({ hours: 1.5, strips: 0 });
+    expect(availabilityOffset(1440)).toEqual({ hours: 24, strips: 0 });
+  });
+
+  it("counts a folded band as one strip instead of its hours", () => {
+    // 折起「中午 12–14」：12:00 之后只多了一条折带，14:00 之后再回到按小时铺开。
+    expect(availabilityOffset(12 * 60, ["noon"])).toEqual({ hours: 12, strips: 0 });
+    expect(availabilityOffset(13 * 60, ["noon"])).toEqual({ hours: 12, strips: 0.5 });
+    expect(availabilityOffset(14 * 60, ["noon"])).toEqual({ hours: 12, strips: 1 });
+    expect(availabilityOffset(15 * 60, ["noon"])).toEqual({ hours: 13, strips: 1 });
+    expect(availabilityOffset(1440, ["noon"])).toEqual({ hours: 22, strips: 1 });
+  });
+
+  it("keeps a block continuous across a folded band", () => {
+    // 11:00–13:00 跨过被折起的 12:00：整块吃到折带的**上半截**（中午是 12–14 两小时），
+    // 没有断口、也不多出小时；13:00–15:00 再接上，两块在折带里紧挨着，读起来仍是连续的。
+    expect(availabilitySpan(11 * 60, 13 * 60, ["noon"])).toEqual({ hours: 1, strips: 0.5 });
+    expect(availabilitySpan(13 * 60, 15 * 60, ["noon"])).toEqual({ hours: 1, strips: 0.5 });
+    expect(availabilitySpan(9 * 60, 11 * 60 + 30)).toEqual({ hours: 2.5, strips: 0 });
+  });
+
+  it("lists visible hours and folded bands without overlap", () => {
+    expect(availabilityVisibleHours()).toHaveLength(24);
+    const visible = availabilityVisibleHours(["dawn", "noon"]);
+    expect(visible).toEqual([6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+    expect(availabilityFoldBands(["noon", "dawn"]).map((band) => band.id)).toEqual(["dawn", "noon"]);
+  });
+
+  it("maps a pointer ratio back to the minute it points at", () => {
+    // 没有任何折叠时就是一条直线：0.5 → 12:00。
+    expect(availabilityMinuteAt(0.5)).toBe(12 * 60);
+    expect(availabilityMinuteAt(0)).toBe(0);
+    expect(availabilityMinuteAt(1)).toBe(1440);
+    // 折起「中午」后，折带占 0.25 小时的重量：14:00 处不再是 0.5。
+    const total = 22 + 0.25;
+    expect(availabilityMinuteAt(12 / total, ["noon"])).toBeCloseTo(12 * 60, 6);
+    expect(availabilityMinuteAt((12 + 0.25) / total, ["noon"])).toBeCloseTo(14 * 60, 6);
+    // 与 availabilityOffset 互逆：走到 15:00 的比例再换算回来仍是 15:00。
+    const offset = availabilityOffset(15 * 60, ["noon"]);
+    expect(availabilityMinuteAt((offset.hours + offset.strips * 0.25) / total, ["noon"])).toBeCloseTo(15 * 60, 6);
   });
 });

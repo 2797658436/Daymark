@@ -1884,9 +1884,9 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
     await user.click(screen.getByRole("radio", { name: "减少" }));
-    await user.click(screen.getByRole("button", { name: "编辑可用时间" }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
     await user.click(screen.getByRole("button", { name: /添加时段/ }));
-    expect(screen.getByRole("dialog", { name: "编辑可用时间" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "添加时段" })).toBeVisible();
     // 星期改成「一个字就是整格」的按钮（aria-pressed），不再是勾选框。
     await user.click(screen.getByRole("button", { name: "周一" }));
     await user.click(screen.getByRole("button", { name: "保存时段" }));
@@ -1899,7 +1899,7 @@ describe("phase 1 manual alpha", () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
-    await user.click(screen.getByRole("button", { name: "编辑可用时间" }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
     // jsdom 没有真实高度，点击落在 00:00 那一格：加出来的就是 00:00–01:00。
     await user.click(screen.getByRole("group", { name: "周一可用时间" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(2));
@@ -1909,14 +1909,17 @@ describe("phase 1 manual alpha", () => {
     const block = screen.getByRole("group", { name: "周一 00:00–01:00" });
     expect(within(block).getByText("可用时间", { selector: ".availability-block-name" })).toBeVisible();
     expect(within(block).getByText("0–1", { selector: ".availability-block-time" })).toBeVisible();
-    // 块上铅笔的气泡只改时间：没有名称、时长档和星期。
+    // 块上铅笔的气泡是这条窗口的完整编辑：名称、起止、星期都在这里改（下方列表已撤掉）。
     await user.click(screen.getByRole("button", { name: "编辑 周一 00:00–01:00" }));
-    const edit = screen.getByRole("dialog", { name: "编辑时间" });
+    const edit = screen.getByRole("dialog", { name: "编辑可用时间" });
     expect(within(edit).getByRole("button", { name: /开始时间/ })).toBeVisible();
     expect(within(edit).getByRole("button", { name: /结束时间/ })).toBeVisible();
-    expect(within(edit).queryByLabelText("名称")).toBeNull();
-    expect(within(edit).queryByRole("button", { name: "保存时段" })).toBeNull();
-    await user.click(within(edit).getByRole("button", { name: "取消" }));
+    const name = within(edit).getByLabelText("名称");
+    await user.clear(name);
+    await user.type(name, "清晨阅读");
+    await user.click(within(edit).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ label: string; start: string }> }).defaultTimeSlots)
+      .toContainEqual(expect.objectContaining({ label: "清晨阅读", start: "00:00", end: "01:00" })));
     // 网格块上只留「×」：删除只撤掉这一天这一段，默认窗口原样保留。
     await user.click(screen.getByRole("button", { name: "删除 周一 00:00–01:00" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(1));

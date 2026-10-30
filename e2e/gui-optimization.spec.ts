@@ -8,9 +8,9 @@ for (const width of [960, 1200]) for (const scale of [100, 150, 200]) {
     await page.reload();
     await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
     expect(await page.locator("#main-content").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
-    await page.getByRole("button", { name: "编辑可用时间" }).click();
+    await page.getByRole("button", { name: "编辑", exact: true }).click();
     await page.getByRole("button", { name: "添加时段" }).click();
-    const slot = page.getByRole("dialog", { name: "编辑可用时间" });
+    const slot = page.getByRole("dialog", { name: "添加时段" });
     await expect(slot).toBeVisible();
     await slot.getByRole("button", { name: "保存时段" }).scrollIntoViewIfNeeded();
     const rect = await slot.boundingBox();

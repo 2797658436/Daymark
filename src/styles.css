@@ -1251,51 +1251,49 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .switch:disabled::after { background: var(--line-strong); }
 
 /* 默认时段：行内编辑／删除，删除不再是只有一个 24px 的 ×。 */
-.settings-slot-list { display: grid; gap: .375rem; padding: .25rem 0 .5rem; }
-.settings-slot { display: flex; align-items: center; gap: 14px; padding: .5rem .625rem; border: 1px solid var(--line-soft); border-radius: .625rem; background: var(--panel-strong); }
-.settings-slot > div:first-child { flex: 1; display: grid; gap: 2px; min-width: 0; }
-.settings-slot strong { font-size: .84rem; }
-.settings-slot span { color: var(--muted); font-size: .78rem; }
-.settings-slot-actions { display: flex; gap: 6px; }
-.settings-slot-actions button { display: inline-grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel); color: var(--muted-strong); }
-.settings-slot-actions button:hover { border-color: var(--line-strong); color: var(--text); }
-.settings-slot-actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
 .settings-empty { margin: 0; padding: 12px 0; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: .8rem; }
 
-/* 可用时间周网格：7 天 × 24 小时，指针停在格子上出「＋」，点一下给那天加一段窗口。
-   每小时 2.75rem（44px）—— 正好是命中区下限，所以 1 小时的窗口块本身就是 44px 高的拖动面；
-   短于 1 小时的块仍按真实时长渲染（`.is-compact`），别为了凑 44px 谎报时间跨度。 */
+/* 可用时间周网格：7 天 × 24 小时。每小时高度由顶栏滑块给的 `--ah` 决定，折起的时段压成 `--band`。
+   指针停在格子上出一枚「＋ 09:00」和一条横向虚线，标出加出来的一段落在哪。 */
 .availability-grid { display: grid; gap: .5rem; padding: .25rem 0 .75rem; }
 .availability-presets { display: flex; flex-wrap: wrap; gap: 8px; }
 .availability-preset { min-height: 2.75rem; padding: 0 .9rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--panel-strong); color: var(--text); font-size: .8125rem; }
 .availability-preset:hover { border-color: var(--line-strong); }
 .availability-preset.is-danger { color: var(--danger); }
-.availability-head { display: grid; grid-template-columns: 2.75rem repeat(7, minmax(0, 1fr)); color: var(--muted); font-size: .75rem; text-align: center; }
-.availability-gutter { display: block; }
-/* 1200×900 下 32rem 约一屏 11 小时；矮窗口（960×640）与 200% 缩放按视口收，别把弹窗撑出滚动。 */
-.availability-scroll { max-height: min(32rem, 56vh); overflow: auto; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel-strong); }
+/* 表头第一格是「显示时段」下拉：它坐在时间栏里、周一的最左侧。 */
+.availability-head { display: grid; grid-template-columns: 2.75rem repeat(7, minmax(0, 1fr)); align-items: center; color: var(--muted); font-size: .75rem; text-align: center; }
+.availability-bands { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 1px; width: 2.5rem; height: 1.75rem; margin: 0 auto; padding: 0; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel-strong); color: var(--muted-strong); }
+/* 视觉 40×28、透明命中 44×44：它挨着「周日」这个不可点的列头，多出来的 8px 不会抢走别的操作。 */
+.availability-bands::before { content: ""; position: absolute; inset: -8px -2px; }
+.availability-bands:hover, .availability-bands[aria-expanded="true"] { border-color: var(--line-strong); color: var(--text); }
+.availability-bands-panel { display: grid; gap: 2px; min-width: 13rem; }
+.availability-bands-panel h2 { margin: 0 0 4px; font-size: .875rem; }
+.availability-band-row { display: grid; grid-template-columns: auto 4.75rem 1fr; align-items: center; gap: 8px; min-height: 2rem; padding: 0 .375rem; border-radius: .375rem; color: var(--text); font-size: .8125rem; }
+.availability-band-row:hover { background: var(--panel-strong); }
+.availability-band-row input { width: 1rem; height: 1rem; accent-color: var(--accent-strong); }
+.availability-band-time { color: var(--muted-strong); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.availability-band-row.is-off .availability-band-name, .availability-band-row.is-off .availability-band-time { color: var(--muted); }
+/* 上下留 8px：滚到最顶上时 00:00 的刻度不会被卷边走掉一半。 */
+.availability-scroll { max-height: min(32rem, 56vh); overflow: auto; padding-block: .5rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel-strong); }
 .availability-track { display: flex; position: relative; }
 .availability-hours { position: relative; flex: none; width: 2.75rem; }
 .availability-hours span { position: absolute; left: .35rem; transform: translateY(-50%); color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
-/* 每个日列自己画横向小时线：整点一条 `--line-soft`，每 6 小时一条 `--line`。
-   一层 `background-size` 就够，不用往 24 行里塞 DOM；线在列底色上，块浮在它上面。 */
-.availability-day { position: relative; flex: 1 1 0; min-width: 0; border-left: 1px solid var(--line-soft);
-  background-image: linear-gradient(to bottom, var(--line) 0 1px, transparent 1px), linear-gradient(to bottom, var(--line-soft) 0 1px, transparent 1px);
-  background-size: 100% calc(2.75rem * 6), 100% 2.75rem; }
-/* 块的做法与日历页时间块一致：整块拖动，上下各一条拖手改起止。底色取 accent-soft 的实色
-   （深色主题下 #493126 对列底 #2d2c29 才分得开，原来的 70% 透明混出来是糊的）。 */
-.availability-block { container-type: inline-size; position: absolute; left: 2px; right: 2px; display: grid; align-content: center; padding: 2px 5px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: .375rem; background: color-mix(in srgb, var(--accent-soft) 88%, var(--panel)); color: var(--text); box-shadow: var(--shadow-low); cursor: grab; }
+.availability-day { position: relative; flex: 1 1 0; min-width: 0; border-left: 1px solid var(--line-soft); }
+/* 小时线逐个定位（不再用列上的 background 渐变）：折起某一段后线要跟着一起压，
+   而渐变只能按固定步长铺。整点 `--line-soft`、每 6 小时 `--line`。 */
+.availability-line { position: absolute; inset-inline: 0; height: 1px; background: var(--line-soft); }
+.availability-line.is-major { background: var(--line); }
+/* 块的做法与日历页时间块一致：整块拖动、上下各一条拖手改起止。z-index 压在折带上，
+   所以跨过被折起时段的块是一整块，不会被带子切断。 */
+.availability-block { container-type: inline-size; position: absolute; left: 2px; right: 2px; z-index: 1; display: grid; align-content: center; padding: 2px 5px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: .375rem; background: color-mix(in srgb, var(--accent-soft) 88%, var(--panel)); color: var(--text); box-shadow: var(--shadow-low); cursor: grab; }
 .availability-block:active { cursor: grabbing; }
 .availability-block.is-moving { z-index: 2; box-shadow: var(--shadow-float); }
 .availability-block-body { display: grid; min-width: 0; }
-/* 名字一行、省略号：字号固定 .75rem。原来按块宽反算字号（`(100cqw - 26px) / 5.5`），
-   200% 缩放下会算到 11px，踩穿 12px 下限 —— 改用压缩的时间写法（`9–11:30`）腾出宽度。 */
+/* 名字一行、省略号：字号固定 .75rem，不按块宽反算（200% 缩放下会算到 11px，踩穿 12px 下限）。 */
 .availability-block-name { min-width: 0; color: var(--text); font-size: .75rem; line-height: 1rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .availability-block-time { min-width: 0; color: var(--muted-strong); font-size: .75rem; line-height: 1rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 块内次级动作**绝对定位**在块的右下角：它们只在 hover／focus 时出现，不该占常驻宽度
-   —— 200% 缩放下块只有约 105px，两个 20px 按钮一挤，时间就被压成「9…」。
-   视觉 20×16，透明命中 28×44（纵向铺满整块）。44px 的方块在这条 44px 高的块里放不下两个，
-   而块本身已经是 44 高的拖动面，所以次级动作取 28×44。 */
+/* 块内次级动作绝对定位在右下角：只在 hover／focus 出现，不占常驻宽度。视觉 20×16，
+   透明命中 28×44（纵向铺满整块）—— 44px 的方块塞不进这条 44px 高的块，块本身已是拖动面。 */
 .availability-block-actions { position: absolute; right: 4px; bottom: 2px; display: flex; gap: 4px; }
 .availability-block-btn { position: relative; flex: none; display: inline-grid; place-items: center; width: 1.25rem; height: 1rem; padding: 0; border: 0; border-radius: .25rem; background: transparent; color: var(--muted-strong); opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }
 .availability-block:hover .availability-block-btn, .availability-block:focus-within .availability-block-btn { opacity: 1; }
@@ -1309,20 +1307,23 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .availability-block .availability-handle.is-top::after { top: 3px; }
 .availability-block .availability-handle.is-bottom::after { bottom: 3px; }
 .availability-block:hover .availability-handle::after, .availability-block:focus-within .availability-handle::after { background: var(--accent-strong); width: 28px; }
-/* 短于 1 小时的块只有 22px 高：上下两条拖手的横条会压在时间字上，索性不画条
-   （拖手本身仍是块上下缘的 9px 透明条，鼠标移到边缘就变 ns-resize）。 */
+/* 短于 1 小时的块只有 22px 高：上下两条拖手的横条会压在时间字上，索性不画条。 */
 .availability-block.is-compact .availability-handle::after { display: none; }
-.availability-hint { margin: 0; color: var(--muted); font-size: .75rem; }
-.availability-time-hint { margin: 0; color: var(--muted); font-size: .75rem; }
-/* 只改时间的气泡比整条窗口编辑器窄一档。 */
-.floating-panel.availability-time-panel { width: min(20rem, calc(100vw - 24px)); }
-/* 悬停格子的「+」：整格铺满、内容居中，点和加号落在同一小时格里。 */
-.availability-add { position: absolute; inset-inline: 0; display: grid; place-items: center; z-index: 1; pointer-events: none; }
-.availability-add-dot { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 999px; background: var(--accent-strong); color: var(--panel); box-shadow: var(--shadow-low); }
+/* 悬停的一小时：虚线标出位置，「＋ 09:00」落在线的起点（时间开头），不是格子中间。 */
+.availability-hover { position: absolute; inset-inline: 0; display: flex; align-items: center; height: 0; z-index: 3; pointer-events: none; }
+.availability-hover-chip { display: inline-flex; align-items: center; gap: 3px; height: 1.25rem; padding: 0 .375rem; border-radius: .375rem; background: var(--accent-strong); color: var(--panel); font-size: .75rem; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.availability-hover-line { flex: 1; height: 0; margin-left: .25rem; border-top: 1px dashed var(--accent-strong); }
+/* 折起的时段：一条横跨整行的斜纹带子，左端一个展开把子（块在带子之上）。 */
+.availability-fold { position: absolute; inset-inline: 0; z-index: 0; border-block: 1px dashed var(--line-strong); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--line-soft) 70%, transparent) 0 4px, transparent 4px 8px); pointer-events: none; }
+.availability-fold-btn { position: absolute; left: .35rem; top: 50%; display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; padding: 0; border: 1px solid var(--line); border-radius: .375rem; background: var(--panel); color: var(--muted-strong); transform: translateY(-50%); pointer-events: auto; }
+.availability-fold-btn:hover { border-color: var(--line-strong); color: var(--text); }
+/* 顶栏的纵向缩放：只改每小时高度，不写设置。横条本身给足 44px 的抓取高度。 */
+.availability-zoom { width: 7rem; height: 2.75rem; margin-right: 4px; accent-color: var(--accent-strong); cursor: pointer; }
+/* 周网格比别的弹窗宽得多（7 列 + 时间栏），但不超过视口；内部自己滚，标题与「完成」留在页面上。 */
 .modal.availability-modal { width: min(58rem, 100%); max-height: calc(100dvh - 40px); overflow: auto; }
 .availability-modal-head { display: flex; align-items: center; gap: 12px; }
 .availability-modal-head h2 { margin: 0; flex: 1; }
-.availability-modal-actions { display: flex; gap: 8px; }
+.availability-modal-actions { display: flex; align-items: center; gap: 8px; }
 
 /* 高缩放／窄容器：行内改为上下堆叠。阈值用 rem，随界面缩放一起走。 */
 @container (max-width: 34rem) {

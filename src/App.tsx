@@ -1,7 +1,7 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
   Clock3, Copy, Database, Diamond, Ellipsis, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw, Rows2, Rows3, Rows4,
-  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2, ArrowRightToLine,
+  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, ArrowRightToLine,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -36,7 +36,11 @@ import { habitDatesBetween, habitOccursOn } from "./lib/recurrence";
 import { resolveScheduleWindow, windowEndDate, type ScheduleWindowMode } from "./lib/scheduleWindow";
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem, type ScheduleUnscheduledItem } from "./lib/scheduling";
 import { scheduleUnscheduledText } from "./lib/scheduleReasons";
-import { addAvailability, availabilityBlocks, AVAILABILITY_PRESETS, moveAvailability, presetAvailability, removeAvailability, snapMinute, type AvailabilityBlock, type AvailabilitySnap } from "./lib/availability";
+import {
+  addAvailability, AVAILABILITY_BANDS, availabilityBlocks, availabilityFoldBands, availabilityMinuteAt, availabilityOffset,
+  availabilitySpan, availabilityVisibleHours, AVAILABILITY_PRESETS, moveAvailability, presetAvailability, removeAvailability, snapMinute,
+  type AvailabilityBandId, type AvailabilityBlock, type AvailabilityOffset, type AvailabilitySnap,
+} from "./lib/availability";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { carryOverTasks, createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
 import { collapsedGapHeight, createCalendarTimeline, defaultSlotSlicesForWeekday, fullDayEffectiveRanges, timelineRangeFromKey, type CalendarTimeline } from "./lib/calendarTimeline";
@@ -2654,24 +2658,35 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
  * 时段为空数组是有效的用户选择，因此「删除」不经过本编辑器。
  */
 /**
- * 块上铅笔的气泡：只改这一天的这一段时间。
- * 名字、星期这些属于整条窗口的定义，留在弹窗下方的列表里；这里只做时间。
+ * 块上铅笔的气泡：名称、起止、适用星期都在这一个表单里改完。
+ *
+ * 原来只改时间、名称与星期留在弹窗下方的列表里 —— 列表撤掉之后，这里就是这条窗口唯一的编辑入口，
+ * 所以「改哪几天」必须一并在这里表达：勾掉的星期等于把这条窗口从那天撤下。
  */
-function AvailabilityTimeEditor({ dayLabel, start: initialStart, end: initialEnd, onCancel, onSave }: {
-  dayLabel: string; start: string; end: string; onCancel: () => void; onSave: (next: { start: string; end: string }) => void;
+function AvailabilitySlotEditor({ slot, onCancel, onSave }: {
+  slot: DefaultTimeSlot; onCancel: () => void; onSave: (next: DefaultTimeSlot) => void;
 }) {
-  const [start, setStart] = useState(initialStart);
-  const [end, setEnd] = useState(initialEnd);
-  const valid = timeMinutes(start) < timeMinutes(end);
-  return <form className="slot-form availability-time-form" onSubmit={(event) => { event.preventDefault(); if (valid) onSave({ start, end }); }}>
-    <h2>编辑时间</h2>
+  const [label, setLabel] = useState(slot.label);
+  const [start, setStart] = useState(slot.start);
+  const [end, setEnd] = useState(slot.end);
+  const [weekdays, setWeekdays] = useState(slot.weekdays);
+  const valid = Boolean(label.trim()) && weekdays.length > 0 && timeMinutes(start) < timeMinutes(end);
+  return <form className="slot-form" onSubmit={(event) => {
+    event.preventDefault();
+    if (valid) onSave({ ...slot, label: label.trim(), start, end, weekdays: [...weekdays].sort((left, right) => left - right) });
+  }}>
+    <h2>编辑可用时间</h2>
+    <label>名称<input value={label} onChange={(event) => setLabel(event.target.value)} /></label>
     <div className="time-row">
       <label>开始<TimeField label="开始时间" value={start} onChange={setStart} /></label>
       <span aria-hidden="true">至</span>
       <label>结束<TimeField label="结束时间" value={end} onChange={setEnd} /></label>
     </div>
-    <p className="availability-time-hint">只改{dayLabel}这一天；同段的其他天保持不变。</p>
-    <div className="form-actions"><Button onClick={onCancel}>取消</Button><Button type="submit" variant="primary" disabled={!valid}>保存</Button></div>
+    <fieldset><legend>适用星期</legend><WeekdayPicker value={weekdays} onChange={setWeekdays} /></fieldset>
+    <div className="form-actions">
+      <Button onClick={onCancel}>取消</Button>
+      <Button type="submit" variant="primary" disabled={!valid}>保存</Button>
+    </div>
   </form>;
 }
 
@@ -3860,8 +3875,12 @@ const MOTION_OPTIONS: Array<{ value: AppSettings["motion"]; label: string }> = [
 const [CHECK_IN_GRACE_MIN, CHECK_IN_GRACE_MAX] = CHECK_IN_GRACE_MINUTES_RANGE;
 const [MINIMUM_SESSION_MIN, MINIMUM_SESSION_MAX] = MINIMUM_SESSION_MINUTES_RANGE;
 
-/** 每小时的高度：2.75rem = 44px，正好是命中区下限 —— 1 小时的窗口块本身就是 44px 高的拖动面。 */
+/** 每小时的高度初值：2.75rem = 44px，正好是命中区下限 —— 1 小时的窗口块本身就是 44px 高的拖动面。 */
 const AVAILABILITY_HOUR_REM = 2.75;
+/** 顶栏滑块的范围：1.5rem 一屏能看完一天，5rem 够看清 15 分钟的差别。 */
+const AVAILABILITY_HOUR_REM_RANGE = [1.5, 5] as const;
+/** 折起的时段压成一条带子：1.5rem 高，比一小时矮得多、又仍点得到。 */
+const AVAILABILITY_FOLD_REM = 1.5;
 const AVAILABILITY_ADD_MINUTES = 60;
 const AVAILABILITY_MIN_MINUTES = 15;
 
@@ -3879,50 +3898,87 @@ function availabilityClock(minute: number) {
 }
 
 /**
- * 「可用时间」周网格：7 天 × 24 小时。指针停在哪一格，就有一枚居中的「+」，点一下给那天加一段 1 小时；
- * 块和日历页的时间块一样：整块上下拖动改时间，上下拖手改起止，右上角「×」删除。
- * 「同段多天合并／拖出单天」由 `addAvailability` / `moveAvailability` 负责。
- * 块内两行：上面是窗口名（列表里的那个名字），下面是时间与两个动作（铅笔＝只改这一天的时间、
- * ×＝删除这一天这一段）。指针输入为主；键盘与精确到分钟走弹窗里的列表（网格本身不承担键盘操作）。
+ * 纵向位置写成一段 `calc`：铺开的小时乘 `--ah`，折起的窄带乘 `--band`。
+ *
+ * 两种重量分开累计，所以拖动滑块（改 `--ah`）时折带不会跟着变高，
+ * 而被折起的时段里的块仍是一条连续的整块。
  */
-function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
-  slots: DefaultTimeSlot[]; snapMinutes: AppSettings["snapMinutes"]; onChange: (next: DefaultTimeSlot[]) => void;
+/** 时段分组的边界：`minutesTime(1440)` 会折回 00:00，而「深夜 22:00–24:00」要能读成 24:00。 */
+function availabilityBandRange(start: number, end: number) {
+  return `${minutesTime(start)}–${end >= 1440 ? "24:00" : minutesTime(end)}`;
+}
+
+function availabilityLength(offset: AvailabilityOffset) {
+  return `calc(var(--ah) * ${offset.hours} + var(--band) * ${offset.strips})`;
+}
+
+/**
+ * 「可用时间」周网格：7 天 × 24 小时。
+ *
+ * - 指针停在某一格，那一格的开头出现一枚「＋」和一条横向虚线，标出加出来的一段落在哪；
+ *   点一下给那天加一段 1 小时。
+ * - 块整块上下拖动改时间，上下拖手改起止；块上铅笔打开名称／起止／星期的完整编辑，
+ *   「×」只删这一天这一段。「同段多天合并／拖出单天」由 `addAvailability` / `moveAvailability` 负责。
+ * - 时间栏最左边是「显示时段」下拉：取消勾选的时段折成一条窄带，窗口块跨过它仍然连着。
+ * - 每小时高度由顶栏的滑块给（`hourRem`），布局全部走 `--ah` 变量，不靠测量像素。
+ */
+function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
+  slots: DefaultTimeSlot[]; snapMinutes: AppSettings["snapMinutes"]; hourRem: number; onChange: (next: DefaultTimeSlot[]) => void;
 }) {
   const snap: AvailabilitySnap = snapMinutes === "off" ? 0 : snapMinutes;
   const blocks = useMemo(() => availabilityBlocks(slots), [slots]);
+  /** 折起的时段（下拉里取消勾选的那几段）。空数组＝整天铺开。 */
+  const [hidden, setHidden] = useState<AvailabilityBandId[]>([]);
+  const [bandsAnchor, setBandsAnchor] = useState<HTMLElement | null>(null);
   const [hover, setHover] = useState<{ weekday: number; hour: number } | null>(null);
   const [drag, setDrag] = useState<null | { slotId: string; weekday: number; edge: "move" | "top" | "bottom"; start: number; end: number }>(null);
-  /** 块上铅笔的气泡：只改这一天的这一段时间。 */
-  const [timeEdit, setTimeEdit] = useState<null | { weekday: number; start: string; end: string; anchor: HTMLElement }>(null);
+  /** 块上铅笔的气泡：名称、起止、星期。 */
+  const [slotEdit, setSlotEdit] = useState<null | { slotId: string; anchor: HTMLElement }>(null);
   // 拖动结束后浏览器仍会补一个 click（落点在空白格上）：吞掉它，别顺手再加一段窗口。
   const suppressClick = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  // 打开时从 07:00 起看：首屏直接落在常用时段，而不是一整屏凌晨空行。留 12px 让 07:00 的刻度完整露出。
-  useEffect(() => { const node = scrollRef.current; if (node) node.scrollTop = node.scrollHeight * (7 / 24) - 12; }, []);
+
+  const folds = availabilityFoldBands(hidden);
+  const hourMarks = availabilityVisibleHours(hidden);
+  /** 折带相对一小时的比例：指针换回分钟时要和 `--ah` / `--band` 用同一组重量。 */
+  const bandWeight = AVAILABILITY_FOLD_REM / hourRem;
+
   const weekdays = [0, 1, 2, 3, 4, 5, 6];
   const dayNames = ["日", "一", "二", "三", "四", "五", "六"];
+  const topOf = (minute: number) => availabilityLength(availabilityOffset(minute, hidden));
+  const spanOf = (start: number, end: number) => availabilityLength(availabilitySpan(start, end, hidden));
+  const toggleBand = (id: AvailabilityBandId) => setHidden((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+
+  // 打开时从 07:00 起看：首屏落在常用时段，而不是一整屏空白的凌晨。留 16px 让刻度不被裁。
+  useEffect(() => {
+    const node = scrollRef.current; if (!node) return;
+    const mark = node.querySelector<HTMLElement>('[data-hour="7"]') ?? node.querySelector<HTMLElement>("[data-hour]");
+    node.scrollTop = mark ? Math.max(0, mark.offsetTop - 16) : 0;
+  }, []);
+
   // 一天末尾最多到 1439（23:59）：24:00 会被 `minutesTime` 折回 00:00，反成非法窗口。
   const minuteFrom = (node: HTMLElement, clientY: number) => {
     const rect = node.getBoundingClientRect();
-    return Math.min(1439, snapMinute(((clientY - rect.top) / Math.max(1, rect.height)) * 1440, snap));
+    const ratio = (clientY - rect.top) / Math.max(1, rect.height);
+    return Math.min(1439, snapMinute(availabilityMinuteAt(ratio, hidden, bandWeight), snap));
   };
-  const hourFrom = (node: HTMLElement, clientY: number) => {
-    const rect = node.getBoundingClientRect();
-    return Math.max(0, Math.min(23, Math.floor(((clientY - rect.top) / Math.max(1, rect.height)) * 24)));
-  };
+  const hourFrom = (node: HTMLElement, clientY: number) => Math.floor(minuteFrom(node, clientY) / 60);
+  const foldedHour = (hour: number) => folds.some((band) => hour >= band.start && hour < band.end);
   const columnOf = (node: Element) => node.closest<HTMLElement>(".availability-day");
-  const offset = (minute: number) => `${(minute / 1440) * 100}%`;
-  // 只更新「+」落在哪一格；拖动块、或指针压在块上时不出「+」。
+  // 只更新「＋」落在哪一格；拖动块、或指针压在块上时不出「＋」。
   const dayMove = (weekday: number) => (event: ReactPointerEvent<HTMLDivElement>) => {
     if (drag || (event.target as HTMLElement).closest(".availability-block")) { setHover(null); return; }
-    setHover({ weekday, hour: hourFrom(event.currentTarget, event.clientY) });
+    const hour = hourFrom(event.currentTarget, event.clientY);
+    setHover(foldedHour(hour) ? null : { weekday, hour });
   };
   const dayLeave = () => setHover(null);
-  // 点击空白格＝给那一格加一段 1 小时空闲；「+」画在哪一格，块就落在哪一格。
+  // 点击空白格＝给那一格加一段 1 小时空闲；「＋」画在哪一格，块就落在哪一格。
   const dayClick = (weekday: number) => (event: ReactPointerEvent<HTMLDivElement>) => {
     if (suppressClick.current) return;
     if (drag || (event.target as HTMLElement).closest(".availability-block")) return;
-    const start = hourFrom(event.currentTarget, event.clientY) * 60;
+    const hour = hourFrom(event.currentTarget, event.clientY);
+    if (foldedHour(hour)) return;
+    const start = hour * 60;
     const end = Math.min(start + AVAILABILITY_ADD_MINUTES, 1439);
     onChange(addAvailability(slots, weekday, minutesTime(start), minutesTime(end), () => crypto.randomUUID()));
     setHover(null);
@@ -3963,22 +4019,27 @@ function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
   };
-  return <div className="availability-grid">
+  const editingSlot = slotEdit ? slots.find((item) => item.id === slotEdit.slotId) ?? null : null;
+  return <div className="availability-grid" style={{ "--ah": `${hourRem}rem`, "--band": `${AVAILABILITY_FOLD_REM}rem` } as CSSProperties}>
     <div className="availability-presets" role="group" aria-label="可用时间预设">
       {AVAILABILITY_PRESETS.map((preset) => <button key={preset.id} type="button" className="availability-preset" onClick={() => onChange(presetAvailability(preset.id, () => crypto.randomUUID()))}>{preset.label}</button>)}
       <button type="button" className="availability-preset is-danger" onClick={() => onChange([])}>清空</button>
     </div>
-    <div className="availability-head" aria-hidden="true">
-      <span className="availability-gutter" />
+    <div className="availability-head">
+      <button type="button" className="availability-bands" aria-label="选择显示的时段" aria-expanded={bandsAnchor !== null} title="选择要显示的时段"
+        onClick={(event) => setBandsAnchor(bandsAnchor ? null : event.currentTarget)}>
+        <Rows3 size={13} aria-hidden="true" /><ChevronDown size={10} aria-hidden="true" />
+      </button>
       {weekdays.map((weekday) => <span key={weekday}>周{dayNames[weekday]}</span>)}
     </div>
     <div className="availability-scroll" ref={scrollRef}>
-      <div className="availability-track" style={{ height: `${24 * AVAILABILITY_HOUR_REM}rem` }}>
+      <div className="availability-track" style={{ height: `calc(var(--ah) * ${hourMarks.length} + var(--band) * ${folds.length})` }}>
         <div className="availability-hours" aria-hidden="true">
-          {Array.from({ length: 24 }, (_, hour) => <span key={hour} style={{ top: `${hour * AVAILABILITY_HOUR_REM}rem` }}>{String(hour).padStart(2, "0")}:00</span>)}
+          {hourMarks.map((hour) => <span key={hour} data-hour={hour} style={{ top: topOf(hour * 60) }}>{String(hour).padStart(2, "0")}:00</span>)}
         </div>
         {weekdays.map((weekday) => <div key={weekday} className="availability-day" role="group" aria-label={`周${dayNames[weekday]}可用时间`}
           onPointerMove={dayMove(weekday)} onPointerLeave={dayLeave} onClick={dayClick(weekday)} style={{ touchAction: "none" }}>
+          {hourMarks.map((hour) => <span key={hour} aria-hidden="true" className={hour % 6 === 0 ? "availability-line is-major" : "availability-line"} style={{ top: topOf(hour * 60) }} />)}
           {blocks.filter((block) => block.weekday === weekday).map((block) => {
             const live = drag && drag.slotId === block.slotId && drag.weekday === weekday ? drag : null;
             const start = live ? live.start : timeMinutes(block.start);
@@ -3986,7 +4047,7 @@ function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
             const compact = end - start < 60;
             const classes = ["availability-block", live ? "is-moving" : "", compact ? "is-compact" : ""].filter(Boolean).join(" ");
             return <div key={`${block.slotId}-${weekday}`} role="group" aria-label={`周${dayNames[weekday]} ${minutesTime(start)}–${minutesTime(end)}`}
-              className={classes} style={{ top: offset(start), height: offset(end - start) }}
+              className={classes} style={{ top: topOf(start), height: spanOf(start, end) }}
               onPointerDown={(event) => { if (!(event.target as HTMLElement).closest("button")) beginDrag(block, "move")(event); }}
               onClick={(event) => event.stopPropagation()}>
               <button type="button" className="availability-handle is-top" aria-label={`调整 周${dayNames[weekday]} ${block.start} 开始时间`} onPointerDown={beginDrag(block, "top")} onClick={(event) => event.stopPropagation()} />
@@ -3994,22 +4055,42 @@ function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
                 {!compact && <span className="availability-block-name" title={block.label}>{block.label}</span>}
                 <span className="availability-block-time">{availabilityClock(start)}–{availabilityClock(end)}</span>
                 <span className="availability-block-actions">
-                  <button type="button" className="availability-block-btn is-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} title="只改这一天的时间" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setTimeEdit({ weekday, start: block.start, end: block.end, anchor: event.currentTarget }); }}><Pencil size={13} aria-hidden="true" /></button>
+                  <button type="button" className="availability-block-btn is-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} title="编辑名称、时间与星期" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSlotEdit({ slotId: block.slotId, anchor: event.currentTarget }); }}><Pencil size={13} aria-hidden="true" /></button>
                   <button type="button" className="availability-block-btn is-delete" aria-label={`删除 周${dayNames[weekday]} ${block.start}–${block.end}`} title="删除这一天这一段" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChange(removeAvailability(slots, weekday, block.start, block.end)); }}><X size={13} aria-hidden="true" /></button>
                 </span>
               </span>
               <button type="button" className="availability-handle is-bottom" aria-label={`调整 周${dayNames[weekday]} ${block.end} 结束时间`} onPointerDown={beginDrag(block, "bottom")} onClick={(event) => event.stopPropagation()} />
             </div>;
           })}
-          {hover && hover.weekday === weekday && !drag && <span className="availability-add" aria-hidden="true" style={{ top: `${(hover.hour * 100) / 24}%`, height: `${100 / 24}%` }}><span className="availability-add-dot"><Plus size={14} /></span></span>}
+          {/* 悬停在空白格：一条横向虚线标出这一小时的位置，「＋」落在线的起点（时间开头）。 */}
+          {hover && hover.weekday === weekday && !drag && <span className="availability-hover" aria-hidden="true" style={{ top: topOf(hover.hour * 60) }}>
+            <span className="availability-hover-chip"><Plus size={11} aria-hidden="true" />{String(hover.hour).padStart(2, "0")}:00</span>
+            <span className="availability-hover-line" />
+          </span>}
         </div>)}
+        {/* 折起的时段：一条带子横跨整行，左边带一个展开把子。块在它上面，跨过去仍是一整块。 */}
+        {folds.map((band) => <span key={band.id} className="availability-fold" style={{ top: topOf(band.start * 60), height: spanOf(band.start * 60, band.end * 60) }}>
+          <button type="button" className="availability-fold-btn" aria-label={`展开${band.label} ${availabilityBandRange(band.start * 60, band.end * 60)}`} title={`展开${band.label}`}
+            onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); toggleBand(band.id); }}><ChevronRight size={12} aria-hidden="true" /></button>
+        </span>)}
       </div>
     </div>
-    <p className="availability-hint">点一下格子＝加一段 1 小时空闲；拖动块可移动，拖上下边缘改起止。块上铅笔只改这一天的时间，× 删除这一天这一段。同一段跨多天时拖动只改那一天。</p>
-    {timeEdit && <FloatingPanel label="编辑时间" className="availability-time-panel" anchorElement={timeEdit.anchor} closeOnOutsideClick onClose={() => setTimeEdit(null)}>
-      <AvailabilityTimeEditor dayLabel={`周${dayNames[timeEdit.weekday]}`} start={timeEdit.start} end={timeEdit.end}
-        onCancel={() => setTimeEdit(null)}
-        onSave={(next) => { onChange(moveAvailability(slots, timeEdit.weekday, { start: timeEdit.start, end: timeEdit.end }, next, () => crypto.randomUUID())); setTimeEdit(null); }} />
+    {bandsAnchor && <FloatingPanel label="显示时段" anchorElement={bandsAnchor} kind="action" closeOnOutsideClick onClose={() => setBandsAnchor(null)}>
+      <div className="availability-bands-panel">
+        <h2>显示时段</h2>
+        {AVAILABILITY_BANDS.map((band) => {
+          const shown = !hidden.includes(band.id);
+          return <label key={band.id} className={shown ? "availability-band-row" : "availability-band-row is-off"}>
+            <input type="checkbox" checked={shown} onChange={() => toggleBand(band.id)} />
+            <span className="availability-band-time">{availabilityBandRange(band.start * 60, band.end * 60)}</span>
+            <span className="availability-band-name">{band.label}</span>
+          </label>;
+        })}
+      </div>
+    </FloatingPanel>}
+    {slotEdit && editingSlot && <FloatingPanel label="编辑可用时间" anchorElement={slotEdit.anchor} closeOnOutsideClick onClose={() => setSlotEdit(null)}>
+      <AvailabilitySlotEditor slot={editingSlot} onCancel={() => setSlotEdit(null)}
+        onSave={(next) => { onChange(slots.map((item) => item.id === next.id ? next : item)); setSlotEdit(null); }} />
     </FloatingPanel>}
   </div>;
 }
@@ -4049,7 +4130,8 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
   const [slotBusy, setSlotBusy] = useState(false);
   const closeSlotEditor = () => { setSlotDraft(null); setSlotAnchor(null); };
   const addSlot = (anchor?: HTMLElement) => { const start = slots.at(-1)?.end ?? "19:00"; setSlotAnchor(anchor ?? null); setSlotDraft({ id: crypto.randomUUID(), label: "新的专注时段", start, end: minutesTime(timeMinutes(start) + 120), weekdays: [1, 2, 3, 4, 5] }); };
-  const removeSlot = (index: number) => onChange({ defaultTimeSlots: slots.filter((_, at) => at !== index) });
+  /** 网格每小时的纵向高度：只影响这次查看，不写进设置（滑块在弹窗顶栏）。 */
+  const [availabilityHourRem, setAvailabilityHourRem] = useState(AVAILABILITY_HOUR_REM);
   // 单项重置只比较值本身；数组项没有稳定标识，用「是否为空」判断（默认值就是空数组）。
   const changed = (key: Exclude<keyof AppSettings, "defaultTimeSlots">) => preferences[key] !== DEFAULT_SETTINGS[key];
   return <section className="page-stack settings-page narrow-page">
@@ -4091,29 +4173,24 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
       <SettingsRow label="日视图默认显示" note="选择「可用时间」时，其他时间会折叠起来。" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
         <SettingsChoice label="日视图默认显示" name="calendar-day-mode" value={preferences.calendarDayMode} onChange={(calendarDayMode) => onChange({ calendarDayMode })} options={[{ value: "defaultSlots", label: "可用时间" }, { value: "fullDay", label: "全天" }]} />
       </SettingsRow>
-      <SettingsRow label="可用时间" note="自动排程只在这些窗口里安排；点「编辑」在周网格上标出空闲段。" modified={JSON.stringify(slots) !== JSON.stringify(DEFAULT_SETTINGS.defaultTimeSlots)} onReset={() => onChange({ defaultTimeSlots: structuredClone(DEFAULT_SETTINGS.defaultTimeSlots) })}>
-        <Button variant="secondary" onClick={() => setAvailabilityOpen(true)}><CalendarDays size={16} />编辑可用时间</Button>
+      <SettingsRow label="可用时间" note="自动排程只在这些窗口里安排；点「编辑」在周网格上标出空闲段。">
+        <Button variant="secondary" onClick={() => setAvailabilityOpen(true)}><CalendarDays size={16} />编辑</Button>
       </SettingsRow>
       {availabilityOpen && <ConfirmDialog id="availability-dialog" labelledBy="availability-title" busy={slotBusy} onClose={() => setAvailabilityOpen(false)} className="availability-modal">
         <div className="availability-modal-head">
           <h2 id="availability-title">可用时间</h2>
           <span className="availability-modal-actions">
+            {/* 纵向缩放：只改这一次查看的每小时高度，不写设置。 */}
+            <input className="availability-zoom" type="range" aria-label="网格纵向高度" title="网格纵向高度"
+              min={AVAILABILITY_HOUR_REM_RANGE[0]} max={AVAILABILITY_HOUR_REM_RANGE[1]} step={0.25}
+              value={availabilityHourRem} onChange={(event) => setAvailabilityHourRem(Number(event.target.value))} />
             <Button variant="secondary" onClick={(event) => addSlot(event.currentTarget)}><Plus size={16} />添加时段</Button>
             <Button onClick={() => setAvailabilityOpen(false)}>完成</Button>
           </span>
         </div>
-        <AvailabilityWeekGrid slots={slots} snapMinutes={preferences.snapMinutes}
+        <AvailabilityWeekGrid slots={slots} snapMinutes={preferences.snapMinutes} hourRem={availabilityHourRem}
           onChange={(next) => onChange({ defaultTimeSlots: next })} />
-        {slots.length === 0
-          ? <p className="settings-empty">还没有可用时间。在周网格上点一下即可加一段 1 小时的空闲。</p>
-          : <div className="settings-slot-list">{slots.map((slot, index) => <div key={slot.id} className="settings-slot">
-            <div><strong>{slot.label}</strong><span>{slot.start}–{slot.end} · {weekdaySummary(slot.weekdays)}</span></div>
-            <div className="settings-slot-actions">
-              <button aria-label={`编辑时段 ${slot.label}`} onClick={(event) => { setSlotAnchor(event.currentTarget.closest<HTMLElement>(".settings-slot") ?? event.currentTarget); setSlotDraft(structuredClone(slot)); }}><Pencil size={14} aria-hidden="true" /></button>
-              <button className="danger" aria-label={`删除时段 ${slot.label}`} onClick={() => removeSlot(index)}><Trash2 size={14} aria-hidden="true" /></button>
-            </div>
-          </div>)}</div>}
-        {slotDraft && <FloatingPanel label="编辑可用时间" anchorElement={slotAnchor} busy={slotBusy} onClose={closeSlotEditor} closeOnOutsideClick><DefaultTimeSlotEditor slot={slotDraft} onCancel={closeSlotEditor} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); closeSlotEditor(); }} /></FloatingPanel>}
+        {slotDraft && <FloatingPanel label="添加时段" anchorElement={slotAnchor} busy={slotBusy} onClose={closeSlotEditor} closeOnOutsideClick><DefaultTimeSlotEditor slot={slotDraft} onCancel={closeSlotEditor} onPhase={setSlotBusy} onSave={async (slot) => { onChange({ defaultTimeSlots: slots.some((item) => item.id === slot.id) ? slots.map((item) => item.id === slot.id ? slot : item) : [...slots, slot] }); closeSlotEditor(); }} /></FloatingPanel>}
       </ConfirmDialog>}
       <SettingsRow label="全局单次投入" note="新建任务时的默认单次投入时长。" htmlFor="settings-session" modified={changed("defaultSessionMinutes")} onReset={() => onChange({ defaultSessionMinutes: DEFAULT_SETTINGS.defaultSessionMinutes })}>
         <NumberField id="settings-session" label="全局单次投入" suffix="分钟" min={5} max={240} step={5} value={preferences.defaultSessionMinutes} onChange={(value) => { if (value !== null) onChange({ defaultSessionMinutes: value }); }} />
@@ -4134,14 +4211,6 @@ function durationLabel(minutes: number) {
   if (minutes % 60 === 0) return `共 ${minutes / 60} 小时`;
   if (minutes > 60) return `共 ${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
   return `共 ${minutes} 分钟`;
-}
-
-/** 「工作日／每天／周一、周三」——比把数字翻成「一、二、三」更好读，也避免把 0 当成周一。 */
-function weekdaySummary(weekdays: number[]) {
-  const sorted = [...weekdays].sort((left, right) => left - right);
-  if (sorted.length === 7) return "每天";
-  if (sorted.length === 5 && sorted.every((day, index) => day === index + 1)) return "工作日";
-  return sorted.map((day) => `周${["日", "一", "二", "三", "四", "五", "六"][day] ?? ""}`).join("、");
 }
 
 function FinishDialog({ record, task, onClose, onSubmit }: { record: ExecutionRecord; task: Task; onClose: () => void; onSubmit: (progress: number, note: string, actualEndUtc: string) => Promise<void> }) {
