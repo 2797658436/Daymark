@@ -150,6 +150,40 @@ describe("浮层与编辑气泡语义（M8）", () => {
     expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
   });
 
+  it("一层换一层的同一帧里，新浮层仍可交互（临期气泡 → 编辑任务）", async () => {
+    const user = userEvent.setup();
+    function Swap() {
+      const [open, setOpen] = useState<"none" | "due" | "editor">("none");
+      return (
+        <Shell>
+          <button onClick={() => setOpen("due")}>开临期气泡</button>
+          {open === "due" && (
+            <FloatingPanel label="临期操作" onClose={() => setOpen("none")}>
+              <button onClick={() => setOpen("editor")}>编辑任务</button>
+            </FloatingPanel>
+          )}
+          {open === "editor" && (
+            <FloatingPanel label="编辑任务" onClose={() => setOpen("none")}>
+              <button>保存</button>
+            </FloatingPanel>
+          )}
+        </Shell>
+      );
+    }
+    render(<Swap />);
+    await user.click(screen.getByRole("button", { name: "开临期气泡" }));
+    await user.click(screen.getByRole("button", { name: "编辑任务" }));
+
+    const editor = screen.getByRole("dialog", { name: "编辑任务" });
+    // 层栈长度没变（1 → 1），新气泡仍必须是栈顶：否则它带 `pointer-events:none`，
+    // 背景又被它锁成 inert，整页只剩 Esc 一条出口。
+    expect(editor).not.toHaveStyle({ pointerEvents: "none" });
+    expect(document.querySelector(".app-shell")).toHaveAttribute("inert");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "编辑任务" })).not.toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).not.toHaveAttribute("inert");
+  });
+
   it("输入法组合期间 Enter 不提交、Escape 不关闭编辑器（规格 §4.3）", async () => {
     const user = userEvent.setup();
     render(<FormHarness />);

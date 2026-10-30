@@ -184,7 +184,10 @@ export function OverlayHostProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [topId]);
 
-  const api = useMemo<OverlayHostApi>(() => ({ register, update, isTop, layerCount: layers.length }), [register, update, isTop, layers.length]);
+  // 依赖是**整份层栈**而不是 `layers.length`：一层换成一层的同一帧（临期气泡点「编辑任务」，
+  // 气泡换成编辑气泡，数量仍是 1），长度不变、context 值也就不变，新浮层拿不到新一次渲染，
+  // 永远停在 `isTop=false` 的 `pointer-events:none` 上，背景又因它而 inert —— 整页卡死。
+  const api = useMemo<OverlayHostApi>(() => ({ register, update, isTop, layerCount: layers.length }), [register, update, isTop, layers]);
 
   return <OverlayHostContext.Provider value={api}>{children}</OverlayHostContext.Provider>;
 }
@@ -207,11 +210,16 @@ export function useOverlayLayer(id: string, options: { kind: OverlayKind; dismis
   optionsRef.current = options;
   const dismiss = useRef(options.onDismiss);
   dismiss.current = options.onDismiss;
+  // 依赖落在稳定的函数上，别用 `host`：宿主值随层栈每次变化都换新对象，
+  // 拿它做依赖会「注销 → 重新注册」，而注册本身又改变层栈 —— 死循环。
+  const registerOverlay = host?.register;
+  const updateOverlay = host?.update;
+  const queryTop = host?.isTop;
 
   useEffect(() => {
-    if (!host) return;
+    if (!registerOverlay) return;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const unregister = host.register({
+    const unregister = registerOverlay({
       id,
       kind: optionsRef.current.kind,
       dismissible: optionsRef.current.dismissible,
@@ -222,13 +230,13 @@ export function useOverlayLayer(id: string, options: { kind: OverlayKind; dismis
       unregister();
       restoreFocus(previousFocus);
     };
-  }, [host, id]);
+  }, [registerOverlay, id]);
 
   useEffect(() => {
-    host?.update(id, { dismissible: options.dismissible, kind: options.kind });
-  }, [host, id, options.dismissible, options.kind]);
+    updateOverlay?.(id, { dismissible: options.dismissible, kind: options.kind });
+  }, [updateOverlay, id, options.dismissible, options.kind]);
 
-  return host?.isTop(id) ?? true;
+  return queryTop ? queryTop(id) : true;
 }
 
 export function useOverlayHost(): OverlayHostApi {

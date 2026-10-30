@@ -263,13 +263,14 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 /* 今日页的两张卡都自己管内边距：`.surface-card` 的 18/20 是给正文卡用的，
    套在 13rem 的右列上会把可用宽度再吃掉 40px（任务名因此被截成 3 个字）。 */
 .today-axis { padding: 0 0 10px; }
+/* 段数注脚在卡片外、卡片右上角：右内边距与行尾操作对齐（8 + 8）。 */
+.today-axis-column { display: grid; gap: 6px; min-width: 0; }
+.today-axis-count { padding: 0 16px; color: var(--muted); font-size: .75rem; line-height: 1.125rem; font-variant-numeric: tabular-nums; text-align: right; }
 .today-side { display: grid; gap: 12px; align-content: start; min-width: 0; }
 
 .today-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
 .today-card-head h2 { margin: 0; font-size: 1rem; line-height: 1.5rem; font-weight: 600; }
 .today-card-head > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
-/* 时间轴卡只剩计数（标题「今天」已删）：靠右当注脚，与行的内容右边缘对齐（8 + 8）。 */
-.today-card-head.is-count-only { justify-content: flex-end; padding: 10px 16px 2px; }
 .today-side .today-card-head { padding: 12px 12px 4px; }
 .today-side .today-card-head h2 { font-size: .8125rem; line-height: 1.25rem; }
 
@@ -313,7 +314,10 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
    悬浮／聚焦才变回滑块。盒子高度固定 36px（沿用 `--range-bar` 的 2.25rem），
    所以形态切换不会把整行顶高。 */
 .today-progress { flex: none; display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
-.today-progress-bar.range-bar { flex: none; width: 88px; }
+/* 普通行固定 12rem（原 88px）：比例才读得出来。右端对齐，各行的条起点也一致。
+   页面窄到两列挤在一起时（1200 宽＋右列任务池展开，正文只有 386px）按容器宽度降档，
+   先让条变短，而不是把任务名挤成省略号。 */
+.today-progress-bar.range-bar { flex: none; width: 12rem; }
 .today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-track { inset: 50% 0 auto; height: .3125rem; padding: 0; border: 0; border-radius: 999px; background: var(--line-soft); transform: translateY(-50%); }
 .today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-fill { border-radius: 999px; background: var(--success); }
 .today-progress-bar.range-bar:not(:hover):not(:focus-within) .range-thumb { opacity: 0; }
@@ -406,11 +410,9 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .today-pop-icon { flex: none; width: 2.75rem; padding: 0; color: var(--muted-strong); }
 .today-pop-icon:hover:not(:disabled) { color: var(--text); }
 .today-pop-icon svg { display: block; }
-/* 「挪到之后」只有标题 + 两个选择：内容多少就多宽，不留右侧空白。 */
-.floating-panel.today-move-panel { width: max-content; max-width: calc(100vw - 24px); }
-.today-move-panel .today-pop-body { min-width: 0; }
-.today-move-panel .today-pop-actions { flex-wrap: nowrap; }
-.today-move-panel .button { white-space: nowrap; }
+/* 临期气泡只有名字、进度条和两个动作，比通用编辑气泡（23rem）窄一档；
+   进度条是里面的控件，窄一点照样拖得动。 */
+.floating-panel.today-due-panel { width: min(18rem, calc(100vw - 24px)); }
 
 /* —— 待续浮钮与抽屉（2026-10-28）——
    固定左下角：右下角归任务池浮钮（`.task-pool-toggle`，right:18 bottom:18，z-index 31）。
@@ -434,19 +436,26 @@ input[type="checkbox"]:not(.switch):disabled { border-color: var(--line-strong);
 .carry-meta { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
 .carry-foot { margin: 0; padding: 9px 16px 12px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: .75rem; line-height: 1.125rem; }
 
+/* 两列还在但正文已被右列挤窄（1200 宽或任务池拉宽，正文约 386px）：条降一档、
+   截止标签换短形态，「提前开始」退成图标按钮（动作不变，`title` 说明）——
+   任务名 + 徽标 + 条 + 两个按钮在 386px 里放不下，文字标签是其中最可省的。 */
+@container (max-width: 52rem) {
+  .today-progress-bar.range-bar { width: 7rem; }
+  .today-quiet { min-width: 2.75rem; min-height: 2.75rem; justify-content: center; }
+  .today-quiet-label { display: none; }
+  .today-chip .deadline-long { display: none; }
+  .today-chip .deadline-short { display: inline; }
+}
 @container (max-width: 44rem) {
   .today-layout { grid-template-columns: minmax(0, 1fr); }
   .today-side { grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
-  .today-progress-bar.range-bar { width: 72px; }
+  /* 200% 缩放下正文只剩 ~18rem：条再退一档（4.5rem 在 200% 里约等于 100% 的 9rem），
+     把宽度留给任务名。 */
+  .today-progress-bar.range-bar { width: 4.5rem; }
   /* 200% 之类的高缩放下容器查询按 rem 触发：当前行标题降一档，别只剩一个字。 */
   .today-row.is-current .today-row-title { font-size: 1rem; line-height: 1.5rem; }
   .rescue-card { align-items: stretch; flex-direction: column; }
   .rescue-actions { width: 100%; }
-}
-/* 再窄一档（200% 缩放时容器只有 20rem 左右）：截止徽标换成短形态，把宽度还给任务名。 */
-@container (max-width: 30rem) {
-  .today-chip .deadline-long { display: none; }
-  .today-chip .deadline-short { display: inline; }
 }
 .section-heading, .panel-heading, .project-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }

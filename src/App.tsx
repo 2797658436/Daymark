@@ -1,7 +1,7 @@
 import {
   ArchiveRestore, ArrowDown, ArrowUp, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleAlert,
   Clock3, Copy, Database, Diamond, Ellipsis, FolderKanban, Home, Inbox, ListFilter, LocateFixed, Magnet, Palette, Pencil, Play, Plus, RotateCcw, Rows2, Rows3, Rows4,
-  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2,
+  Settings2, Square, Upload, X, ChartNoAxesColumnIncreasing, Sparkles, Repeat2, Ban, Flag, Trash2, ArrowRightToLine,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -903,7 +903,8 @@ function PageHeader({ eyebrow, title, actions, className, titleId, titleLabel, t
  * 首屏于是把同一件事说了两三次。现在只有一份。
  *
  * 三条约定：
- * - 已过的时段**不写 `missed`**、不做裁决：留在轴上显示「已过」，可以更新进度，也可以挪到之后。
+ * - 已过的时段**不写 `missed`**、不做裁决：留在轴上显示「已过」，可以更新进度，也可以
+ *   一键挪到明天同一时间（行尾两个图标按钮：顺延／去日历改时间）。
  *   原来的「本次未推进」按钮从今日页移除（日历页的待回顾流程保持不变）。
  * - 当前行是唯一的「现在」模块：标题、剩余时间、进度、主操作都在行内。
  * - 右列只放「今天之外」的事实：临期（只写名字与天数，动作在气泡里）和今天完成。
@@ -954,9 +955,8 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
   /** 今天有没有「已经排进轴上」的任务 —— 临期列用它决定要不要打「今天」角标。 */
   const scheduledTaskIds = new Set(sessions.map((session) => session.taskId));
 
-  /** 临时层：临期条目、挪到之后。同一时刻只会有一个。 */
+  /** 临时层：临期条目。同一时刻只会有一个。 */
   const [dueAnchor, setDueAnchor] = useState<{ taskId: string; element: HTMLElement } | null>(null);
-  const [moveAnchor, setMoveAnchor] = useState<{ session: ExecutionSession; element: HTMLElement } | null>(null);
   const dueTask = dueAnchor ? index.tasksById.get(dueAnchor.taskId) ?? null : null;
   /** 从临期气泡「在轴上查看」跳过去的那一段，会在轴上亮 4 秒。 */
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -1013,8 +1013,8 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
           <RowProgress task={task} onCommit={onProgress} />
           
           <div className="today-row-acts">
-            <button type="button" className="today-quiet" onClick={(click) => setMoveAnchor({ session, element: click.currentTarget })}>挪到之后</button>
-            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+            <button type="button" className="icon-action" aria-label={`把 ${task.title} 挪到明天同一时间`} title="挪到明天同一时间" onClick={() => void onMove(session, addDays(today, 1), session.startLocal)}><ArrowRightToLine size={16} aria-hidden="true" /></button>
+            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} title="在日历中查看" onClick={() => onGoCalendar(session)}><CalendarDays size={16} aria-hidden="true" /></button>
           </div>
         </div>
       </div>
@@ -1046,7 +1046,7 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
             : preferences.checkInEnabled
               ? <Button variant="primary" onClick={() => void onStart(session)}><Play size={16} aria-hidden="true" />开始</Button>
               : <span className="muted-chip">开始／结束记录未开启</span>}
-          <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+          <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} title="在日历中查看" onClick={() => onGoCalendar(session)}><CalendarDays size={16} aria-hidden="true" /></button>
         </div>
       </div>
     </li>;
@@ -1067,8 +1067,8 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
           <RowProgress task={task} onCommit={onProgress} />
           
           <div className="today-row-acts">
-            {preferences.checkInEnabled && <button type="button" className="today-quiet" onClick={() => void onStart(session)}><Play size={13} aria-hidden="true" />提前开始</button>}
-            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} onClick={() => onGoCalendar(session)}><CalendarDays size={16} /></button>
+            {preferences.checkInEnabled && <button type="button" className="today-quiet" aria-label={`提前开始 ${task.title}`} title="提前开始" onClick={() => void onStart(session)}><Play size={13} aria-hidden="true" /><span className="today-quiet-label">提前开始</span></button>}
+            <button type="button" className="icon-action" aria-label={`在日历中查看 ${task.title}`} title="在日历中查看" onClick={() => onGoCalendar(session)}><CalendarDays size={16} aria-hidden="true" /></button>
           </div>
         </div>
       </div>
@@ -1105,14 +1105,16 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
     </header>
     {rescue && <section className="rescue-card" aria-labelledby="rescue-title"><div className="rescue-main"><span className="eyebrow">重新安排一下</span><h2 id="rescue-title">{taskTitle(workspace, rescue.taskId)}</h2><p>原定 {rescue.startLocal} 开始。选择一个现在容易做到的下一步。</p></div><div className="rescue-actions"><Button variant="primary" onClick={() => void onStart(rescue)}><Play size={16} aria-hidden="true" />现在开始</Button><Button onClick={() => void onDelay(rescue)}>延后 10 分钟</Button><Button onClick={() => onGoCalendar()}>重新选择时间</Button><Button onClick={() => void onSkip(rescue)}><Ban size={16} aria-hidden="true" />本次跳过</Button></div></section>}
     <div className="today-layout">
-      <section className="surface-card today-axis" aria-label="今天的时间轴">
-        {/* 卡片头不再写「今天」—— 页面标题已经是今天的日期，卡片里再写一遍是重复。只剩计数，靠右当注脚。 */}
-        <div className="today-card-head is-count-only"><span>{sessions.length} 段{passedCount > 0 ? ` · ${passedCount} 段已过` : ""}</span></div>
-        {sessions.length
-          ? <ol className="today-timeline">{rows}</ol>
-          : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
-        {current && <button type="button" className="today-gap-hint" onClick={() => onGoCalendar()}><Plus size={14} aria-hidden="true" />添加任务</button>}
-      </section>
+      <div className="today-axis-column">
+        {/* 段数注脚放在卡片外、贴在卡片右上角：它是这张卡的说明，不是卡里的内容。 */}
+        <div className="today-axis-count"><span>{sessions.length} 段{passedCount > 0 ? ` · ${passedCount} 段已过` : ""}</span></div>
+        <section className="surface-card today-axis" aria-label="今天的时间轴">
+          {sessions.length
+            ? <ol className="today-timeline">{rows}</ol>
+            : <EmptyState icon={<Clock3 />} title="今天的时间线是空的" text="任务不会因此消失。从任务池拖入，或打开日历安排一个时段。" action={<Button onClick={() => onGoCalendar()}>打开日历</Button>} />}
+          {current && <button type="button" className="today-gap-hint" onClick={() => onGoCalendar()}><Plus size={14} aria-hidden="true" />添加任务</button>}
+        </section>
+      </div>
       <aside className="today-side" aria-label="今天之外">
         {due.length > 0 && <section className="surface-card today-due" aria-labelledby="today-due-title">
           <div className="today-card-head"><h2 id="today-due-title">临期</h2><span>{due.length}</span></div>
@@ -1120,7 +1122,7 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
             const urgency = deadlineUrgency(task.deadlineLocal!, today);
             return <button type="button" key={task.id} className={`today-due-item is-${urgency}`}
               aria-label={`${task.title}，${deadlineLabel(today, task.deadlineLocal!)}`}
-              onClick={(click) => { setMoveAnchor(null); setDueAnchor({ taskId: task.id, element: click.currentTarget }); }}>
+              onClick={(click) => setDueAnchor({ taskId: task.id, element: click.currentTarget })}>
               <span className="today-due-name"><Flag size={12} aria-hidden="true" /><span title={task.title}>{task.title}</span>{scheduledTaskIds.has(task.id) && <em>今天</em>}</span>
               <span className="today-due-when">{deadlineLabel(today, task.deadlineLocal!)}</span>
             </button>;
@@ -1144,16 +1146,8 @@ function TodayPage({ index, workspace, preferences, running, onStart, onFinish, 
           {/* 「在轴上查看」不是跳到日历，而是滚回这条轴上的那一段并亮 4 秒 —— 同一份数据，只是换个地方看。 */}
           <Button onClick={() => { const target = sessions.find((session) => session.taskId === dueTask.id) ?? null; setDueAnchor(null); if (target) revealSession(target); else onGoCalendar(); }}>{scheduledTaskIds.has(dueTask.id) ? "在轴上查看" : "安排一段"}</Button>
           <Button className="today-pop-icon" aria-label={`编辑任务 ${dueTask.title}`} title="编辑任务" onClick={() => { const element = dueAnchor.element; setDueAnchor(null); onEditTask(dueTask, element); }}><Pencil size={16} aria-hidden="true" /></Button>
-        </div>
-      </div>
-    </FloatingPanel>}
-    {moveAnchor && <FloatingPanel className="today-move-panel" label="挪到之后" anchorElement={moveAnchor.element} closeOnOutsideClick onClose={() => setMoveAnchor(null)}>
-      {/* 只有标题和两个选择：整段移走不改变任务本身，不需要解释。 */}
-      <div className="today-pop-body">
-        <h2>挪到之后</h2>
-        <div className="today-pop-actions">
-          <Button onClick={() => { const session = moveAnchor.session; setMoveAnchor(null); void onMove(session, addDays(today, 1), session.startLocal); }}>明天同一时间</Button>
-          <Button onClick={() => { const session = moveAnchor.session; setMoveAnchor(null); onGoCalendar(session); }}>在日历里选时间</Button>
+          {/* 去日历改时间：任务今天有排就落在那一段上，没排就打开日历自己找位置。 */}
+          <Button className="today-pop-icon" aria-label={`在日历中查看 ${dueTask.title}`} title="在日历中查看" onClick={() => { const target = sessions.find((session) => session.taskId === dueTask.id) ?? null; setDueAnchor(null); onGoCalendar(target ?? undefined); }}><CalendarDays size={16} aria-hidden="true" /></Button>
         </div>
       </div>
     </FloatingPanel>}

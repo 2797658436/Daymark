@@ -161,6 +161,9 @@ describe("phase 1 manual alpha", () => {
     expect(pastRow).toHaveTextContent("需要回顾");
     expect(pastRow.querySelector(".today-chip.is-past")).toBeNull();
     expect(pastRow).not.toHaveTextContent("未推进");
+    // 顺延与「去日历改时间」是行尾两个图标按钮：顺延一键完成，悬停靠 `title` 说明。
+    expect(within(pastRow).getByRole("button", { name: "把 需要回顾 挪到明天同一时间" })).toHaveAttribute("title", "挪到明天同一时间");
+    expect(within(pastRow).getByRole("button", { name: "在日历中查看 需要回顾" })).toHaveAttribute("title", "在日历中查看");
 
     const due = document.querySelector<HTMLElement>(".today-due")!;
     expect(within(due).getByText("临期任务")).toBeVisible();
@@ -211,6 +214,8 @@ describe("phase 1 manual alpha", () => {
     await user.click(screen.getByRole("button", { name: /^临期任务，/ }));
     const bubble = await screen.findByRole("dialog", { name: "临期任务 临期操作" });
     expect(within(bubble).getByRole("button", { name: "编辑任务 临期任务" })).toBeVisible();
+    // 编辑右边是「去日历改时间」：同一排三个出口，图标按钮都带悬停说明。
+    expect(within(bubble).getByRole("button", { name: "在日历中查看 临期任务" })).toHaveAttribute("title", "在日历中查看");
 
     const row = document.querySelector<HTMLElement>('[data-session-id="s-next"]')!;
     expect(row).not.toHaveClass("is-flash");
