@@ -1667,6 +1667,21 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(native.applyScheduleDraft).toHaveBeenCalledOnce());
   });
 
+  it("applies a per-run daily cap from the schedule panel without writing settings", async () => {
+    const initial: WorkspaceSnapshot = { ...structuredClone(EMPTY_WORKSPACE), tasks: [{ id: "task-cap", projectId: null, title: "长篇写作", progress: 0, status: "active", deadlineLocal: null, estimatedMinutes: null, sessionMinutes: 240, priority: "normal", sortOrder: 0, sourceUrl: null, sourceKey: null, mediaMinutes: null, kind: "task" }] };
+    const user = userEvent.setup(); const native = createNativeApi(initial); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={native} />);
+    await user.click(await screen.findByRole("button", { name: /自动排程/ }));
+    // 不限上限：240 分钟任务在晚间 19:00–22:00 里单次最多拿 180 分钟（部分安排，只显示时长不带日期）。
+    expect(await screen.findByText("180/240 分钟")).toBeInTheDocument();
+    const cap = screen.getByRole("spinbutton", { name: "每日排程时长上限，留空为不限" });
+    await user.clear(cap);
+    await user.type(cap, "60{Enter}");
+    expect(await screen.findByText("60/240 分钟")).toBeInTheDocument();
+    // 本次上限只作用于草案，不写回设置。
+    expect((backend.value as typeof DEFAULT_SETTINGS).dailyScheduleBudgetMinutes).toBeNull();
+  });
+
   it("creates a lightweight time block from the blank-time bubble", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     backend.value = { ...DEFAULT_SETTINGS, lastPage: "calendar", calendarView: "week", calendarAnchors: { ...DEFAULT_SETTINGS.calendarAnchors, week: "2026-08-05" } };
@@ -1869,14 +1884,37 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
     await user.click(screen.getByRole("radio", { name: "减少" }));
+    await user.click(screen.getByRole("button", { name: "编辑可用时间" }));
     await user.click(screen.getByRole("button", { name: /添加时段/ }));
-    expect(screen.getByRole("dialog", { name: "编辑默认时段" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "编辑可用时间" })).toBeVisible();
     // 星期改成「一个字就是整格」的按钮（aria-pressed），不再是勾选框。
     await user.click(screen.getByRole("button", { name: "周一" }));
     await user.click(screen.getByRole("button", { name: "保存时段" }));
     await waitFor(() => expect(backend.value).toMatchObject({ motion: "reduce" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots).toHaveLength(2));
     expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots[1].weekdays).not.toContain(1);
+  });
+
+  it("adds a one-hour block on an empty grid cell and deletes it from the block", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: "编辑可用时间" }));
+    // jsdom 没有真实高度，点击落在 00:00 那一格：加出来的就是 00:00–01:00。
+    await user.click(screen.getByRole("group", { name: "周一可用时间" }));
+    await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(2));
+    expect(backend.value).toMatchObject({ defaultTimeSlots: [{ start: "19:00" }, { start: "00:00", end: "01:00", weekdays: [1] }] });
+    // 块上铅笔的气泡只改时间：没有名称、时长档和星期。
+    await user.click(screen.getByRole("button", { name: "编辑 周一 00:00–01:00" }));
+    const edit = screen.getByRole("dialog", { name: "编辑时间" });
+    expect(within(edit).getByRole("button", { name: /开始时间/ })).toBeVisible();
+    expect(within(edit).getByRole("button", { name: /结束时间/ })).toBeVisible();
+    expect(within(edit).queryByLabelText("名称")).toBeNull();
+    expect(within(edit).queryByRole("button", { name: "保存时段" })).toBeNull();
+    await user.click(within(edit).getByRole("button", { name: "取消" }));
+    // 网格块上只留「×」：删除只撤掉这一天这一段，默认窗口原样保留。
+    await user.click(screen.getByRole("button", { name: "删除 周一 00:00–01:00" }));
+    await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(1));
   });
 
   /**
