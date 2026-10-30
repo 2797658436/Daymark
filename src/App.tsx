@@ -37,9 +37,9 @@ import { resolveScheduleWindow, windowEndDate, type ScheduleWindowMode } from ".
 import { buildSchedulePlan, type ScheduleAllocation, type ScheduleItem, type ScheduleUnscheduledItem } from "./lib/scheduling";
 import { scheduleUnscheduledText } from "./lib/scheduleReasons";
 import {
-  addAvailability, AVAILABILITY_BANDS, availabilityBlocks, availabilityFoldBands, availabilityMinuteAt, availabilityOffset,
-  availabilitySpan, availabilityVisibleHours, AVAILABILITY_PRESETS, moveAvailability, presetAvailability, removeAvailability, snapMinute,
-  type AvailabilityBandId, type AvailabilityBlock, type AvailabilityOffset, type AvailabilitySnap,
+  addAvailability, availabilityBlocks, availabilityFolds, availabilityMinuteAt, availabilityOffset, availabilitySpan,
+  availabilityVisibleHours, AVAILABILITY_PRESETS, moveAvailability, presetAvailability, removeAvailability, snapMinute,
+  type AvailabilityBlock, type AvailabilityOffset, type AvailabilitySnap,
 } from "./lib/availability";
 import { DEFAULT_DEADLINE_FILTER, type DeadlineFilter } from "./lib/deadlines";
 import { carryOverTasks, createWorkspaceIndex, isPendingReview, isPendingReviewIn, isTaskCompleted, milestoneReached, milestoneSummary, orderedMilestoneTasks, projectProgress, projectTasksOf, type WorkspaceIndex } from "./lib/workspaceSelectors";
@@ -3903,11 +3903,6 @@ function availabilityClock(minute: number) {
  * 两种重量分开累计，所以拖动滑块（改 `--ah`）时折带不会跟着变高，
  * 而被折起的时段里的块仍是一条连续的整块。
  */
-/** 时段分组的边界：`minutesTime(1440)` 会折回 00:00，而「深夜 22:00–24:00」要能读成 24:00。 */
-function availabilityBandRange(start: number, end: number) {
-  return `${minutesTime(start)}–${end >= 1440 ? "24:00" : minutesTime(end)}`;
-}
-
 function availabilityLength(offset: AvailabilityOffset) {
   return `calc(var(--ah) * ${offset.hours} + var(--band) * ${offset.strips})`;
 }
@@ -3927,8 +3922,8 @@ function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
 }) {
   const snap: AvailabilitySnap = snapMinutes === "off" ? 0 : snapMinutes;
   const blocks = useMemo(() => availabilityBlocks(slots), [slots]);
-  /** 折起的时段（下拉里取消勾选的那几段）。空数组＝整天铺开。 */
-  const [hidden, setHidden] = useState<AvailabilityBandId[]>([]);
+  /** 折起的整点（下拉里取消勾选的那些小时）。空数组＝整天铺开。 */
+  const [hidden, setHidden] = useState<number[]>([]);
   const [bandsAnchor, setBandsAnchor] = useState<HTMLElement | null>(null);
   const [hover, setHover] = useState<{ weekday: number; hour: number } | null>(null);
   const [drag, setDrag] = useState<null | { slotId: string; weekday: number; edge: "move" | "top" | "bottom"; start: number; end: number }>(null);
@@ -3938,7 +3933,7 @@ function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
   const suppressClick = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const folds = availabilityFoldBands(hidden);
+  const folds = availabilityFolds(hidden);
   const hourMarks = availabilityVisibleHours(hidden);
   /** 折带相对一小时的比例：指针换回分钟时要和 `--ah` / `--band` 用同一组重量。 */
   const bandWeight = AVAILABILITY_FOLD_REM / hourRem;
@@ -3947,7 +3942,7 @@ function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
   const dayNames = ["日", "一", "二", "三", "四", "五", "六"];
   const topOf = (minute: number) => availabilityLength(availabilityOffset(minute, hidden));
   const spanOf = (start: number, end: number) => availabilityLength(availabilitySpan(start, end, hidden));
-  const toggleBand = (id: AvailabilityBandId) => setHidden((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
+  const toggleHour = (hour: number) => setHidden((prev) => prev.includes(hour) ? prev.filter((item) => item !== hour) : [...prev, hour]);
 
   // 打开时从 07:00 起看：首屏落在常用时段，而不是一整屏空白的凌晨。留 16px 让刻度不被裁。
   useEffect(() => {
@@ -3963,7 +3958,7 @@ function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
     return Math.min(1439, snapMinute(availabilityMinuteAt(ratio, hidden, bandWeight), snap));
   };
   const hourFrom = (node: HTMLElement, clientY: number) => Math.floor(minuteFrom(node, clientY) / 60);
-  const foldedHour = (hour: number) => folds.some((band) => hour >= band.start && hour < band.end);
+  const foldedHour = (hour: number) => hidden.includes(hour);
   const columnOf = (node: Element) => node.closest<HTMLElement>(".availability-day");
   // 只更新「＋」落在哪一格；拖动块、或指针压在块上时不出「＋」。
   const dayMove = (weekday: number) => (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -4053,39 +4048,40 @@ function AvailabilityWeekGrid({ slots, snapMinutes, hourRem, onChange }: {
               <button type="button" className="availability-handle is-top" aria-label={`调整 周${dayNames[weekday]} ${block.start} 开始时间`} onPointerDown={beginDrag(block, "top")} onClick={(event) => event.stopPropagation()} />
               <span className="availability-block-body">
                 {!compact && <span className="availability-block-name" title={block.label}>{block.label}</span>}
-                <span className="availability-block-time">{availabilityClock(start)}–{availabilityClock(end)}</span>
                 <span className="availability-block-actions">
-                  <button type="button" className="availability-block-btn is-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} title="编辑名称、时间与星期" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSlotEdit({ slotId: block.slotId, anchor: event.currentTarget }); }}><Pencil size={13} aria-hidden="true" /></button>
-                  <button type="button" className="availability-block-btn is-delete" aria-label={`删除 周${dayNames[weekday]} ${block.start}–${block.end}`} title="删除这一天这一段" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChange(removeAvailability(slots, weekday, block.start, block.end)); }}><X size={13} aria-hidden="true" /></button>
+                  <button type="button" className="availability-block-btn is-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} title="编辑名称、时间与星期" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSlotEdit({ slotId: block.slotId, anchor: event.currentTarget }); }}><Pencil size={12} aria-hidden="true" /></button>
+                  <button type="button" className="availability-block-btn is-delete" aria-label={`删除 周${dayNames[weekday]} ${block.start}–${block.end}`} title="删除这一天这一段" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChange(removeAvailability(slots, weekday, block.start, block.end)); }}><X size={12} aria-hidden="true" /></button>
                 </span>
+                <span className="availability-block-time">{availabilityClock(start)}–{availabilityClock(end)}</span>
               </span>
               <button type="button" className="availability-handle is-bottom" aria-label={`调整 周${dayNames[weekday]} ${block.end} 结束时间`} onPointerDown={beginDrag(block, "bottom")} onClick={(event) => event.stopPropagation()} />
             </div>;
           })}
-          {/* 悬停在空白格：一条横向虚线标出这一小时的位置，「＋」落在线的起点（时间开头）。 */}
+          {/* 悬停在空白格：一条贯穿整列的横向虚线标出这一小时，「＋ 09:00」徽标居中压在线上。 */}
           {hover && hover.weekday === weekday && !drag && <span className="availability-hover" aria-hidden="true" style={{ top: topOf(hover.hour * 60) }}>
-            <span className="availability-hover-chip"><Plus size={11} aria-hidden="true" />{String(hover.hour).padStart(2, "0")}:00</span>
             <span className="availability-hover-line" />
+            <span className="availability-hover-chip"><Plus size={11} aria-hidden="true" />{String(hover.hour).padStart(2, "0")}:00</span>
           </span>}
         </div>)}
         {/* 折起的时段：一条带子横跨整行，左边带一个展开把子。块在它上面，跨过去仍是一整块。 */}
-        {folds.map((band) => <span key={band.id} className="availability-fold" style={{ top: topOf(band.start * 60), height: spanOf(band.start * 60, band.end * 60) }}>
-          <button type="button" className="availability-fold-btn" aria-label={`展开${band.label} ${availabilityBandRange(band.start * 60, band.end * 60)}`} title={`展开${band.label}`}
-            onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); toggleBand(band.id); }}><ChevronRight size={12} aria-hidden="true" /></button>
+        {folds.map((fold) => <span key={fold.start} className="availability-fold" style={{ top: topOf(fold.start * 60), height: spanOf(fold.start * 60, fold.end * 60) }}>
+          <button type="button" className="availability-fold-btn" aria-label={`展开 ${minutesTime(fold.start * 60)}–${minutesTime(fold.end * 60)}`} title={`展开 ${minutesTime(fold.start * 60)}–${minutesTime(fold.end * 60)}`}
+            onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setHidden((prev) => prev.filter((hour) => hour < fold.start || hour >= fold.end)); }}><ChevronRight size={12} aria-hidden="true" /></button>
         </span>)}
       </div>
     </div>
     {bandsAnchor && <FloatingPanel label="显示时段" anchorElement={bandsAnchor} kind="action" closeOnOutsideClick onClose={() => setBandsAnchor(null)}>
       <div className="availability-bands-panel">
         <h2>显示时段</h2>
-        {AVAILABILITY_BANDS.map((band) => {
-          const shown = !hidden.includes(band.id);
-          return <label key={band.id} className={shown ? "availability-band-row" : "availability-band-row is-off"}>
-            <input type="checkbox" checked={shown} onChange={() => toggleBand(band.id)} />
-            <span className="availability-band-time">{availabilityBandRange(band.start * 60, band.end * 60)}</span>
-            <span className="availability-band-name">{band.label}</span>
-          </label>;
-        })}
+        <div className="availability-hours-list">
+          {Array.from({ length: 24 }, (_, hour) => {
+            const shown = !hidden.includes(hour);
+            return <label key={hour} className={shown ? "availability-hour-row" : "availability-hour-row is-off"}>
+              <input type="checkbox" checked={shown} onChange={() => toggleHour(hour)} />
+              <span>{String(hour).padStart(2, "0")}:00</span>
+            </label>;
+          })}
+        </div>
       </div>
     </FloatingPanel>}
     {slotEdit && editingSlot && <FloatingPanel label="编辑可用时间" anchorElement={slotEdit.anchor} closeOnOutsideClick onClose={() => setSlotEdit(null)}>
@@ -4180,10 +4176,11 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
         <div className="availability-modal-head">
           <h2 id="availability-title">可用时间</h2>
           <span className="availability-modal-actions">
-            {/* 纵向缩放：只改这一次查看的每小时高度，不写设置。 */}
-            <input className="availability-zoom" type="range" aria-label="网格纵向高度" title="网格纵向高度"
-              min={AVAILABILITY_HOUR_REM_RANGE[0]} max={AVAILABILITY_HOUR_REM_RANGE[1]} step={0.25}
-              value={availabilityHourRem} onChange={(event) => setAvailabilityHourRem(Number(event.target.value))} />
+            {/* 纵向缩放：沿用设置页那条 `.range-bar`，只改这一次查看的每小时高度，不写设置。 */}
+            <span className="availability-zoom">
+              <RangeBar label="网格纵向高度" compact min={AVAILABILITY_HOUR_REM_RANGE[0]} max={AVAILABILITY_HOUR_REM_RANGE[1]} step={0.25}
+                value={availabilityHourRem} onChange={setAvailabilityHourRem} formatValue={(value) => `每小时 ${value}rem`} />
+            </span>
             <Button variant="secondary" onClick={(event) => addSlot(event.currentTarget)}><Plus size={16} />添加时段</Button>
             <Button onClick={() => setAvailabilityOpen(false)}>完成</Button>
           </span>

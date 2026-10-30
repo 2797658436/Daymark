@@ -92,24 +92,6 @@ export function snapMinute(minute: number, snap: AvailabilitySnap): number {
 }
 
 /**
- * 一天按用途切成的 7 段：网格左侧「显示时段」下拉与折叠条共用这一份定义。
- *
- * 分组不求语义精确（没有统一的「中午」边界），只求**每段都短到值得折起、长到不至于折成碎渣**：
- * 每段 2–6 小时，24 小时恰好铺满、不重叠。
- */
-export const AVAILABILITY_BANDS = [
-  { id: "dawn", label: "凌晨", start: 0, end: 6 },
-  { id: "morning", label: "早上", start: 6, end: 9 },
-  { id: "forenoon", label: "上午", start: 9, end: 12 },
-  { id: "noon", label: "中午", start: 12, end: 14 },
-  { id: "afternoon", label: "下午", start: 14, end: 18 },
-  { id: "evening", label: "晚间", start: 18, end: 22 },
-  { id: "late", label: "深夜", start: 22, end: 24 },
-] as const;
-
-export type AvailabilityBandId = (typeof AVAILABILITY_BANDS)[number]["id"];
-
-/**
  * 网格纵向走了多远，用两种重量表达：
  * `hours` = 铺开的小时数（每小时记 1），`strips` = 折起的窄带条数（每条记 1）。
  * 渲染时乘成 `calc(var(--ah) * hours + var(--band) * strips)` —— 折带的高度与小时高度
@@ -120,18 +102,47 @@ export interface AvailabilityOffset {
   strips: number;
 }
 
-/** 某个分钟在网格纵向上走到哪：被折起的时段压成一条窄带，不再按小时铺开。 */
-export function availabilityOffset(minute: number, hidden: readonly AvailabilityBandId[] = []): AvailabilityOffset {
+/** 折起的一整段：连续被隐藏的小时并成一条带子（只在布局里合并，勾选仍然是逐小时的）。 */
+export interface AvailabilityFold {
+  start: number;
+  end: number;
+}
+
+/**
+ * 把逐小时被隐藏的集合整理成「一段一段」的折带。
+ *
+ * 勾选列表是一小时一行、不合并；但布局上连着隐藏的 8 个小时如果各占一条 24px 的带子，
+ * 就会在本来想省空间的地方反而撑出 192px —— 所以这里把相邻的小时并成**一条**带子。
+ */
+export function availabilityFolds(hidden: readonly number[]): AvailabilityFold[] {
+  const set = new Set(hidden);
+  const folds: AvailabilityFold[] = [];
+  for (let hour = 0; hour < 24; hour += 1) {
+    if (!set.has(hour)) continue;
+    const last = folds.at(-1);
+    if (last && last.end === hour) last.end = hour + 1;
+    else folds.push({ start: hour, end: hour + 1 });
+  }
+  return folds;
+}
+
+/** 某个分钟在网格纵向上走到哪：被折起的小时压进折带，不再按小时铺开。 */
+export function availabilityOffset(minute: number, hidden: readonly number[] = []): AvailabilityOffset {
   const clamped = Math.max(0, Math.min(1440, minute));
+  const set = new Set(hidden);
   let hours = 0;
-  let strips = 0;
-  for (const band of AVAILABILITY_BANDS) {
-    const from = band.start * 60;
-    const to = band.end * 60;
+  for (let hour = 0; hour < 24; hour += 1) {
+    const from = hour * 60;
     if (clamped <= from) break;
-    const walked = Math.min(clamped, to) - from;
-    if (hidden.includes(band.id)) strips += walked / (to - from);
-    else hours += walked / 60;
+    if (set.has(hour)) continue;
+    hours += (Math.min(clamped, from + 60) - from) / 60;
+  }
+  let strips = 0;
+  for (const fold of availabilityFolds(hidden)) {
+    const from = fold.start * 60;
+    const to = fold.end * 60;
+    if (clamped <= from) break;
+    strips += Math.min(1, (clamped - from) / (to - from));
   }
   return { hours, strips };
 }
@@ -139,24 +150,19 @@ export function availabilityOffset(minute: number, hidden: readonly Availability
 /**
  * 两点之间的纵向差（块的 `top` 与 `height`）。
  *
- * 关键性质：块跨过一个被折起的时段时，差里会多出一条折带、但不出现断口 ——
- * 11:00–13:00 即使 12:00 所在的「中午」折起来了，仍然是一整块。
+ * 关键性质：块跨过折带时，差里会多出一条折带、但不出现断口 ——
+ * 11:00–13:00 即使 12:00 那一小时折起来了，仍然是一整块。
  */
-export function availabilitySpan(start: number, end: number, hidden: readonly AvailabilityBandId[] = []): AvailabilityOffset {
+export function availabilitySpan(start: number, end: number, hidden: readonly number[] = []): AvailabilityOffset {
   const from = availabilityOffset(start, hidden);
   const to = availabilityOffset(end, hidden);
   return { hours: to.hours - from.hours, strips: to.strips - from.strips };
 }
 
-/** 可见的整点小时（0..23），折起的时段整段不出现。 */
-export function availabilityVisibleHours(hidden: readonly AvailabilityBandId[] = []): number[] {
-  return AVAILABILITY_BANDS.filter((band) => !hidden.includes(band.id))
-    .flatMap((band) => Array.from({ length: band.end - band.start }, (_, index) => band.start + index));
-}
-
-/** 折起的时段，按时间顺序；渲染成轨道上的一条窄带。 */
-export function availabilityFoldBands(hidden: readonly AvailabilityBandId[] = []) {
-  return AVAILABILITY_BANDS.filter((band) => hidden.includes(band.id));
+/** 可见的整点小时（0..23），折起的整点不出现。 */
+export function availabilityVisibleHours(hidden: readonly number[] = []): number[] {
+  const set = new Set(hidden);
+  return Array.from({ length: 24 }, (_, hour) => hour).filter((hour) => !set.has(hour));
 }
 
 /**
@@ -164,17 +170,29 @@ export function availabilityFoldBands(hidden: readonly AvailabilityBandId[] = []
  *
  * 与 `availabilityOffset` 严格互逆（同一组重量、同一遍遍历），否则拖动的落点会跟块的画法对不上。
  */
-export function availabilityMinuteAt(ratio: number, hidden: readonly AvailabilityBandId[] = [], bandWeight = 0.25): number {
-  const totalWeight = AVAILABILITY_BANDS.reduce((sum, band) => sum + (hidden.includes(band.id) ? bandWeight : band.end - band.start), 0);
+export function availabilityMinuteAt(ratio: number, hidden: readonly number[] = [], bandWeight = 0.25): number {
+  const set = new Set(hidden);
+  const folds = availabilityFolds(hidden);
+  const segments: Array<{ start: number; end: number; weight: number }> = [];
+  for (let hour = 0; hour < 24;) {
+    if (!set.has(hour)) {
+      segments.push({ start: hour * 60, end: (hour + 1) * 60, weight: 1 });
+      hour += 1;
+      continue;
+    }
+    const fold = folds.find((item) => item.start === hour)!;
+    segments.push({ start: fold.start * 60, end: fold.end * 60, weight: bandWeight });
+    hour = fold.end;
+  }
+  const totalWeight = segments.reduce((sum, segment) => sum + segment.weight, 0);
   const target = Math.max(0, Math.min(1, ratio)) * totalWeight;
   let walked = 0;
-  for (const band of AVAILABILITY_BANDS) {
-    const weight = hidden.includes(band.id) ? bandWeight : band.end - band.start;
-    if (target <= walked + weight) {
-      const inside = weight === 0 ? 0 : (target - walked) / weight;
-      return (band.start + inside * (band.end - band.start)) * 60;
+  for (const segment of segments) {
+    if (target <= walked + segment.weight) {
+      const inside = segment.weight === 0 ? 0 : (target - walked) / segment.weight;
+      return segment.start + inside * (segment.end - segment.start);
     }
-    walked += weight;
+    walked += segment.weight;
   }
   return 1440;
 }
