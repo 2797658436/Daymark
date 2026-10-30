@@ -559,7 +559,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
   /**
    * 松手时问一次「要不要先确认」——两条业务规则都在这里，状态机只负责停在 `deciding`：
    * ① 落点在时间块中央（§185/186）：三个选项，「仍然安排」只覆盖本次；
-   * ② 插入把别的安排推出了默认时段或推到新日期（§187/188）：确认才提交。
+   * ② 插入把别的安排推出了可用时间窗口或推到新日期（§187/188）：确认才提交。
    *
    * B3 起改时长走同两条规则（§189 后半／§197／D12），两处判据换了对象：
    * 时间块看**拉长后的区间**覆盖了谁（不是指针位置 —— 拖底边时指针一直在卡片下缘），
@@ -579,7 +579,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
         resizeDuration: resizing ? preview.duration : null,
       };
     }
-    // 「越出默认时段」只在**日视图的默认时段模式**里成立：那是唯一把非默认时段折成 44px 带子的
+    // 「越出可用时间」只在**日视图的可用时间模式**里成立：那是唯一把非可用时间折成 44px 带子的
     // 视图，被推出去的安排当场就看不见了，才需要确认。周视图与全天模式全程可见，
     // 再问一次只是把每一次插入都变成两步（§188「没有跨时段的普通插入直接提交」）。
     const foldsDefaultSlots = preferences.calendarView === "day" && preferences.calendarDayMode === "defaultSlots";
@@ -854,7 +854,7 @@ function AppShell({ settings: injectedSettings, native: injectedNative }: AppPro
               ? "仍然安排会与时间块重叠；时间块与任务各自独立，不会合并数据。"
               : decision.reason === "cross-day"
                 ? `它们会被推到 ${decision.dates.map(formatShortDate).join("、")}。`
-                : "它们会被推出默认时段。"}</p>
+                : "它们会被推出可用时间。"}</p>
             <div className="drag-decision-actions">
               {decision.kind === "block" ? <>
                 <button type="button" className="button-primary" onClick={dragSession.confirmDecision}>仍然安排</button>
@@ -1624,7 +1624,7 @@ function CalendarPage({ workspace, index, preferences, focusSessionId, onPrefere
     />
     {preferences.calendarView === "day" && <div className="calendar-toolbar" role="group" aria-label="日历显示选项">
       <div className="calendar-status-start">
-        <div className="segmented calendar-day-mode" role="group" aria-label="日视图显示模式">{([["defaultSlots", "默认时段"], ["fullDay", "全天"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} disabled={value === "defaultSlots" && defaultSlotsEmpty} title={value === "defaultSlots" && defaultSlotsEmpty ? "先在设置里添加默认时段" : undefined} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>
+        <div className="segmented calendar-day-mode" role="group" aria-label="日视图显示模式">{([["defaultSlots", "可用时间"], ["fullDay", "全天"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={preferences.calendarDayMode === value} className={preferences.calendarDayMode === value ? "active" : ""} disabled={value === "defaultSlots" && defaultSlotsEmpty} title={value === "defaultSlots" && defaultSlotsEmpty ? "先在设置里标出可用时间" : undefined} onClick={() => onPreferences({ calendarDayMode: value })}>{label}</button>)}</div>
         {zoomControl}
       </div>
       <div className="calendar-status-end">
@@ -1848,7 +1848,7 @@ function DayCalendarGrid({ date, workspace, index, preferences, now, focusSessio
       currentMinute: isToday ? now.getHours() * 60 + now.getMinutes() : null,
     });
   }, [currentSessionRanges, date, focusedSessionRanges, isToday, now, preferences.calendarDayMode, workspace.executionRecords, workspace.executionSessions, workspace.timeBlocks]);
-  // 设置里没有默认时段时，defaultSlots 会整天塌成一条折叠带（calendarTimeline.ts 的补集逻辑）；
+  // 设置里没有可用时间窗口时，defaultSlots 会整天塌成一条折叠带（calendarTimeline.ts 的补集逻辑）；
   // 这里按 fullDay 渲染兜底，偏好值不改写 —— 用户补回时段后自动恢复默认时段渲染（C1／#1）。
   // 判据只看设置里的整份列表：只有某天没有时段（如周末）是原本就有的折叠语义，不在本包范围。
   const defaultsCollapsed = preferences.calendarDayMode === "defaultSlots" && preferences.defaultTimeSlots.length === 0;
@@ -2170,7 +2170,7 @@ function CalendarDay({ date, workspace, index, preferences, now, timeline, expan
         </div>;
       })}
       {dragExpandedGapKey && timeline && (() => { const gap = timelineRangeFromKey(dragExpandedGapKey); return gap ? <div aria-hidden="true" className="drag-expanded-region" style={{ top: `${timeline.offsetAtMinute(gap.start)}px`, height: `${timeline.offsetAtMinute(gap.end) - timeline.offsetAtMinute(gap.start)}px` }} /> : null; })()}
-      {[...(expandedGapKeys ?? [])].map((key) => { const gap = timelineRangeFromKey(key); return gap && timeline ? <button key={key} className="expanded-gap-toggle" aria-label={`收起 ${boundaryTime(gap.start)}–${boundaryTime(gap.end)}`} style={{ top: `${timeline.offsetAtMinute(gap.start)}px` }} onClick={() => onToggleGap?.(key)}>{effectiveDay ? (gap.start === 0 ? "收起凌晨" : gap.start >= 1380 ? "收起深夜" : "收起非默认时段") : "收起非默认时段"}</button> : null; })}
+      {[...(expandedGapKeys ?? [])].map((key) => { const gap = timelineRangeFromKey(key); return gap && timeline ? <button key={key} className="expanded-gap-toggle" aria-label={`收起 ${boundaryTime(gap.start)}–${boundaryTime(gap.end)}`} style={{ top: `${timeline.offsetAtMinute(gap.start)}px` }} onClick={() => onToggleGap?.(key)}>{effectiveDay ? (gap.start === 0 ? "收起凌晨" : gap.start >= 1380 ? "收起深夜" : "收起非可用时间") : "收起非可用时间"}</button> : null; })}
       {isToday && <><div className="calendar-past-region" aria-hidden="true" style={timeline ? { height: `${timeline.offsetAtMinute(nowMinute)}px` } : { height: `${nowMinute / 1440 * 100}%` }} /><div className="calendar-now-line" data-now-marker style={timeline ? { top: `${timeline.offsetAtMinute(nowMinute)}px` } : { top: `${nowMinute / 1440 * 100}%` }}><time>{formatLocalClock(now)}</time></div></>}
       {defaultSlots.map((slot) => { const style = timeline ? timeline.positionForRange(slot.start, slot.end) : positionStyle(slot.start, slot.end); return style ? <div key={slot.id} className="default-slot" style={style}><span>{slot.label}</span></div> : null; })}
       {blankHoverMinute !== null && !blankRange && !activePreview && <div className="blank-hover-cue" aria-hidden="true" style={{ top: timeline ? `${timeline.offsetAtMinute(blankHoverMinute)}px` : `${blankHoverMinute / 1440 * 100}%` }}><Plus size={14} /><time>{minutesTime(blankHoverMinute)}</time></div>}
@@ -2592,7 +2592,7 @@ function TimeBlockEditor({ initial, onCancel, onCreate, onPhase }: {
   });
   const { draft, patchDraft, busy, error } = session;
   const duration = clockDuration(draft.startLocal, draft.endLocal);
-  // 与默认时段同一套「从开始往后推」的时长按钮：比先改开始再改结束少一半操作。
+  // 与可用时间同一套「从开始往后推」的时长按钮：比先改开始再改结束少一半操作。
   const setDuration = (minutes: number) => patchDraft({ endLocal: minutesTime(timeMinutes(draft.startLocal) + minutes) });
   return <form aria-busy={busy} className="time-block-form" onSubmit={(event) => { event.preventDefault(); void session.save(); }}>
     <label>标题<input autoFocus value={draft.title} onChange={(event) => patchDraft({ title: event.target.value })} placeholder="会议、通勤或休息" /></label>
@@ -2648,7 +2648,7 @@ function HabitEditor({ onCancel, onCreate, onPhase }: {
 }
 
 /**
- * 默认时段编辑器（P4-03）。
+ * 可用时间窗口编辑器（P4-03；2026-10-29 正名）。
  *
  * 偏好写入仍走 `onChange`，不引入新的保存协议；这里只统一草稿、提交互斥与失败保留。
  * 时段为空数组是有效的用户选择，因此「删除」不经过本编辑器。
@@ -3701,9 +3701,9 @@ function SchedulePanel({ workspace, index, preferences, target, onClose, onOpenS
         {zeroSlots
           ? <div className="schedule-empty">
             <span><CalendarDays size={20} aria-hidden="true" /></span>
-            <strong>还没有默认时段</strong>
-            <p>自动排程只在默认时段里找空档；先去设置里加一段能用的时间。</p>
-            <div className="schedule-empty-actions"><Button variant="primary" onClick={onOpenSettings}>去设置默认时段</Button><Button onClick={onClose}>关闭</Button></div>
+            <strong>还没有可用时间</strong>
+            <p>自动排程只在可用时间里找空档；先去设置里标出你能用的时段。</p>
+            <div className="schedule-empty-actions"><Button variant="primary" onClick={onOpenSettings}>去标记可用时间</Button><Button onClick={onClose}>关闭</Button></div>
           </div>
           : <>
             {filtering && <div className="schedule-hint">
@@ -3860,15 +3860,30 @@ const MOTION_OPTIONS: Array<{ value: AppSettings["motion"]; label: string }> = [
 const [CHECK_IN_GRACE_MIN, CHECK_IN_GRACE_MAX] = CHECK_IN_GRACE_MINUTES_RANGE;
 const [MINIMUM_SESSION_MIN, MINIMUM_SESSION_MAX] = MINIMUM_SESSION_MINUTES_RANGE;
 
-const AVAILABILITY_HOUR_REM = 2.25;
+/** 每小时的高度：2.75rem = 44px，正好是命中区下限 —— 1 小时的窗口块本身就是 44px 高的拖动面。 */
+const AVAILABILITY_HOUR_REM = 2.75;
 const AVAILABILITY_ADD_MINUTES = 60;
 const AVAILABILITY_MIN_MINUTES = 15;
+
+/**
+ * 块内的时间写法：省掉小时的前导零与整点的 `:00`（`9–11:30`／`19–22`）。
+ *
+ * 完整形态 `09:00–11:30` 是 11 个字符，12px 等宽数字约 66px；块在 200% 缩放下
+ * 扣掉两个动作按钮只剩 55px，放不下就会裁字 —— 而字号不能再往下缩（UI-SPEC 的
+ * 12px 下限）。压缩到 8 个字符后最窄的块也读得全。完整起止仍在 `aria-label` 里。
+ */
+function availabilityClock(minute: number) {
+  const hour = Math.floor(minute / 60);
+  const rest = minute % 60;
+  return rest === 0 ? String(hour) : `${hour}:${String(rest).padStart(2, "0")}`;
+}
 
 /**
  * 「可用时间」周网格：7 天 × 24 小时。指针停在哪一格，就有一枚居中的「+」，点一下给那天加一段 1 小时；
  * 块和日历页的时间块一样：整块上下拖动改时间，上下拖手改起止，右上角「×」删除。
  * 「同段多天合并／拖出单天」由 `addAvailability` / `moveAvailability` 负责。
- * 指针输入为主；键盘与精确到分钟走弹窗里的列表（网格本身不承担键盘操作）。
+ * 块内两行：上面是窗口名（列表里的那个名字），下面是时间与两个动作（铅笔＝只改这一天的时间、
+ * ×＝删除这一天这一段）。指针输入为主；键盘与精确到分钟走弹窗里的列表（网格本身不承担键盘操作）。
  */
 function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
   slots: DefaultTimeSlot[]; snapMinutes: AppSettings["snapMinutes"]; onChange: (next: DefaultTimeSlot[]) => void;
@@ -3975,11 +3990,14 @@ function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
               onPointerDown={(event) => { if (!(event.target as HTMLElement).closest("button")) beginDrag(block, "move")(event); }}
               onClick={(event) => event.stopPropagation()}>
               <button type="button" className="availability-handle is-top" aria-label={`调整 周${dayNames[weekday]} ${block.start} 开始时间`} onPointerDown={beginDrag(block, "top")} onClick={(event) => event.stopPropagation()} />
-              <span className="availability-block-row">
-                <span className="availability-block-time">{minutesTime(start)}–{minutesTime(end)}</span>
-                {!compact && <button type="button" className="availability-block-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setTimeEdit({ weekday, start: block.start, end: block.end, anchor: event.currentTarget }); }}><Pencil size="1em" aria-hidden="true" /></button>}
+              <span className="availability-block-body">
+                {!compact && <span className="availability-block-name" title={block.label}>{block.label}</span>}
+                <span className="availability-block-time">{availabilityClock(start)}–{availabilityClock(end)}</span>
+                <span className="availability-block-actions">
+                  <button type="button" className="availability-block-btn is-edit" aria-label={`编辑 周${dayNames[weekday]} ${block.start}–${block.end}`} title="只改这一天的时间" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setTimeEdit({ weekday, start: block.start, end: block.end, anchor: event.currentTarget }); }}><Pencil size={13} aria-hidden="true" /></button>
+                  <button type="button" className="availability-block-btn is-delete" aria-label={`删除 周${dayNames[weekday]} ${block.start}–${block.end}`} title="删除这一天这一段" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChange(removeAvailability(slots, weekday, block.start, block.end)); }}><X size={13} aria-hidden="true" /></button>
+                </span>
               </span>
-              <button type="button" className="availability-block-btn is-delete" aria-label={`删除 周${dayNames[weekday]} ${block.start}–${block.end}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChange(removeAvailability(slots, weekday, block.start, block.end)); }}><X size="1em" aria-hidden="true" /></button>
               <button type="button" className="availability-handle is-bottom" aria-label={`调整 周${dayNames[weekday]} ${block.end} 结束时间`} onPointerDown={beginDrag(block, "bottom")} onClick={(event) => event.stopPropagation()} />
             </div>;
           })}
@@ -3987,7 +4005,7 @@ function AvailabilityWeekGrid({ slots, snapMinutes, onChange }: {
         </div>)}
       </div>
     </div>
-    <p className="availability-hint">点一下空白格＝加一段 1 小时空闲；拖动块可移动，拖上下边缘改起止。同一段跨多天时拖动只改那一天。</p>
+    <p className="availability-hint">点一下格子＝加一段 1 小时空闲；拖动块可移动，拖上下边缘改起止。块上铅笔只改这一天的时间，× 删除这一天这一段。同一段跨多天时拖动只改那一天。</p>
     {timeEdit && <FloatingPanel label="编辑时间" className="availability-time-panel" anchorElement={timeEdit.anchor} closeOnOutsideClick onClose={() => setTimeEdit(null)}>
       <AvailabilityTimeEditor dayLabel={`周${dayNames[timeEdit.weekday]}`} start={timeEdit.start} end={timeEdit.end}
         onCancel={() => setTimeEdit(null)}
@@ -4070,8 +4088,8 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
       </SettingsRow>
     </SettingsSection>
     <SettingsSection icon={<Clock3 />} title="时间与排程">
-      <SettingsRow label="日视图默认显示" note="选择「默认时段」时，其他时间会折叠起来。" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
-        <SettingsChoice label="日视图默认显示" name="calendar-day-mode" value={preferences.calendarDayMode} onChange={(calendarDayMode) => onChange({ calendarDayMode })} options={[{ value: "defaultSlots", label: "默认时段" }, { value: "fullDay", label: "全天" }]} />
+      <SettingsRow label="日视图默认显示" note="选择「可用时间」时，其他时间会折叠起来。" modified={changed("calendarDayMode")} onReset={() => onChange({ calendarDayMode: DEFAULT_SETTINGS.calendarDayMode })}>
+        <SettingsChoice label="日视图默认显示" name="calendar-day-mode" value={preferences.calendarDayMode} onChange={(calendarDayMode) => onChange({ calendarDayMode })} options={[{ value: "defaultSlots", label: "可用时间" }, { value: "fullDay", label: "全天" }]} />
       </SettingsRow>
       <SettingsRow label="可用时间" note="自动排程只在这些窗口里安排；点「编辑」在周网格上标出空闲段。" modified={JSON.stringify(slots) !== JSON.stringify(DEFAULT_SETTINGS.defaultTimeSlots)} onReset={() => onChange({ defaultTimeSlots: structuredClone(DEFAULT_SETTINGS.defaultTimeSlots) })}>
         <Button variant="secondary" onClick={() => setAvailabilityOpen(true)}><CalendarDays size={16} />编辑可用时间</Button>
@@ -4108,7 +4126,7 @@ function SettingsPage({ preferences, onChange, native }: { preferences: AppSetti
   </section>;
 }
 
-/** 默认时段的常用时长（分钟）。最后一档之外的走「自定义」。 */
+/** 可用时间的常用时长（分钟）。最后一档之外的走「自定义」。 */
 const SLOT_DURATION_CHOICES = [[30, "30 分"], [45, "45 分"], [60, "1 小时"], [90, "1.5 小时"], [120, "2 小时"]] as const;
 
 function durationLabel(minutes: number) {

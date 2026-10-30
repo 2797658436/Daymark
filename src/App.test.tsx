@@ -683,9 +683,9 @@ describe("phase 1 manual alpha", () => {
       };
       render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
 
-      const slotsMode = await screen.findByRole("button", { name: "默认时段" });
+      const slotsMode = await screen.findByRole("button", { name: "可用时间" });
       expect(slotsMode).toBeDisabled();
-      expect(slotsMode).toHaveAttribute("title", "先在设置里添加默认时段");
+      expect(slotsMode).toHaveAttribute("title", "先在设置里标出可用时间");
       expect(slotsMode).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByRole("button", { name: "全天" })).not.toBeDisabled();
       // 兜底：按 fullDay 渲染，不再整天塌成一条 44px 折叠带；偏好值原样保留。
@@ -949,7 +949,7 @@ describe("phase 1 manual alpha", () => {
       stubRect(target, { top: 100, bottom: 144, height: 44 });
     };
     try {
-      expect(await screen.findByRole("button", { name: "默认时段" })).toHaveAttribute("aria-pressed", "true");
+      expect(await screen.findByRole("button", { name: "可用时间" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByText("当前窗口任务", { selector: ".calendar-session strong" })).toBeVisible();
       expect(screen.queryByText("折叠区任务", { selector: ".calendar-session strong" })).not.toBeInTheDocument();
       const folded = screen.getByRole("button", { name: "09:00–19:00 · 2 项安排" });
@@ -1694,7 +1694,7 @@ describe("phase 1 manual alpha", () => {
     const bubble = screen.getByRole("dialog", { name: "空白时段操作" });
     await user.click(within(bubble).getByRole("button", { name: "时间块" }));
 
-    // 时间块表单与默认时段共用 TimeField；三种时间表单都不再出现原生时间输入。
+    // 时间块表单与可用时间共用 TimeField；三种时间表单都不再出现原生时间输入。
     expect([...bubble.querySelectorAll("input")].some((input) => input.type === "time")).toBe(false);
     await user.type(within(bubble).getByRole("textbox", { name: "标题" }), "午休");
     expect(within(bubble).getByRole("button", { name: "开始时间 10:00" })).toBeVisible();
@@ -1780,7 +1780,7 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi(structuredClone(EMPTY_WORKSPACE))} />);
     await user.click(await screen.findByRole("button", { name: /新建重复习惯/ }));
     const dialog = await screen.findByRole("dialog", { name: "新建重复习惯" });
-    // 和「默认时段」「设置」用同一个 `TimeField`：不再有原生时间输入。
+    // 和「可用时间」「设置」用同一个 `TimeField`：不再有原生时间输入。
     expect([...dialog.querySelectorAll("input")].some((input) => input.type === "time")).toBe(false);
     const field = within(dialog).getByRole("button", { name: "固定开始时间 未设置" });
     await user.click(field);
@@ -1904,6 +1904,11 @@ describe("phase 1 manual alpha", () => {
     await user.click(screen.getByRole("group", { name: "周一可用时间" }));
     await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(2));
     expect(backend.value).toMatchObject({ defaultTimeSlots: [{ start: "19:00" }, { start: "00:00", end: "01:00", weekdays: [1] }] });
+    // 块上两行：窗口名 + 压缩后的时间（省掉前导零与整点的 `:00`，12px 才能在窄块里放全）；
+    // 完整起止仍在块的无障碍名上。
+    const block = screen.getByRole("group", { name: "周一 00:00–01:00" });
+    expect(within(block).getByText("可用时间", { selector: ".availability-block-name" })).toBeVisible();
+    expect(within(block).getByText("0–1", { selector: ".availability-block-time" })).toBeVisible();
     // 块上铅笔的气泡只改时间：没有名称、时长档和星期。
     await user.click(screen.getByRole("button", { name: "编辑 周一 00:00–01:00" }));
     const edit = screen.getByRole("dialog", { name: "编辑时间" });
@@ -2016,8 +2021,8 @@ describe("phase 1 manual alpha", () => {
     const group = screen.getByRole("radiogroup", { name: "日视图默认显示" });
     expect(within(group).getByRole("radio", { name: "全天" })).toBeChecked();
 
-    await user.click(within(group).getByRole("radio", { name: "默认时段" }));
-    expect(within(group).getByRole("radio", { name: "默认时段" })).toBeChecked();
+    await user.click(within(group).getByRole("radio", { name: "可用时间" }));
+    expect(within(group).getByRole("radio", { name: "可用时间" })).toBeChecked();
     await waitFor(() => expect(backend.value).toMatchObject({ calendarDayMode: "defaultSlots" }));
 
     await user.click(within(group).getByRole("radio", { name: "全天" }));
@@ -2891,7 +2896,7 @@ describe("phase 1 manual alpha", () => {
     const handle = await screen.findByRole("button", { name: "调整 越界源 时长" });
 
     fireEvent(handle, createEvent.pointerDown(handle, { button: 0, clientY: 600 }));
-    // 拉满默认时段：10:00–12:00 把 11:00 那一项推到 12:00–13:00，落在默认时段之外。
+    // 拉满可用时间：10:00–12:00 把 11:00 那一项推到 12:00–13:00，落在可用时间之外。
     fireEvent(window, createEvent.pointerMove(window, { clientY: 648 }));
     fireEvent(window, createEvent.pointerUp(window, { clientY: 648 }));
 
@@ -2974,10 +2979,10 @@ describe("phase 1 manual alpha", () => {
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi(initial)} />);
     await user.click(await screen.findByRole("button", { name: /自动排程/ }));
     const dialog = await screen.findByRole("dialog", { name: "自动排程" });
-    // 零默认时段时不再渲染 13 行假候选，只留一句事实 + 一个设置入口。
-    expect(within(dialog).getByText("还没有默认时段")).toBeVisible();
+    // 零可用时间窗口时不再渲染 13 行假候选，只留一句事实 + 一个设置入口。
+    expect(within(dialog).getByText("还没有可用时间")).toBeVisible();
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "去设置默认时段" }));
+    await user.click(within(dialog).getByRole("button", { name: "去标记可用时间" }));
     expect(await screen.findByRole("heading", { name: "设置", level: 1 })).toBeVisible();
     expect(screen.queryByRole("dialog", { name: "自动排程" })).not.toBeInTheDocument();
   });
@@ -3418,7 +3423,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
     };
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     try {
-      await screen.findByRole("button", { name: "默认时段" });
+      await screen.findByRole("button", { name: "可用时间" });
       const segments = Array.from(document.querySelectorAll<HTMLElement>('.continuous-day-panel[data-calendar-date="2026-08-05"] .timeline-map-segment'));
       expect(segments.length).toBeGreaterThan(0);
       // 折叠条必须自报折叠，否则采样会按像素内插，1px 滚动就能把分钟甩出几小时。
@@ -3442,7 +3447,7 @@ describe("phase 4 P4-04 calendar viewport arbitration", () => {
       await screen.findByRole("button", { name: "日" });
       const axis = document.querySelector<HTMLElement>(".continuous-day-axis")!;
       const layout = stubDayAxisLayout(axis);
-      // 进入日视图的首次定位（非今天 → 该日首个默认时段 19:00）是一次程序性滚动。
+      // 进入日视图的首次定位（非今天 → 该日首个可用时间窗口 19:00）是一次程序性滚动。
       act(() => { fireResize(); });
       await waitFor(() => expect(layout.read()).toBeGreaterThan(0));
       act(() => { axis.dispatchEvent(new Event("scroll")); });

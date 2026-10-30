@@ -1126,11 +1126,11 @@ test("calendar C4 keeps the centre logical minute across density presets in the 
   // 测的就变成平移而不是切档。整条轴最末一段的钳位行为由 scale-anchor.mjs 的读数覆盖。
   checks += await densityDriftChecks(page, daySurface, 1290, "全天 21:30");
 
-  // 默认时段模式：轨道同时有折叠条与展开段，两条路径都保住。
-  await page.getByRole("button", { name: "默认时段" }).click();
+  // 可用时间模式：轨道同时有折叠条与展开段，两条路径都保住。
+  await page.getByRole("button", { name: "可用时间" }).click();
   await waitForScrollSettled(axis);
-  checks += await densityDriftChecks(page, daySurface, 960, "默认时段 16:00");
-  checks += await densityDriftChecks(page, daySurface, 1020, "默认时段 17:00");
+  checks += await densityDriftChecks(page, daySurface, 960, "可用时间 16:00");
+  checks += await densityDriftChecks(page, daySurface, 1020, "可用时间 17:00");
   // 采样点落在折叠条上时取区间中点（与 `sampleCalendarPosition` 同一判据）：带子高度只随
   // 界面缩放变化，所以从最高的详细档切到标准档不能漂（切到紧凑会先撞上钳位，上面那条已跳过）。
   await setDensityPreset(page, "详细", daySurface);
