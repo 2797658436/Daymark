@@ -1,4 +1,4 @@
-import type { DefaultTimeSlot } from "./settings";
+import type { DefaultTimeSlot, FoldedRange } from "./settings";
 
 /** 吸附步长：0 = 不吸附（按 1 分钟），其余为分钟步长。 */
 export type AvailabilitySnap = 0 | 15 | 30 | 60;
@@ -196,3 +196,246 @@ export function availabilityMinuteAt(ratio: number, hidden: readonly number[] = 
   }
   return 1440;
 }
+
+/**
+ * 折叠段的默认值：凌晨与深夜各折一段。
+ *
+ * 定义在纯函数层，`DEFAULT_SETTINGS.foldedRanges` 直接引用它 —— 设置层再拿一份字面量就会
+ * 出现「界面显示默认两段、规范化却回退到另一组值」的分叉。
+ */
+export const DEFAULT_FOLDED_RANGES: FoldedRange[] = [
+  { start: "00:00", end: "06:00" },
+  { start: "23:00", end: "24:00" },
+];
+
+/** 折叠段的最短长度：与界面「拖到 30 分钟就到底」同一条规则。 */
+export const FOLDED_RANGE_MIN_MINUTES = 30;
+
+/**
+ * 把折叠段的 "HH:MM" 读成分钟数；"24:00" 是合法输入（= 1440），"24:30" 不是。
+ *
+ * 手写解析而不是正则：这里只认 `HH:MM` 的**定长**形态（两位小时、两位分钟），
+ * 顺手把 `9:00`／`09:0`／`24:30`／`-1:00` 一并挡掉，读写两侧共用这一个入口。
+ */
+export function foldedMinute(value: unknown): number | null {
+  if (typeof value !== "string" || value.length !== 5) return null;
+  if (value[2] !== ":") return null;
+  const hour = clockDigits(value.slice(0, 2));
+  const minute = clockDigits(value.slice(3, 5));
+  if (hour === null || minute === null || minute > 59) return null;
+  if (hour === 24) return minute === 0 ? 1440 : null;
+  if (hour > 24) return null;
+  return hour * 60 + minute;
+}
+
+/** 两位十进制数字；含任何非数字字符都返回 null。 */
+function clockDigits(value: string): number | null {
+  if (value.length !== 2) return null;
+  for (const character of value) if (character < "0" || character > "9") return null;
+  return Number(value);
+}
+
+/** 分钟数写回折叠段用的时钟写法；1440 写成 `24:00`，其余补零到 `HH:MM`。 */
+export function foldedClock(minute: number): string {
+  const clamped = Math.max(0, Math.min(1440, Math.round(minute)));
+  if (clamped === 1440) return "24:00";
+  const hour = String(Math.floor(clamped / 60)).padStart(2, "0");
+  const rest = String(clamped % 60).padStart(2, "0");
+  return `${hour}:${rest}`;
+}
+
+function cloneFoldedDefaults() {
+  return DEFAULT_FOLDED_RANGES.map((range) => ({ ...range }));
+}
+
+/**
+ * 折叠段规范化：排序 → 合并相接／重叠 → 丢掉短于 30 分钟的段。
+ *
+ * 四条口径与 `normalizeTimeSlots` 是同一套写法：
+ * - 非数组 → 默认两段；
+ * - `[]` → **保持空**：一整天不折叠是合法选择，不许静默补默认；
+ * - 逐项校验（`HH:MM` 或恰好 `24:00`，且 `end > start`），不合法的那一项丢掉；
+ * - 非数组、或整个数组没有一个可用段 → 回退默认两段。
+ */
+export function normalizeFoldedRanges(input: unknown): FoldedRange[] {
+  if (!Array.isArray(input)) return cloneFoldedDefaults();
+  if (input.length === 0) return [];
+  const parsed: Array<{ start: number; end: number }> = [];
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+    const candidate = item as Partial<FoldedRange>;
+    const start = foldedMinute(candidate.start);
+    const end = foldedMinute(candidate.end);
+    if (start === null || end === null || end <= start) continue;
+    parsed.push({ start, end });
+  }
+  parsed.sort((left, right) => left.start - right.start || left.end - right.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of parsed) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  const kept = merged.filter((range) => range.end - range.start >= FOLDED_RANGE_MIN_MINUTES);
+  if (!kept.length) return cloneFoldedDefaults();
+  return kept.map((range) => ({ start: foldedClock(range.start), end: foldedClock(range.end) }));
+}
+
+/** 时间轴的一段：`collapsed` 为真时压成灰带，为假时按 `end - start` 铺开。 */
+export interface AvailabilitySegment {
+  start: number;
+  end: number;
+  collapsed: boolean;
+}
+
+/**
+ * 把 `[0, 1440]` 与折叠段求差，得到交替的展开段／折叠段。
+ *
+ * 折叠只改变**画法**，不改变时间连续性：段与段首尾相接、合起来正好覆盖一整天。
+ */
+export function availabilitySegments(folds: unknown): AvailabilitySegment[] {
+  const normalized = normalizeFoldedRanges(folds);
+  const segments: AvailabilitySegment[] = [];
+  let cursor = 0;
+  for (const range of normalized) {
+    const start = foldedMinute(range.start)!;
+    const end = foldedMinute(range.end)!;
+    if (start > cursor) segments.push({ start: cursor, end: start, collapsed: false });
+    segments.push({ start, end, collapsed: true });
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor < 1440) segments.push({ start: cursor, end: 1440, collapsed: false });
+  return segments;
+}
+
+/** 折叠段的分钟区间；任一端读不出来就是 null（调用方原样返回规范化副本）。 */
+function foldMinutes(range: { start: string; end: string } | null | undefined) {
+  if (!range) return null;
+  const start = foldedMinute(range.start);
+  const end = foldedMinute(range.end);
+  if (start === null || end === null) return null;
+  return { start, end };
+}
+
+/** 新增一段折叠；短于 30 分钟的输入不产生新段（只返回规范化后的副本）。 */
+export function addFold(folds: FoldedRange[], start: string, end: string): FoldedRange[] {
+  const from = foldedMinute(start);
+  const to = foldedMinute(end);
+  if (from === null || to === null || to - from < FOLDED_RANGE_MIN_MINUTES) return normalizeFoldedRanges(folds);
+  return normalizeFoldedRanges([...folds, { start: foldedClock(from), end: foldedClock(to) }]);
+}
+
+/** 把一段折叠整体移到别处（时长不变）；贴到别的折叠段上由规范化合并。 */
+export function moveFold(folds: FoldedRange[], from: FoldedRange, to: FoldedRange): FoldedRange[] {
+  const origin = foldMinutes(from);
+  const target = foldMinutes(to);
+  if (!origin || !target) return normalizeFoldedRanges(folds);
+  if (origin.start === target.start && origin.end === target.end) return normalizeFoldedRanges(folds);
+  const rest = folds.filter((range) => {
+    const current = foldMinutes(range);
+    return !(current && current.start === origin.start && current.end === origin.end);
+  });
+  return normalizeFoldedRanges([...rest, { start: foldedClock(target.start), end: foldedClock(target.end) }]);
+}
+
+/** 展开一段折叠（= 删掉这条折叠）。 */
+export function removeFold(folds: FoldedRange[], range: FoldedRange): FoldedRange[] {
+  const target = foldMinutes(range);
+  if (!target) return normalizeFoldedRanges(folds);
+  return normalizeFoldedRanges(folds.filter((item) => {
+    const current = foldMinutes(item);
+    return !(current && current.start === target.start && current.end === target.end);
+  }));
+}
+
+/** 时钟读成分钟；非法返回 null（`24:00` 在这里也算非法：窗口起止只能是 00:00–23:59）。 */
+function slotMinutes(value: string): number | null {
+  if (typeof value !== "string" || value.length !== 5 || value[2] !== ":") return null;
+  const hour = clockDigits(value.slice(0, 2));
+  const minute = clockDigits(value.slice(3, 5));
+  if (hour === null || minute === null || hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+/**
+ * 同一天里首尾相接或重叠的窗口并成一段（A3「松手后不留首尾相接的两块」）。
+ *
+ * 逐星期处理，再按「起止 + 名称」重新组装：完全同段同名的多天仍合成一条窗口（`weekdays` 共享），
+ * 与 `addAvailability` 的存储形态一致。返回新数组，不就地改。
+ */
+export function mergeAvailability(slots: DefaultTimeSlot[]): DefaultTimeSlot[] {
+  const byWeekday = new Map<number, Array<{ start: number; end: number; label: string }>>();
+  for (const slot of slots) {
+    const start = slotMinutes(slot.start);
+    const end = slotMinutes(slot.end);
+    if (start === null || end === null || end <= start) continue;
+    for (const weekday of slot.weekdays) {
+      const list = byWeekday.get(weekday) ?? [];
+      list.push({ start, end, label: slot.label });
+      byWeekday.set(weekday, list);
+    }
+  }
+  const buckets = new Map<string, { start: string; end: string; label: string; weekdays: number[] }>();
+  for (const [weekday, list] of byWeekday) {
+    list.sort((left, right) => left.start - right.start || left.end - right.end);
+    const merged: Array<{ start: number; end: number; label: string }> = [];
+    for (const item of list) {
+      const last = merged.at(-1);
+      if (last && item.start <= last.end) last.end = Math.max(last.end, item.end);
+      else merged.push({ ...item });
+    }
+    for (const item of merged) {
+      const start = foldedClock(item.start);
+      const end = foldedClock(item.end);
+      const key = `${start}|${end}|${item.label}`;
+      const bucket = buckets.get(key);
+      if (bucket) bucket.weekdays.push(weekday);
+      else buckets.set(key, { start, end, label: item.label, weekdays: [weekday] });
+    }
+  }
+  return [...buckets.values()]
+    .sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end) || left.label.localeCompare(right.label))
+    .map((bucket) => ({ id: `merge-${bucket.start}-${bucket.end}-${bucket.label}`, label: bucket.label, start: bucket.start, end: bucket.end, weekdays: [...bucket.weekdays].sort((left, right) => left - right) }));
+}
+
+/**
+ * 把某一天的 `origin` 换成 `next`，但**只动看得见的那一片** `visible`。
+ *
+ * A3 的折叠把一天压成「展开段 + 灰带」交替：一块空闲可能一头扎进灰带里。拖动只能改
+ * 露在外面的那一片，藏在灰带里的首尾必须原样写回 —— 否则拖一次就把看不见的部分悄悄
+ * 删掉（设计稿里修过的数据丢失 bug）。原窗口的名称跟着三段走。
+ */
+export function replaceAvailability(
+  slots: DefaultTimeSlot[],
+  weekday: number,
+  origin: { start: string; end: string },
+  next: { start: string; end: string },
+  visible: { start: number; end: number },
+  makeId: () => string,
+): DefaultTimeSlot[] {
+  const originStart = slotMinutes(origin.start);
+  const originEnd = slotMinutes(origin.end);
+  if (originStart === null || originEnd === null || originEnd <= originStart) return slots;
+  const label = slots.find((slot) => slot.start === origin.start && slot.end === origin.end && slot.weekdays.includes(weekday))?.label ?? "可用时间";
+  // 新建的这几段都沿用原窗口的名字：`addAvailability` 只会写「可用时间」，这里补回标签，
+  // 否则拖动一次就把用户起的名字（例如「晨间阅读」）换掉了。
+  const created = new Set<string>();
+  const nextId = () => { const id = makeId(); created.add(id); return id; };
+  let result = removeAvailability(slots, weekday, origin.start, origin.end);
+  const headEnd = Math.max(originStart, Math.min(originEnd, visible.start));
+  if (headEnd > originStart) result = addAvailability(result, weekday, foldedClock(originStart), foldedClock(headEnd), nextId);
+  const tailStart = Math.min(originEnd, Math.max(originStart, visible.end));
+  if (originEnd > tailStart) result = addAvailability(result, weekday, foldedClock(tailStart), foldedClock(originEnd), nextId);
+  const current = unfoldedRange(next);
+  if (current) result = addAvailability(result, weekday, current.start, current.end, nextId);
+  return mergeAvailability(result.map((slot) => created.has(slot.id) ? { ...slot, label } : slot));
+}
+
+/** 窗口起止的合法化：`23:59` 是窗口允许的最后分钟，`24:00` 折回 `23:59`。 */
+function unfoldedRange(range: { start: string; end: string }) {
+  const start = slotMinutes(range.start);
+  const end = slotMinutes(range.end);
+  if (start === null || end === null || end <= start) return null;
+  return { start: foldedClock(start), end: foldedClock(end) };
+}
+

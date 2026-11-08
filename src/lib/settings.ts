@@ -1,5 +1,7 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 
+import { DEFAULT_FOLDED_RANGES, normalizeFoldedRanges } from "./availability";
+
 export type AppearanceMode = "system" | "light" | "dark";
 export type MotionMode = "system" | "reduce" | "full";
 /**
@@ -20,6 +22,14 @@ export type CalendarDayMode = "defaultSlots" | "fullDay";
 export type StartupSummaryMode = "everyLaunch" | "daily" | "never";
 export type ReviewPeriod = "day" | "week" | "month";
 export interface DefaultTimeSlot { id: string; label: string; start: string; end: string; weekdays: number[] }
+/**
+ * 一周共用的折叠区间（「可用时间」编辑器里压成灰带的那几段）。
+ *
+ * 与 `DefaultTimeSlot` 同一套时间写法，例外只有一个：`end` 允许 `"24:00"` 表示当天末尾 ——
+ * 默认值里的深夜段（23:00–24:00）就需要它。合法性与合并规则只在 `normalizeFoldedRanges`
+ * 一处定义（`src/lib/availability.ts`），设置层只负责调用。
+ */
+export interface FoldedRange { start: string; end: string }
 
 /**
  * 日／周时间轴的**逻辑**浏览位置（阶段 4 §5.1）。
@@ -86,6 +96,8 @@ export interface AppSettings {
   reviewPeriod: ReviewPeriod;
   reviewAnchorDate: string | null;
   defaultTimeSlots: DefaultTimeSlot[];
+  /** 折叠段只影响「可用时间」编辑器怎么画，不参与排程：排程仍只读 `defaultTimeSlots`。 */
+  foldedRanges: FoldedRange[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -118,6 +130,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewPeriod: "week",
   reviewAnchorDate: null,
   defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
+  foldedRanges: DEFAULT_FOLDED_RANGES.map((range) => ({ ...range })),
 };
 
 /**
@@ -238,6 +251,7 @@ function normalizeSettings(value: unknown): AppSettings {
     reviewPeriod: isOneOf(candidate.reviewPeriod, ["day", "week", "month"] as const) ? candidate.reviewPeriod : DEFAULT_SETTINGS.reviewPeriod,
     reviewAnchorDate: isLocalDate(candidate.reviewAnchorDate) ? candidate.reviewAnchorDate : null,
     defaultTimeSlots: normalizeTimeSlots(candidate.defaultTimeSlots),
+    foldedRanges: normalizeFoldedRanges(candidate.foldedRanges),
   };
 }
 

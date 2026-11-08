@@ -9,17 +9,26 @@ for (const width of [960, 1200]) for (const scale of [100, 150, 200]) {
     await expect(page.getByRole("heading", { name: "设置", exact: true })).toBeVisible();
     expect(await page.locator("#main-content").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await page.getByRole("button", { name: "编辑", exact: true }).click();
-    await page.getByRole("button", { name: "添加时段" }).click();
-    const slot = page.getByRole("dialog", { name: "添加时段" });
-    await expect(slot).toBeVisible();
-    await slot.getByRole("button", { name: "保存时段" }).scrollIntoViewIfNeeded();
-    const rect = await slot.boundingBox();
-    expect(rect!.x).toBeGreaterThanOrEqual(11);
-    expect(rect!.y).toBeGreaterThanOrEqual(11);
-    expect(rect!.x + rect!.width).toBeLessThanOrEqual(width - 11);
-    expect(rect!.y + rect!.height).toBeLessThanOrEqual(749);
-    await slot.getByRole("button", { name: "取消" }).click();
-    await page.getByRole("button", { name: "完成", exact: true }).click();
+    // A3：弹窗本身就是时间轴，不再有「添加时段」面板；两级浮层都要留在视口内、不横向溢出。
+    const availability = page.getByRole("dialog", { name: "可用时间", exact: true });
+    await expect(availability).toBeVisible();
+    const dialogRect = await availability.boundingBox();
+    expect(dialogRect!.x).toBeGreaterThanOrEqual(11);
+    expect(dialogRect!.y).toBeGreaterThanOrEqual(11);
+    expect(dialogRect!.x + dialogRect!.width).toBeLessThanOrEqual(width - 11);
+    expect(dialogRect!.y + dialogRect!.height).toBeLessThanOrEqual(749);
+    expect(await availability.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    // 2026-11-08 起块上没有铅笔、也没有「编辑可用时间」气泡：起止在画布上拖／按键改，
+    // 所以这里验的是「块本身在视口内、不加第二层表单」。
+    const block = page.locator(".availability-slot").first();
+    await block.scrollIntoViewIfNeeded();
+    await block.hover();
+    await expect(block.getByRole("button", { name: /^编辑 周./ })).toHaveCount(0);
+    const blockRect = await block.boundingBox();
+    expect(blockRect!.x).toBeGreaterThanOrEqual(11);
+    expect(blockRect!.y).toBeGreaterThanOrEqual(11);
+    await availability.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(availability).toHaveCount(0);
     await page.getByRole("button", { name: "项目", exact: true }).click();
     await page.getByRole("button", { name: "新建项目", exact: true }).click();
     const project = page.getByRole("dialog", { name: "创建项目" });

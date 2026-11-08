@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  addAvailability, availabilityBlocks, availabilityFolds, availabilityMinuteAt, availabilityOffset, availabilitySpan,
-  availabilityVisibleHours, moveAvailability, presetAvailability, removeAvailability, snapMinute, type AvailabilitySnap,
+  addAvailability, addFold, availabilityBlocks, availabilityFolds, availabilityMinuteAt, availabilityOffset, availabilitySegments, availabilitySpan,
+  availabilityVisibleHours, foldedClock, foldedMinute, mergeAvailability, moveAvailability, moveFold, normalizeFoldedRanges, presetAvailability, removeAvailability, removeFold, replaceAvailability, snapMinute, type AvailabilitySnap,
 } from "./availability";
-import type { DefaultTimeSlot } from "./settings";
+import { SettingsRepository, type DefaultTimeSlot } from "./settings";
 
 const slot = (over: Partial<DefaultTimeSlot> & { id: string }): DefaultTimeSlot => ({ label: "可用时间", start: "19:00", end: "22:00", weekdays: [1], ...over });
 let seq = 0;
@@ -144,5 +144,126 @@ describe("availability grid layout", () => {
     // 与 availabilityOffset 互逆：走到 14:00 的比例再换算回来仍是 14:00。
     const offset = availabilityOffset(14 * 60, [12]);
     expect(availabilityMinuteAt((offset.hours + offset.strips * 0.25) / total, [12])).toBeCloseTo(14 * 60, 6);
+  });
+});
+
+describe("folded ranges", () => {
+  const folds = (...ranges: Array<[string, string]>) => ranges.map(([start, end]) => ({ start, end }));
+
+  it("sorts by start and merges touching or overlapping ranges", () => {
+    expect(normalizeFoldedRanges(folds(["23:00", "24:00"], ["00:00", "06:00"])))
+      .toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+    // 相接（06:00 紧接 07:00）与重叠（07:30 落在 07:00–08:00 里）都并成一段。
+    expect(normalizeFoldedRanges(folds(["07:00", "08:00"], ["06:00", "07:00"])))
+      .toEqual(folds(["06:00", "08:00"]));
+    expect(normalizeFoldedRanges(folds(["07:00", "09:00"], ["07:30", "08:00"])))
+      .toEqual(folds(["07:00", "09:00"]));
+  });
+
+  it("drops ranges shorter than thirty minutes and falls back to the default when nothing is left", () => {
+    expect(normalizeFoldedRanges(folds(["00:00", "05:30"], ["10:00", "10:29"])))
+      .toEqual(folds(["00:00", "05:30"]));
+    // 全部非法（太短）：与「非数组」走同一条回退路径。
+    expect(normalizeFoldedRanges(folds(["10:00", "10:15"]))).toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+  });
+
+  it("rejects malformed clocks but accepts 24:00 as the only out-of-range value", () => {
+    expect(foldedMinute("24:00")).toBe(1440);
+    expect(foldedMinute("24:30")).toBeNull();
+    expect(foldedMinute("9:00")).toBeNull();
+    expect(foldedMinute("09:0")).toBeNull();
+    expect(foldedMinute("23:60")).toBeNull();
+    expect(foldedMinute("25:00")).toBeNull();
+    expect(normalizeFoldedRanges(folds(["23:00", "24:30"], ["08:00", "09:00"])))
+      .toEqual(folds(["08:00", "09:00"]));
+    // end 不晚于 start 的项直接丢弃。
+    expect(normalizeFoldedRanges(folds(["09:00", "09:00"], ["08:00", "07:00"], ["10:00", "12:00"])))
+      .toEqual(folds(["10:00", "12:00"]));
+  });
+
+  it("keeps an explicitly empty list and falls back only for missing or unusable input", () => {
+    // [] = 一整天不折叠，合法；不许静默补默认。
+    expect(normalizeFoldedRanges([])).toEqual([]);
+    expect(normalizeFoldedRanges(undefined)).toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+    expect(normalizeFoldedRanges("00:00-06:00")).toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+    expect(normalizeFoldedRanges([null, 42, {}])).toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+    // 缺字段的老设置（`{}`）落到同一处默认值，不抛错。
+    expect(new SettingsRepository({ read: async () => ({}), write: async () => undefined }).normalize({}).foldedRanges)
+      .toEqual(folds(["00:00", "06:00"], ["23:00", "24:00"]));
+  });
+
+  it("writes 1440 back as 24:00 and every other boundary as HH:MM", () => {
+    expect(foldedClock(1440)).toBe("24:00");
+    expect(foldedClock(1439)).toBe("23:59");
+    expect(foldedClock(0)).toBe("00:00");
+    expect(foldedClock(90)).toBe("01:30");
+    expect(normalizeFoldedRanges(folds(["22:00", "23:59"]))).toEqual(folds(["22:00", "23:59"]));
+  });
+
+  it("splits the day into the four segment shapes", () => {
+    // 零折叠：整天一段展开段。
+    expect(availabilitySegments([])).toEqual([{ start: 0, end: 1440, collapsed: false }]);
+    // 首段折叠（默认值）：00–06 灰带 + 06–23 展开 + 23–24 灰带，首尾相接覆盖整天。
+    expect(availabilitySegments(folds(["00:00", "06:00"], ["23:00", "24:00"]))).toEqual([
+      { start: 0, end: 360, collapsed: true },
+      { start: 360, end: 1380, collapsed: false },
+      { start: 1380, end: 1440, collapsed: true },
+    ]);
+    // 中间折叠：11–13 夹在两段展开段之间。
+    expect(availabilitySegments(folds(["11:00", "13:00"]))).toEqual([
+      { start: 0, end: 660, collapsed: false },
+      { start: 660, end: 780, collapsed: true },
+      { start: 780, end: 1440, collapsed: false },
+    ]);
+    // 全折叠：只剩一段，没有展开段（界面据此给空态）。
+    expect(availabilitySegments(folds(["00:00", "24:00"]))).toEqual([{ start: 0, end: 1440, collapsed: true }]);
+  });
+
+  it("adds, moves and removes folds without touching the input array", () => {
+    const before = folds(["00:00", "06:00"]);
+    const added = addFold(before, "12:00", "13:00");
+    expect(added).toEqual(folds(["00:00", "06:00"], ["12:00", "13:00"]));
+    expect(before).toEqual(folds(["00:00", "06:00"]));
+    // 短于 30 分钟不新增。
+    expect(addFold(before, "12:00", "12:15")).toEqual(before);
+    // 平移：时长不变，贴到相邻段由规范化合并。
+    expect(moveFold(added, { start: "12:00", end: "13:00" }, { start: "13:00", end: "14:00" }))
+      .toEqual(folds(["00:00", "06:00"], ["13:00", "14:00"]));
+    // 落到 00:00–06:00 这段灰带里 → 整段并入，只剩那一条。
+    expect(moveFold(added, { start: "12:00", end: "13:00" }, { start: "05:00", end: "06:00" }))
+      .toEqual(folds(["00:00", "06:00"]));
+    // 展开：删掉这一段，其余保留；最后一段删掉后剩空数组（不补默认）。
+    expect(removeFold(added, { start: "12:00", end: "13:00" })).toEqual(folds(["00:00", "06:00"]));
+    expect(removeFold(before, { start: "00:00", end: "06:00" })).toEqual([]);
+  });
+
+  it("merges adjacent blocks on the same day and keeps shared windows per weekday", () => {
+    const merged = mergeAvailability([
+      { id: "a", label: "可用时间", start: "09:00", end: "10:00", weekdays: [1, 2] },
+      { id: "b", label: "可用时间", start: "10:00", end: "11:00", weekdays: [1] },
+      { id: "c", label: "可用时间", start: "14:00", end: "15:00", weekdays: [2] },
+    ]);
+    // 同一天相接的两块并成一段；另一个星期仍保留自己那一段（列表按起止升序）。
+    expect(merged.map((slot) => `${slot.start}-${slot.end}:${slot.weekdays.join("")}`))
+      .toEqual(["09:00-10:00:2", "09:00-11:00:1", "14:00-15:00:2"]);
+  });
+
+  it("rewrites only the visible slice of a block that runs into a folded band", () => {
+    const slots: DefaultTimeSlot[] = [{ id: "one", label: "晨间", start: "05:00", end: "09:00", weekdays: [1] }];
+    const makeId = () => "fresh";
+    // 周一 05:00–09:00 的空闲，00–06 被折成灰带：看得见的是 06:00–09:00。
+    // 把可见片拖成 07:00–08:00：藏在灰带里的 05:00–06:00 必须原样写回（不能跟着一起消失）。
+    expect(replaceAvailability(slots, 1, { start: "05:00", end: "09:00" }, { start: "07:00", end: "08:00" }, { start: 360, end: 540 }, makeId)
+      .map((slot) => `${slot.start}-${slot.end}:${slot.label}`))
+      .toEqual(["05:00-06:00:晨间", "07:00-08:00:晨间"]);
+    // 可见片落到紧贴灰带边界的 06:00–08:00 时，首尾相接 → 合并成 05:00–08:00，一分钟都没被删掉。
+    expect(replaceAvailability(slots, 1, { start: "05:00", end: "09:00" }, { start: "06:00", end: "08:00" }, { start: 360, end: 540 }, makeId)
+      .map((slot) => `${slot.start}-${slot.end}`))
+      .toEqual(["05:00-08:00"]);
+    // 另一头扎进 23:00–24:00 的灰带时同理：23:00–23:59 的尾巴不被这次拖动改掉。
+    const tail: DefaultTimeSlot[] = [{ id: "two", label: "夜间", start: "21:00", end: "23:59", weekdays: [3] }];
+    expect(replaceAvailability(tail, 3, { start: "21:00", end: "23:59" }, { start: "21:00", end: "22:00" }, { start: 1260, end: 1380 }, makeId)
+      .map((slot) => `${slot.start}-${slot.end}:${slot.label}`))
+      .toEqual(["21:00-22:00:夜间", "23:00-23:59:夜间"]);
   });
 });

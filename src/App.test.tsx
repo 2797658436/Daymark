@@ -1878,57 +1878,294 @@ describe("phase 1 manual alpha", () => {
     expect(screen.queryByText("临期任务", { selector: ".task-list:not(.attention-list) strong" })).not.toBeInTheDocument();
     expect(screen.getByText("普通任务", { selector: ".task-list strong" })).toBeVisible();
   });
-
-  it("edits motion and adds an extra default time slot with weekdays", async () => {
+  it("persists the reduced-motion preference while the availability dialog is closed", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
     await user.click(screen.getByRole("radio", { name: "减少" }));
-    await user.click(screen.getByRole("button", { name: "编辑" }));
-    await user.click(screen.getByRole("button", { name: /添加时段/ }));
-    expect(screen.getByRole("dialog", { name: "添加时段" })).toBeVisible();
-    // 星期改成「一个字就是整格」的按钮（aria-pressed），不再是勾选框。
-    await user.click(screen.getByRole("button", { name: "周一" }));
-    await user.click(screen.getByRole("button", { name: "保存时段" }));
     await waitFor(() => expect(backend.value).toMatchObject({ motion: "reduce" }));
-    await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots).toHaveLength(2));
-    expect((backend.value as { defaultTimeSlots: Array<{ weekdays: number[] }> }).defaultTimeSlots[1].weekdays).not.toContain(1);
-  });
-
-  it("adds a one-hour block on an empty grid cell and deletes it from the block", async () => {
-    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
-    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
-    await user.click(await screen.findByRole("button", { name: "设置" }));
-    await user.click(screen.getByRole("button", { name: "编辑" }));
-    // jsdom 没有真实高度，点击落在 00:00 那一格：加出来的就是 00:00–01:00。
-    await user.click(screen.getByRole("group", { name: "周一可用时间" }));
-    await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(2));
-    expect(backend.value).toMatchObject({ defaultTimeSlots: [{ start: "19:00" }, { start: "00:00", end: "01:00", weekdays: [1] }] });
-    // 块上两行：窗口名 + 压缩后的时间（省掉前导零与整点的 `:00`，12px 才能在窄块里放全）；
-    // 完整起止仍在块的无障碍名上。
-    const block = screen.getByRole("group", { name: "周一 00:00–01:00" });
-    expect(within(block).getByText("可用时间", { selector: ".availability-block-name" })).toBeVisible();
-    expect(within(block).getByText("0–1", { selector: ".availability-block-time" })).toBeVisible();
-    // 块上铅笔的气泡是这条窗口的完整编辑：名称、起止、星期都在这里改（下方列表已撤掉）。
-    await user.click(screen.getByRole("button", { name: "编辑 周一 00:00–01:00" }));
-    const edit = screen.getByRole("dialog", { name: "编辑可用时间" });
-    expect(within(edit).getByRole("button", { name: /开始时间/ })).toBeVisible();
-    expect(within(edit).getByRole("button", { name: /结束时间/ })).toBeVisible();
-    const name = within(edit).getByLabelText("名称");
-    await user.clear(name);
-    await user.type(name, "清晨阅读");
-    await user.click(within(edit).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect((backend.value as { defaultTimeSlots: Array<{ label: string; start: string }> }).defaultTimeSlots)
-      .toContainEqual(expect.objectContaining({ label: "清晨阅读", start: "00:00", end: "01:00" })));
-    // 网格块上只留「×」：删除只撤掉这一天这一段，默认窗口原样保留。
-    await user.click(screen.getByRole("button", { name: "删除 周一 00:00–01:00" }));
-    await waitFor(() => expect((backend.value as { defaultTimeSlots: unknown[] }).defaultTimeSlots).toHaveLength(1));
+    // 可用时间改成二级弹窗后，设置行只剩入口；弹窗里的改动不经过这条立即写入。
+    expect(screen.getByRole("button", { name: "编辑" })).toBeVisible();
   });
 
   /**
-   * 设置页改成单列设置行后，依赖项用缩进 + 关闭态表达（P4-13 起不用整体透明度）。
-   * 结构可以变，但「父开关没开时子项不可编辑」这条行为不能被样式改动带走。
+   * 「可用时间」A3 设计器（2026-11-08）。
+   *
+   * jsdom 没有真实高度：每一条轨道在用例里显式 stub `getBoundingClientRect`，按
+   * 「1px = 1 分钟、top = 0」把 clientY 换算成分钟（设计师的 `minuteIn` 正是这个比例）；
+   * 折叠带的时间换算走的是 `60 / 每小时像素`，用每个用例自己的 deltaY 表达。
    */
+  async function openAvailability(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    return await screen.findByRole("dialog", { name: /可用时间/ });
+  }
+
+  /** 给「展开段」的轨道桩一个高度：top = 0，1px 对应 1 分钟（段起点见各用例注释）。 */
+  function stubTrack(segStart: number) {
+    const tracks = screen.getAllByRole("group", { name: /可用时间$/ });
+    for (const track of tracks) {
+      Object.defineProperty(track, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({ top: 0, bottom: 1020, left: 0, right: 100, width: 100, height: 1020, x: 0, y: 0, toJSON: () => ({}) }),
+      });
+    }
+    return { yOf: (minute: number) => minute - segStart, tracks };
+  }
+
+  function pointerMove(clientY: number) {
+    window.dispatchEvent(new PointerEvent("pointermove", { clientY, bubbles: true }));
+  }
+  function pointerUp(clientY: number) {
+    window.dispatchEvent(new PointerEvent("pointerup", { clientY, bubbles: true }));
+  }
+  const slotsOf = (backend: MemorySettingsBackend) => (backend.value as { defaultTimeSlots: Array<{ start: string; end: string; weekdays: number[] }> }).defaultTimeSlots;
+  const foldsOf = (backend: MemorySettingsBackend) => (backend.value as { foldedRanges: Array<{ start: string; end: string }> }).foldedRanges;
+
+  it("adds a one-hour block from the hover chip and only writes it on 完成", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    // 默认折叠是 00:00–06:00 与 23:00–24:00，唯一展开段是 06:00–23:00。
+    const { yOf, tracks } = stubTrack(360);
+    // 周一那一列：`.availability-track` 上是 `data-day="1"`（0 = 周日）。
+    const monday = document.querySelector<HTMLElement>('.availability-track[data-day="1"]')!;
+    expect(monday).toBeTruthy();
+    fireEvent.pointerMove(monday, { clientY: yOf(15 * 60) });
+    const chip = await screen.findByRole("button", { name: "在周一 15:00 添加 1 小时空闲" });
+    await user.click(chip);
+    expect(screen.getByRole("group", { name: "周一 15:00–16:00 空闲" })).toBeVisible();
+    // 改动只在草稿里：还没点「完成」，库里的 defaultTimeSlots 仍是那一条默认窗口。
+    expect(slotsOf(backend)).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(slotsOf(backend)).toHaveLength(2));
+    expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "15:00", end: "16:00", weekdays: [1] }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+  });
+
+  it("drags the block bottom edge to change the end time", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    const { yOf } = stubTrack(360);
+    // 默认窗口 19:00–22:00 落在周一到周日（七块同形）：拖**周一**那一块的下沿 22:00 → 23:00。
+    const mondayBlock = document.querySelector<HTMLElement>('.availability-track[data-day="1"] .availability-slot')!;
+    const handle = within(mondayBlock).getByRole("button", { name: "调整 22:00 结束时间" });
+    fireEvent.pointerDown(handle, { button: 0, clientY: yOf(22 * 60) });
+    pointerMove(yOf(23 * 60));
+    pointerUp(yOf(23 * 60));
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:00–23:00 空闲" })).toBeVisible());
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    // 拖动只作用于周一那一天：它从共享窗口里拆出来，其余六天保持 19:00–22:00。
+    await waitFor(() => expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:00", end: "23:00", weekdays: [1] })));
+    expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:00", end: "22:00", weekdays: [0, 2, 3, 4, 5, 6] }));
+  });
+
+  it("folds one hour from the gutter 折叠 button and stores it with 完成", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "在 10:00 折叠 1 小时（10:00–11:00）" }));
+    expect(screen.getByRole("group", { name: "已折叠 10:00–11:00，共 1 小时" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(foldsOf(backend)).toContainEqual({ start: "10:00", end: "11:00" }));
+    // 与默认两段一起存：三条都在。
+    expect(foldsOf(backend)).toHaveLength(3);
+  });
+
+  it("drags the folded band bottom edge to change its range", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    const band = screen.getByRole("group", { name: "已折叠 00:00–06:00，共 6 小时" });
+    const edge = band.querySelector("[data-edge=\"end\"]")!;
+    fireEvent.pointerDown(edge, { button: 0, clientY: 0 });
+    // 每小时 ≈46.4px，90px ≈116 分钟 → 吸附到 120 分钟：00:00–06:00 拉到 00:00–08:00。
+    pointerMove(90);
+    pointerUp(90);
+    await waitFor(() => expect(screen.getByRole("group", { name: "已折叠 00:00–08:00，共 8 小时" })).toBeVisible());
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(foldsOf(backend)).toContainEqual({ start: "00:00", end: "08:00" }));
+  });
+
+  it("unfolds one band with × and keeps the other", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "展开 00:00–06:00（取消折叠）" }));
+    expect(screen.queryByRole("group", { name: /已折叠 00:00–06:00/ })).toBeNull();
+    expect(screen.getByRole("group", { name: "已折叠 23:00–24:00，共 1 小时" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(foldsOf(backend)).toEqual([{ start: "23:00", end: "24:00" }]));
+  });
+
+  it("keeps the hidden head and tail of a block that crosses a folded band", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    // 周一 05:00–09:00 的空闲，00:00–06:00 被折成灰带：看得见的只有 06:00–09:00。
+    backend.value = { ...DEFAULT_SETTINGS, defaultTimeSlots: [{ id: "morning", label: "晨间", start: "05:00", end: "09:00", weekdays: [1] }] };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    // 展开段是 06:00–23:00：把可见片（06:00–09:00）的下沿从 09:00 拖到 08:00。
+    stubTrack(360);
+    const handle = screen.getByRole("button", { name: "调整 09:00 结束时间" });
+    const visible = screen.getByRole("group", { name: "周一 05:00–09:00 空闲" });
+    expect(visible).toHaveAttribute("aria-label", "周一 05:00–09:00 空闲");
+    fireEvent.pointerDown(handle, { button: 0, clientY: 9 * 60 - 360 });
+    pointerMove(8 * 60 - 360);
+    pointerUp(8 * 60 - 360);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(slotsOf(backend)).toHaveLength(1));
+    // 藏在灰带里的 05:00–06:00 一分钟都没丢：它与落回来的可见片首尾相接，合并成 05:00–08:00。
+    // （只改看得见的那一片 = 把 06:00–09:00 换成 06:00–08:00；隐藏的头部原样写回。）
+    expect(slotsOf(backend)).toEqual([expect.objectContaining({ start: "05:00", end: "08:00", weekdays: [1] })]);
+  });
+
+  it("shows the all-folded empty state with a 恢复默认折叠 action", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    backend.value = { ...DEFAULT_SETTINGS, foldedRanges: [{ start: "00:00", end: "24:00" }] };
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    expect(screen.getByText(/全部时间都已折叠/)).toBeVisible();
+    // 全部折叠时没有展开段（也就没有可聚焦的日轨道），空态给的是「恢复默认折叠」。
+    expect(screen.queryAllByRole("group", { name: /^周. 可用时间$/ })).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "恢复默认折叠" }));
+    await waitFor(() => expect(screen.queryByText(/全部时间都已折叠/)).toBeNull());
+    expect(screen.getAllByRole("group", { name: /^周. 可用时间$/ }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(foldsOf(backend)).toEqual([{ start: "00:00", end: "06:00" }, { start: "23:00", end: "24:00" }]));
+  });
+
+  it("writes both fields on 完成 and never on 取消 or Esc", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "在 10:00 折叠 1 小时（10:00–11:00）" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+    // 取消：库里一个字都没变（没有多出 10:00–11:00 的折叠，也没有灰带）。
+    expect(foldsOf(backend)).toEqual(DEFAULT_SETTINGS.foldedRanges);
+    expect(slotsOf(backend)).toEqual(DEFAULT_SETTINGS.defaultTimeSlots);
+
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "在 11:00 折叠 1 小时（11:00–12:00）" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+    expect(foldsOf(backend)).toEqual(DEFAULT_SETTINGS.foldedRanges);
+  });
+
+  it("keeps the draft and the dialog open when the write fails, and retries", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "在 10:00 折叠 1 小时（10:00–11:00）" }));
+    backend.failNextWrite = true;
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    const dialog = screen.getByRole("dialog", { name: /可用时间/ });
+    // 侧栏也有一个「未保存」横幅（同样的 role="alert"），所以只认弹窗里那一条。
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("保存失败");
+    // 弹窗没关、草稿还在、状态不写「已保存」。
+    expect(dialog).toBeVisible();
+    expect(screen.getByRole("group", { name: "已折叠 10:00–11:00，共 1 小时" })).toBeVisible();
+    expect(screen.queryByText("已保存")).toBeNull();
+    // 重试成功后才真正落库并关窗。
+    await user.click(within(dialog).getByRole("button", { name: "重试保存" }));
+    await waitFor(() => expect(foldsOf(backend)).toContainEqual({ start: "10:00", end: "11:00" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+  });
+
+  it("opens the help bubble on hover and closes it on an outside click", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    expect(screen.queryByRole("dialog", { name: "操作说明" })).toBeNull();
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "操作说明" }).parentElement!);
+    const hint = await screen.findByRole("dialog", { name: "操作说明" });
+    // 两组各四条，文案照设计稿。
+    expect(within(hint).getByText("悬停空白处点「＋」加 1 小时")).toBeVisible();
+    expect(within(hint).getByText("拖灰带中部整段平移")).toBeVisible();
+    expect(within(hint).getAllByRole("listitem")).toHaveLength(8);
+    // 点外面收起（弹窗本身还在）。
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "操作说明" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: /可用时间/ })).toBeVisible();
+  });
+
+  it("puts 精确添加 and 清空 in the header as icons and drops the ⋯ menu", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    // 2026-11-08：⋯ 菜单撤掉，两件事各自成为右上角一颗图标按钮。
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    expect(screen.queryByText("恢复默认数据")).toBeNull();
+    const add = screen.getByRole("button", { name: "精确添加空闲时间" });
+    const clear = screen.getByRole("button", { name: "清空本周空闲时间" });
+    expect(add).toBeVisible();
+    expect(clear).toBeVisible();
+    // 添加：直接开面板（不再先进菜单）。
+    await user.click(add);
+    const panel = screen.getByRole("dialog", { name: "精确添加" });
+    expect(panel).toBeVisible();
+    expect(add).toHaveAttribute("aria-expanded", "true");
+    await user.click(within(panel).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "精确添加" })).toBeNull());
+    // 清空：仍然二次确认；确认后草稿清空、按钮失焦不可用，可用「撤销上一步」找回。
+    await user.click(clear);
+    const confirm = screen.getByRole("dialog", { name: "清空本周空闲时间？" });
+    await user.click(within(confirm).getByRole("button", { name: "清空" }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: /空闲$/ })).toBeNull());
+    expect(screen.getByRole("button", { name: "清空本周空闲时间" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "撤销上一步" }));
+    expect(screen.getByRole("group", { name: "周一 19:00–22:00 空闲" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+  });
+
+  it("has no editing bubble on a block and resizes it with the keyboard instead", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    const monday = screen.getByRole("group", { name: "周一 19:00–22:00 空闲" });
+    // 2026-11-08：块上的铅笔与「编辑可用时间」气泡一起撤掉 —— 起止在画布上直接改，
+    // 再没有第二个录入同一份开始／结束时间的表单。
+    expect(within(monday).queryByRole("button", { name: /^编辑 周/ })).toBeNull();
+    await user.click(monday);
+    expect(screen.queryByRole("dialog", { name: "编辑可用时间" })).toBeNull();
+    expect(screen.queryByLabelText("开始时间")).toBeNull();
+    // 键盘路径：Shift+↓ 把结束推后一个吸附步长（默认 15 分钟），Alt+↓ 把开始也推后。
+    monday.focus();
+    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:00–22:15 空闲" })).toBeVisible());
+    screen.getByRole("group", { name: "周一 19:00–22:15 空闲" }).focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:15–22:15 空闲" })).toBeVisible());
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    // 只改周一那一天：它从共享窗口里拆出来，其余六天保持 19:00–22:00，标签原样跟随。
+    await waitFor(() => expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:15", end: "22:15", weekdays: [1], label: "晚间专注" })));
+    expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:00", end: "22:00", weekdays: [0, 2, 3, 4, 5, 6] }));
+  });
+
+  it("never renders the window name inside a block", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    // 夹具的默认窗口名是自定义的「晚间专注」：从块上消失的正是它。
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    expect(screen.queryByText("晚间专注")).toBeNull();
+    // 块里只有时间文本（周一到周日七块同形）。
+    const monday = screen.getByRole("group", { name: "周一 19:00–22:00 空闲" });
+    expect(monday).toHaveTextContent("19:00–22:00");
+    expect(monday.textContent).toBe("19:00–22:00");
+  });
+
+
   it("keeps dependent reminder settings disabled until their parent switch is on", async () => {
     const user = userEvent.setup();
     render(<App settings={new SettingsRepository(new MemorySettingsBackend())} native={createNativeApi()} />);
