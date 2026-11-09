@@ -4004,6 +4004,8 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
     setHover(null);
+    // 一按下就进「拖动中」，悬停「＋」从这一刻起不再生成（见 trackMove 的第一句）。
+    document.body.dataset.availabilityDragging = "true";
     const fromStart = timeMinutes(block.start);
     const fromEnd = timeMinutes(block.end) === 0 ? 1440 : timeMinutes(block.end);
     const visibleStart = Math.max(fromStart, seg.start);
@@ -4128,7 +4130,9 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
   };
 
   const trackMove = (index: number, seg: AvailabilitySegment, weekday: number) => (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (suppressClick.current) return;
+    // 拖动中不要出「＋」：此时指针在块上或块外，悬停框只会跟跟手的块打架
+    // （用户看到的是「拖动读数 + 一个 16:00 胶囊」叠在一起）。
+    if (suppressClick.current || liveDrag || document.body.dataset.availabilityDragging === "true") { setHover(null); return; }
     // 压在块上：这一小时已经占用了，收起「＋」。压在「＋」自己身上：什么都不做 ——
     // 清掉 hover 会把正要点的按钮从指针底下撤走（设计稿同样直接 return）。
     if ((event.target as HTMLElement).closest(".availability-slot")) { setHover(null); return; }
@@ -4329,6 +4333,16 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
   const [draftFolds, setDraftFolds] = useState(folds);
   const [zoomPercent, setZoomPercent] = useState(AVAILABILITY_ZOOM_DEFAULT);
   const [history, setHistory] = useState<Array<{ slots: DefaultTimeSlot[]; folds: FoldedRange[] }>>([]);
+  /**
+   * 草稿是否已偏离打开时的值。
+   *
+   * 比较序列化结果而不是引用：时间轴的增删改都会产生新数组，但「改回原样」同样会产生新数组，
+   * 而那种情况不该拦人。缩放滑杆是本次查看状态，不参与这个判断。
+   */
+  const dirty = useMemo(
+    () => JSON.stringify(draftSlots) !== JSON.stringify(slots) || JSON.stringify(draftFolds) !== JSON.stringify(folds),
+    [draftSlots, draftFolds, slots, folds],
+  );
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -4340,6 +4354,8 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
   const [bulkStart, setBulkStart] = useState("09:00");
   const [bulkEnd, setBulkEnd] = useState("11:00");
   const [bulkDays, setBulkDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  /** 取消前确认：只有**真的有改动**时才拦一次，没动过就直接关。 */
+  const [discardOpen, setDiscardOpen] = useState(false);
   const toolsRef = useRef<HTMLSpanElement | null>(null);
   const addToggleRef = useRef<HTMLButtonElement | null>(null);
   const clearToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -4416,8 +4432,18 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
     }
   };
 
+  /**
+   * 关窗前的唯一出口：有未保存改动就先问一句，没有就直接关。
+   * 取消按钮、Esc、点背景、右上角关闭都走这里，避免出现「按钮会问、Esc 不问」这种不一致。
+   */
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty) { closeMenus(); setDiscardOpen(true); return; }
+    onCancel();
+  };
+
   return <ConfirmDialog id="availability-dialog" labelledBy="availability-title" busy={busy} className="availability-modal"
-    onClose={() => { if (!busy) onCancel(); }}>
+    onClose={requestClose}>
     <div className="availability-modal-head">
       <h2 id="availability-title">可用时间</h2>
       <span className="availability-tools" ref={toolsRef}>
@@ -4487,11 +4513,19 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
       <span className="availability-status" aria-live="polite">{status}</span>
       <span className="availability-foot-gap" aria-hidden="true" />
       <Button variant="quiet" disabled={!history.length || busy} onClick={undo}>撤销上一步</Button>
-      <Button disabled={busy} onClick={onCancel}>取消</Button>
+      <Button disabled={busy} onClick={requestClose}>取消</Button>
       <Button variant="primary" disabled={busy} onClick={() => void done()}>{busy ? "正在保存…" : "完成"}</Button>
     </div>
     {error && <p className="error-message" role="alert"><CircleAlert aria-hidden="true" />{error}
       <Button variant="secondary" disabled={busy} onClick={() => void done()}>重试保存</Button></p>}
+    {discardOpen && <div className="availability-confirm availability-discard" role="dialog" aria-modal="false" aria-labelledby="availability-discard-title">
+      <h3 id="availability-discard-title">放弃未保存的改动？</h3>
+      <p>这次改动还没写进设置。放弃后弹窗里的空闲段与折叠会回到打开时的样子，已保存的内容不受影响。</p>
+      <div className="availability-bulk-actions">
+        <Button variant="quiet" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
+        <Button variant="danger" onClick={onCancel}>放弃改动</Button>
+      </div>
+    </div>}
   </ConfirmDialog>;
 }
 

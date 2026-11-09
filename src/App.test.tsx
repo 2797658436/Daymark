@@ -1943,6 +1943,54 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
   });
 
+  it("hides the hover 添加 chip while a drag is in progress", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    const { yOf } = stubTrack(360);
+    const mondayTrack = document.querySelector<HTMLElement>('.availability-track[data-day="1"]')!;
+    // 先在空白处悬停：有「＋」。
+    fireEvent.pointerMove(mondayTrack, { clientY: yOf(12 * 60) });
+    expect(await screen.findByRole("button", { name: /添加 1 小时空闲$/ })).toBeInTheDocument();
+    // 按住块下沿开始拖，再移到块下方的空白处：此刻不能再冒出一个「＋」。
+    const mondayBlock = document.querySelector<HTMLElement>('.availability-track[data-day="1"] .availability-slot')!;
+    const handle = within(mondayBlock).getByRole("button", { name: "调整 22:00 结束时间" });
+    fireEvent.pointerDown(handle, { button: 0, clientY: yOf(22 * 60) });
+    expect(document.body.dataset.availabilityDragging).toBe("true");
+    fireEvent.pointerMove(mondayTrack, { clientY: yOf(23 * 60) });
+    await waitFor(() => expect(screen.queryByRole("button", { name: /添加 1 小时空闲$/ })).toBeNull());
+    // 松手回到原位（没有改动）：禁选标记撤掉，取消直接关窗、不弹放弃确认。
+    pointerUp(yOf(22 * 60));
+    await waitFor(() => expect(document.body.dataset.availabilityDragging).toBeUndefined());
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+  });
+
+  it("asks before discarding unsaved availability changes, and skips it when nothing changed", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    // 一个字没改：取消直接关，不该弹确认。
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+    expect(screen.queryByRole("dialog", { name: "放弃未保存的改动？" })).toBeNull();
+
+    await openAvailability(user);
+    stubTrack(360);
+    await user.click(screen.getByRole("button", { name: "在 10:00 折叠 1 小时（10:00–11:00）" }));
+    // 改过：取消要拦一次，「继续编辑」把弹窗留下、草稿还在。
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    const confirm = screen.getByRole("dialog", { name: "放弃未保存的改动？" });
+    await user.click(within(confirm).getByRole("button", { name: "继续编辑" }));
+    expect(screen.queryByRole("dialog", { name: "放弃未保存的改动？" })).toBeNull();
+    expect(screen.getByRole("group", { name: "已折叠 10:00–11:00，共 1 小时" })).toBeVisible();
+    // 再取消一次并确认放弃：弹窗关、库里没有这条折叠。
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(within(screen.getByRole("dialog", { name: "放弃未保存的改动？" })).getByRole("button", { name: "放弃改动" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+    expect(foldsOf(backend)).toEqual(DEFAULT_SETTINGS.foldedRanges);
+  });
+
   it("blocks text selection while dragging and leaves no selection behind", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
@@ -2103,6 +2151,9 @@ describe("phase 1 manual alpha", () => {
     stubTrack(360);
     await user.click(screen.getByRole("button", { name: "在 10:00 折叠 1 小时（10:00–11:00）" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
+    // 有未保存改动：先确认一次，避免误丢草稿。
+    const discard = screen.getByRole("dialog", { name: "放弃未保存的改动？" });
+    await user.click(within(discard).getByRole("button", { name: "放弃改动" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
     // 取消：库里一个字都没变（没有多出 10:00–11:00 的折叠，也没有灰带）。
     expect(foldsOf(backend)).toEqual(DEFAULT_SETTINGS.foldedRanges);
@@ -2112,6 +2163,8 @@ describe("phase 1 manual alpha", () => {
     stubTrack(360);
     await user.click(screen.getByRole("button", { name: "在 11:00 折叠 1 小时（11:00–12:00）" }));
     await user.keyboard("{Escape}");
+    // Esc 与「取消」同一条出口：同样先问。
+    await user.click(within(screen.getByRole("dialog", { name: "放弃未保存的改动？" })).getByRole("button", { name: "放弃改动" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
     expect(foldsOf(backend)).toEqual(DEFAULT_SETTINGS.foldedRanges);
   });

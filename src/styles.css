@@ -1291,6 +1291,8 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .availability-clear-toggle:hover:not(:disabled) { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .availability-bulk, .availability-confirm { position: absolute; top: calc(100% + .375rem); right: 0; z-index: 31; width: 19rem; padding: .75rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel); box-shadow: var(--shadow-float); }
 .availability-confirm { width: 17.5rem; border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+/* 放弃改动：不是浮在「⋯」下面的小气泡，而是压在弹窗底部的一条确认带（底部对齐、覆盖在页脚之上） */
+.availability-discard { position: sticky; bottom: .5rem; z-index: 40; width: min(26rem, 100%); margin: .5rem auto 0; }
 .availability-bulk h3, .availability-confirm h3 { margin: 0 0 .25rem; font-size: .875rem; font-weight: 600; color: var(--text); }
 /* 精确添加面板没有说明段落：标题直接接时间行，给 0.5rem 的呼吸。 */
 .availability-bulk h3 { margin-bottom: .5rem; }
@@ -1381,7 +1383,9 @@ body[data-availability-dragging="true"] { cursor: grabbing; }
 .availability-slot.is-tiny .availability-slot-handle::after { display: none; }
 
 /* 悬停「＋」：框出点下去会加的那一小时，胶囊落在正中。frame 不吃指针，只有胶囊可点。 */
-.availability-hover-frame { position: absolute; left: .125rem; right: .125rem; z-index: 3; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: .375rem; pointer-events: none; background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+/* 悬停「＋」必须压在块**上面**：块 hover 时会抬到 z-index 4（为了露出自己的边和阴影），
+   若这一层还是 3，「16:00」胶囊就会被块的下半截盖住 —— 用户截图里那半个加号就是这么来的。 */
+.availability-hover-frame { position: absolute; left: .125rem; right: .125rem; z-index: 5; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: .375rem; pointer-events: none; background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .availability-hover-add { display: inline-flex; align-items: center; justify-content: center; min-width: 2.75rem; height: 100%; max-height: 2.75rem; padding: 0; border: 0; background: transparent; pointer-events: auto; }
 .availability-hover-chip { display: inline-flex; align-items: center; gap: .2rem; height: min(1.625rem, 30px); padding: 0 min(.5rem, 10px); border-radius: 999px; background: color-mix(in srgb, var(--accent-strong) 88%, transparent); color: var(--panel); font-size: min(.75rem, 13px); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: var(--shadow-low); transition: background .12s ease, transform .12s ease; }
 .availability-hover-add:hover .availability-hover-chip { background: var(--accent-strong); transform: scale(1.04); }
