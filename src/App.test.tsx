@@ -1943,6 +1943,44 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
   });
 
+  it("previews the new end live while dragging a block edge", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    const { yOf } = stubTrack(360);
+    const mondayBlock = document.querySelector<HTMLElement>('.availability-track[data-day="1"] .availability-slot')!;
+    const handle = within(mondayBlock).getByRole("button", { name: "调整 22:00 结束时间" });
+    fireEvent.pointerDown(handle, { button: 0, clientY: yOf(22 * 60) });
+    // 拖动中（还没松手）：块自己就已经画到 23:00 —— 不能只有指针旁的读数在动。
+    pointerMove(yOf(23 * 60));
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:00–23:00 空闲" })).toBeVisible());
+    expect(screen.getByRole("group", { name: "周一 19:00–23:00 空闲" })).toHaveClass("is-dragging");
+    // 其余六天不受影响，也不带 is-dragging。
+    expect(screen.getByRole("group", { name: "周二 19:00–22:00 空闲" })).not.toHaveClass("is-dragging");
+    // 松手后才落库，且预览与落库值一致；此时「拖动中」样式已经撤掉。
+    pointerUp(yOf(23 * 60));
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:00–23:00 空闲" })).not.toHaveClass("is-dragging"));
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:00", end: "23:00", weekdays: [1] })));
+  });
+
+  it("previews the new range live while dragging a folded band edge", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    stubTrack(360);
+    const band = screen.getByRole("group", { name: "已折叠 00:00–06:00，共 6 小时" });
+    const edge = band.querySelector("[data-edge=\"end\"]")!;
+    fireEvent.pointerDown(edge, { button: 0, clientY: 0 });
+    pointerMove(90);
+    // 拖动中：灰带的文案与可访问名已经是新范围（整条轴实时重排）。
+    await waitFor(() => expect(screen.getByRole("group", { name: "已折叠 00:00–08:00，共 8 小时" })).toBeVisible());
+    expect(screen.getByRole("group", { name: "已折叠 00:00–08:00，共 8 小时" })).toHaveClass("is-dragging");
+    pointerUp(90);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(foldsOf(backend)).toContainEqual({ start: "00:00", end: "08:00" }));
+  });
+
   it("drags the block bottom edge to change the end time", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);

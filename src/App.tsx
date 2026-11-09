@@ -3915,15 +3915,40 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
   onFoldsChange: (next: FoldedRange[]) => void;
 }) {
   const snap: AvailabilitySnap = snapMinutes === "off" ? 0 : snapMinutes;
-  const segments = useMemo(() => availabilitySegments(folds), [folds]);
   const blocks = useMemo(() => availabilityBlocks(slots), [slots]);
   const [selected, setSelected] = useState<AvailabilitySelection | null>(null);
   const [hover, setHover] = useState<{ seg: number; weekday: number; start: number } | null>(null);
   const [tag, setTag] = useState<{ text: string; x: number; y: number } | null>(null);
+  /**
+   * 拖拽中的实时几何（块或灰带）。
+   *
+   * 只在松手时写库，但**画**必须跟手：块与灰带的 top／height 由这里覆盖，
+   * 否则拖动过程只有指针旁的读数在动、被拖的那块停在原地（A3 重写时丢的）。
+   * `kind` 决定覆盖哪一类：`block` 按「星期 + 原起止」认，`fold` 按原段认。
+   */
+  const [liveDrag, setLiveDrag] = useState<
+    | { kind: "block"; weekday: number; fromStart: string; fromEnd: string; start: number; end: number }
+    | { kind: "fold"; fromStart: number; fromEnd: number; start: number; end: number }
+    | null
+  >(null);
   /** 拖动结束后浏览器仍会补一次 click：用它挡掉，免得「拖完顺手又选中／又新建」。 */
   const suppressClick = useRef(false);
   const hourPx = availabilityHourRemFor(zoomPercent) * availabilityRemPx();
   const clock = (minute: number) => foldedClock(Math.max(0, Math.min(1440, Math.round(minute))));
+  /**
+   * 拖灰带时的「预览折叠集合」：把被拖的那一段换成实时范围再规范化。
+   * 段的位置与长度都从这份集合算，所以灰带拖动时整条轴会实时重排（不是只有读数在动）。
+   */
+  const liveFolds = useMemo(() => {
+    if (liveDrag?.kind !== "fold") return folds;
+    const rest = folds.filter((range) => {
+      const from = foldedMinute(range.start);
+      const to = foldedMinute(range.end);
+      return !(from === liveDrag.fromStart && to === liveDrag.fromEnd);
+    });
+    return normalizeFoldedRanges([...rest, { start: foldedClock(liveDrag.start), end: foldedClock(liveDrag.end) }]);
+  }, [folds, liveDrag]);
+  const segments = useMemo(() => availabilitySegments(liveFolds), [liveFolds]);
   const minuteIn = (seg: AvailabilitySegment, rect: DOMRect, clientY: number) =>
     seg.start + ((clientY - rect.top) / Math.max(1, rect.height)) * (seg.end - seg.start);
   const foldStep = snap === 0 ? 5 : snap;
@@ -3981,14 +4006,16 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
       if (edge === "top") return { start: Math.max(seg.start, Math.min(visibleEnd - AVAILABILITY_MIN_MINUTES, snapMinute(minute, snap))), end: visibleEnd };
       return { start: visibleStart, end: Math.max(visibleStart + AVAILABILITY_MIN_MINUTES, Math.min(seg.end, snapMinute(minute, snap))) };
     };
+    setLiveDrag({ kind: "block", weekday: block.weekday, fromStart: block.start, fromEnd: block.end, start: visibleStart, end: visibleEnd });
     const move = (next: PointerEvent) => {
       const live = compute(next.clientY);
+      setLiveDrag({ kind: "block", weekday: block.weekday, fromStart: block.start, fromEnd: block.end, start: live.start, end: live.end });
       setTag({ text: clock(live.start) + "–" + clock(live.end) + " · " + availabilityBandHours(live.end - live.start) + " 小时", x: next.clientX, y: next.clientY });
     };
     const up = (next: PointerEvent) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      setTag(null);
+      setTag(null); setLiveDrag(null);
       const live = compute(next.clientY);
       // click 紧跟 pointerup 同步派发；放到下一个任务里再解锁，刚好吞掉这一次。
       window.setTimeout(() => { suppressClick.current = false; }, 0);
@@ -4030,14 +4057,16 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
       if (mode === "start") return { start: Math.max(0, Math.min(origin.end - FOLDED_RANGE_MIN_MINUTES, origin.start + delta)), end: origin.end };
       return { start: origin.start, end: Math.max(origin.start + FOLDED_RANGE_MIN_MINUTES, Math.min(1440, origin.end + delta)) };
     };
+    setLiveDrag({ kind: "fold", fromStart: origin.start, fromEnd: origin.end, start: origin.start, end: origin.end });
     const move = (next: PointerEvent) => {
       const live = compute(next.clientY);
+      setLiveDrag({ kind: "fold", fromStart: origin.start, fromEnd: origin.end, start: live.start, end: live.end });
       setTag({ text: clock(live.start) + "–" + clock(live.end) + " · 折叠", x: next.clientX, y: next.clientY });
     };
     const up = (next: PointerEvent) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      setTag(null);
+      setTag(null); setLiveDrag(null);
       const live = compute(next.clientY);
       window.setTimeout(() => { suppressClick.current = false; }, 0);
       if (live.start === origin.start && live.end === origin.end) {
@@ -4094,13 +4123,16 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
         const row = index + 2;
         const height = seg.collapsed ? "var(--availability-band)" : `calc(var(--ah) * ${(seg.end - seg.start) / 60})`;
         if (seg.collapsed) {
+          // 拖灰带时 liveFolds 已经把这一段的边界换成实时值，所以 seg 自身就是预览几何；
+          // 只需要认出「被拖的是哪一条」来加 is-dragging（按实时范围匹配，原段已经不在了）。
           const startLabel = clock(seg.start);
           const endLabel = clock(seg.end);
+          const isDragging = liveDrag?.kind === "fold" && clock(liveDrag.start) === startLabel && clock(liveDrag.end) === endLabel;
           const isSelected = selected?.kind === "fold" && selected.start === startLabel && selected.end === endLabel;
           const hiddenBlocks = blocks.filter((block) => timeMinutes(block.start) < seg.end && (timeMinutes(block.end) === 0 ? 1440 : timeMinutes(block.end)) > seg.start).length;
           return <Fragment key={"fold-" + seg.start + "-" + seg.end}>
             <div className="availability-gutter is-fold" style={{ gridRow: row, gridColumn: 1, height }} />
-            <div className={isSelected ? "availability-band is-selected" : "availability-band"} data-seg={index} role="group" tabIndex={0} aria-selected={isSelected}
+            <div className={["availability-band", isSelected ? "is-selected" : "", isDragging ? "is-dragging" : ""].filter(Boolean).join(" ")} data-seg={index} role="group" tabIndex={0} aria-selected={isSelected}
               aria-label={"已折叠 " + startLabel + "–" + endLabel + "，共 " + availabilityBandHours(seg.end - seg.start) + " 小时"}
               title="拖上／下沿改范围，拖中部整段平移，× 展开"
               style={{ gridRow: row, gridColumn: "2 / -1", height }}
@@ -4156,13 +4188,17 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
                 style={{ top: `calc(var(--ah) * ${(minute - seg.start) / 60})` }} />)}
               {dayBlocks.map((block) => {
                 const blockEnd = timeMinutes(block.end) === 0 ? 1440 : timeMinutes(block.end);
-                const start = Math.max(timeMinutes(block.start), seg.start);
-                const end = Math.min(blockEnd, seg.end);
+                // 拖拽中：这一块用自己的实时几何画，而不是等松手落库后再重绘。
+                const live = liveDrag?.kind === "block" && liveDrag.weekday === weekday && liveDrag.fromStart === block.start && liveDrag.fromEnd === block.end ? liveDrag : null;
+                const shownStart = live ? live.start : timeMinutes(block.start);
+                const shownEnd = live ? live.end : blockEnd;
+                const start = Math.max(shownStart, seg.start);
+                const end = Math.min(shownEnd, seg.end);
                 if (end <= start) return null;
                 const px = ((end - start) / 60) * hourPx;
                 const isSelected = selected?.kind === "slot" && selected.weekday === weekday && selected.start === block.start && selected.end === block.end;
-                const classes = ["availability-slot", px < AVAILABILITY_TINY_PX ? "is-tiny" : px >= AVAILABILITY_TALL_PX ? "is-tall" : "", isSelected ? "is-selected" : ""].filter(Boolean).join(" ");
-                const label = "周" + AVAILABILITY_DAY_NAMES[weekday] + " " + block.start + "–" + block.end + " 空闲";
+                const classes = ["availability-slot", px < AVAILABILITY_TINY_PX ? "is-tiny" : px >= AVAILABILITY_TALL_PX ? "is-tall" : "", isSelected ? "is-selected" : "", live ? "is-dragging" : ""].filter(Boolean).join(" ");
+                const label = "周" + AVAILABILITY_DAY_NAMES[weekday] + " " + clock(shownStart) + "–" + clock(shownEnd) + " 空闲";
                 return <div key={block.slotId + "-" + weekday} className={classes} role="group" tabIndex={0} aria-selected={isSelected}
                   aria-label={label} title={label} data-day={weekday} data-start={block.start} data-end={block.end} data-seg={index}
                   style={{ top: `calc(var(--ah) * ${(start - seg.start) / 60})`, height: `calc(var(--ah) * ${(end - start) / 60})` }}
@@ -4197,7 +4233,7 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
                   }}>
                   <button type="button" className="availability-slot-handle is-top" tabIndex={-1} aria-label={"调整 " + block.start + " 开始时间"}
                     onPointerDown={beginBlockDrag(block, seg, "top")} onClick={(event) => event.stopPropagation()} />
-                  <span className="availability-slot-time"><b>{block.start}</b><i aria-hidden="true">–</i><b>{block.end}</b></span>
+                  <span className="availability-slot-time"><b>{clock(shownStart)}</b><i aria-hidden="true">–</i><b>{clock(shownEnd)}</b></span>
                   <button type="button" className="availability-slot-delete" aria-label={"删除 周" + AVAILABILITY_DAY_NAMES[weekday] + " " + block.start + "–" + block.end} title="删除这一段"
                     onClick={(event) => { event.stopPropagation(); removeSlot(weekday, block.start, block.end); }}>
                     <X size={12} aria-hidden="true" />
