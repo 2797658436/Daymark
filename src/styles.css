@@ -1348,6 +1348,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 /* 拖动中：跟手的那一块浮到最上层、换成抓手并加强阴影，其余块保持静止。
    不加 transition —— 跟手必须逐帧对齐，任何缓动都会看起来「慢半拍」。 */
 .availability-slot.is-dragging { z-index: 6; cursor: grabbing; box-shadow: var(--shadow-float); border-color: var(--accent-strong); }
+/* 拖动期间整页禁选：块里的「19:00–22:00」是真文字，指针扫过去会被框成蓝底选区，
+   松手后还留着。日历那边一直靠 body[data-calendar-dragging] 挡着，时间轴这里补同一条。
+   ::selection 也压掉透明 —— 有极端情况下选区已经生成时，至少不显示成蓝色高亮。 */
+body[data-availability-dragging="true"], body[data-availability-dragging="true"] * { user-select: none; -webkit-user-select: none; }
+body[data-availability-dragging="true"] ::selection { background: transparent; color: inherit; }
+body[data-availability-dragging="true"] { cursor: grabbing; }
 /* 字号用 min(rem, px) 收口：200% 下 rem 翻倍，而一小时的空闲块只有 20px 高。 */
 .availability-slot-time { display: flex; align-items: baseline; justify-content: center; max-width: 100%; overflow: hidden; color: var(--text); font-size: min(.75rem, 15px); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
 .availability-slot-time i { font-style: normal; opacity: .7; }

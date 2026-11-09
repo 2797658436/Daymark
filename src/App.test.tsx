@@ -1943,6 +1943,26 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
   });
 
+  it("blocks text selection while dragging and leaves no selection behind", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    const { yOf } = stubTrack(360);
+    const mondayBlock = document.querySelector<HTMLElement>('.availability-track[data-day="1"] .availability-slot')!;
+    const handle = within(mondayBlock).getByRole("button", { name: "调整 22:00 结束时间" });
+    fireEvent.pointerDown(handle, { button: 0, clientY: yOf(22 * 60) });
+    pointerMove(yOf(23 * 60));
+    // 拖动中：整页进入禁选态（块内时间是真文字，指针扫过会被框成蓝底选区）。
+    expect(document.body.dataset.availabilityDragging).toBe("true");
+    await waitFor(() => expect(screen.getByRole("group", { name: "周一 19:00–23:00 空闲" })).toBeVisible());
+    // 松手后禁选态撤掉，且没有留下任何选区（这才是「拖完不知道怎么办」的那个蓝底）。
+    pointerUp(yOf(23 * 60));
+    await waitFor(() => expect(document.body.dataset.availabilityDragging).toBeUndefined());
+    expect(window.getSelection()?.rangeCount ?? 0).toBe(0);
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(slotsOf(backend)).toContainEqual(expect.objectContaining({ start: "19:00", end: "23:00", weekdays: [1] })));
+  });
+
   it("previews the new end live while dragging a block edge", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);

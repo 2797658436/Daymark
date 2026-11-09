@@ -3933,6 +3933,15 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
   >(null);
   /** 拖动结束后浏览器仍会补一次 click：用它挡掉，免得「拖完顺手又选中／又新建」。 */
   const suppressClick = useRef(false);
+  /**
+   * 上一次拖动没走完的收尾（防御性）。
+   *
+   * 正常路径是松手／取消时自己摘监听；但只要中途任何一步提前返回（move 里抛错、
+   * 组件被卸载、测试在 pointerup 之前就结束），那套 window 监听就会留到下一次交互 ——
+   * 表现是「之后的 Esc 没反应」。所以每次按下新拖动前先跑一遍上一次的清理。
+   */
+  const teardownDragRef = useRef<(() => void) | null>(null);
+  const resetDrag = () => { teardownDragRef.current?.(); teardownDragRef.current = null; };
   const hourPx = availabilityHourRemFor(zoomPercent) * availabilityRemPx();
   const clock = (minute: number) => foldedClock(Math.max(0, Math.min(1440, Math.round(minute))));
   /**
@@ -3965,11 +3974,16 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
     setSelected(null);
   };
 
+  // 弹窗卸载时兜底：拖动若还没结束，把它的 window 监听一并摘掉。
+  useEffect(() => () => { teardownDragRef.current?.(); teardownDragRef.current = null; }, []);
+
   // Delete / Backspace 删除选中项；Esc 清选中。输入框里的按键不受影响。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select")) return;
+      // 拖动中的 Esc 由拖动自己挂的捕获监听处理（要先于弹窗的「关弹窗」）：
+      // 这里只负责非拖动状态下清掉选中。
       if (event.key === "Escape") { setSelected(null); return; }
       if (event.key !== "Delete" && event.key !== "Backspace") return;
       if (!selected) return;
@@ -3986,6 +4000,7 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
     if (event.button !== 0) return;
     const track = (event.currentTarget as HTMLElement).closest<HTMLElement>(".availability-track");
     if (!track) return;
+    resetDrag();
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
     setHover(null);
@@ -4007,22 +4022,38 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
       return { start: visibleStart, end: Math.max(visibleStart + AVAILABILITY_MIN_MINUTES, Math.min(seg.end, snapMinute(minute, snap))) };
     };
     setLiveDrag({ kind: "block", weekday: block.weekday, fromStart: block.start, fromEnd: block.end, start: visibleStart, end: visibleEnd });
+    // 拖动期间禁掉文本选择：块里的时间是可选中的文字，指针扫过相邻块会把它框起来，
+    // 松手后选区还留着（用户看到的就是一条蓝底时间）。日历那边一直是靠
+    // `body[data-calendar-dragging]` 挡住的，时间轴重写后这层丢了。
+    document.body.dataset.availabilityDragging = "true";
+    window.getSelection()?.removeAllRanges();
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      delete document.body.dataset.availabilityDragging;
+      // 收尾再清一次：拖动过程中若已生成选区，松手不该把它留在界面上。
+      window.getSelection()?.removeAllRanges();
+      setTag(null); setLiveDrag(null);
+      // click 紧跟 pointerup 同步派发；放到下一个任务里再解锁，刚好吞掉这一次。
+      window.setTimeout(() => { suppressClick.current = false; }, 0);
+    };
+    teardownDragRef.current = finish;
+    /** 中止拖动：只撤预览、不写库（pointercancel 与卸载走这里）。 */
+    const cancel = () => finish();
     const move = (next: PointerEvent) => {
       const live = compute(next.clientY);
       setLiveDrag({ kind: "block", weekday: block.weekday, fromStart: block.start, fromEnd: block.end, start: live.start, end: live.end });
       setTag({ text: clock(live.start) + "–" + clock(live.end) + " · " + availabilityBandHours(live.end - live.start) + " 小时", x: next.clientX, y: next.clientY });
     };
     const up = (next: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setTag(null); setLiveDrag(null);
       const live = compute(next.clientY);
-      // click 紧跟 pointerup 同步派发；放到下一个任务里再解锁，刚好吞掉这一次。
-      window.setTimeout(() => { suppressClick.current = false; }, 0);
       if (live.start === visibleStart && live.end === visibleEnd) {
+        finish();
         setSelected({ kind: "slot", weekday: block.weekday, start: block.start, end: block.end });
         return;
       }
+      finish();
       onSlotsChange(replaceAvailability(
         slots, block.weekday,
         { start: block.start, end: block.end },
@@ -4034,11 +4065,13 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
   };
 
   /** 灰带拖动：拖上／下沿改范围（最短 30 分钟），拖中部整段平移（时长不变）。 */
   const beginFoldDrag = (seg: AvailabilitySegment, mode: "start" | "end" | "move") => (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
+    resetDrag();
     event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
     setHover(null);
@@ -4058,27 +4091,40 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
       return { start: origin.start, end: Math.max(origin.start + FOLDED_RANGE_MIN_MINUTES, Math.min(1440, origin.end + delta)) };
     };
     setLiveDrag({ kind: "fold", fromStart: origin.start, fromEnd: origin.end, start: origin.start, end: origin.end });
+    document.body.dataset.availabilityDragging = "true";
+    window.getSelection()?.removeAllRanges();
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      delete document.body.dataset.availabilityDragging;
+      window.getSelection()?.removeAllRanges();
+      setTag(null); setLiveDrag(null);
+      window.setTimeout(() => { suppressClick.current = false; }, 0);
+    };
+    teardownDragRef.current = finish;
+    /** 与块拖动同理。 */
+    const cancel = () => finish();
     const move = (next: PointerEvent) => {
       const live = compute(next.clientY);
       setLiveDrag({ kind: "fold", fromStart: origin.start, fromEnd: origin.end, start: live.start, end: live.end });
       setTag({ text: clock(live.start) + "–" + clock(live.end) + " · 折叠", x: next.clientX, y: next.clientY });
     };
     const up = (next: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setTag(null); setLiveDrag(null);
       const live = compute(next.clientY);
-      window.setTimeout(() => { suppressClick.current = false; }, 0);
       if (live.start === origin.start && live.end === origin.end) {
+        finish();
         setSelected({ kind: "fold", start: clock(origin.start), end: clock(origin.end) });
         return;
       }
+      finish();
       const rest = folds.filter((range) => !(timeMinutes(range.start) === origin.start && foldedMinute(range.end) === origin.end));
       onFoldsChange(normalizeFoldedRanges([...rest, { start: clock(live.start), end: clock(live.end) }]));
       setSelected({ kind: "fold", start: clock(live.start), end: clock(live.end) });
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up, { once: true });
+    window.addEventListener("pointercancel", cancel, { once: true });
   };
 
   const trackMove = (index: number, seg: AvailabilitySegment, weekday: number) => (event: ReactPointerEvent<HTMLDivElement>) => {
