@@ -1291,8 +1291,12 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .availability-clear-toggle:hover:not(:disabled) { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
 .availability-bulk, .availability-confirm { position: absolute; top: calc(100% + .375rem); right: 0; z-index: 31; width: 19rem; padding: .75rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--panel); box-shadow: var(--shadow-float); }
 .availability-confirm { width: 17.5rem; border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
-/* 放弃改动：不是浮在「⋯」下面的小气泡，而是压在弹窗底部的一条确认带（底部对齐、覆盖在页脚之上） */
-.availability-discard { position: sticky; bottom: .5rem; z-index: 40; width: min(26rem, 100%); margin: .5rem auto 0; }
+/* 背景／Esc 触发的那一支是居中弹窗：它的 backdrop 必须高于主弹窗（80），否则会被压在底下。 */
+.modal-backdrop:has(> .modal.availability-discard-dialog) { z-index: 95; }
+/* 放弃改动：锚在「取消」上的气泡（FloatingPanel 负责几何），这里只管文字节奏。 */
+.availability-discard-panel { width: 21rem; }
+.availability-discard-panel h2 { margin: 0 0 .35rem; font-size: .9375rem; font-weight: 600; color: var(--text); }
+.availability-discard-text { margin: 0 0 .75rem; color: var(--muted); font-size: .8125rem; line-height: 1.5; }
 .availability-bulk h3, .availability-confirm h3 { margin: 0 0 .25rem; font-size: .875rem; font-weight: 600; color: var(--text); }
 /* 精确添加面板没有说明段落：标题直接接时间行，给 0.5rem 的呼吸。 */
 .availability-bulk h3 { margin-bottom: .5rem; }
@@ -1329,7 +1333,10 @@ body[data-pool-resizing] .workspace-main { pointer-events: none; }
 .availability-gutter-label.is-major { font-weight: 600; }
 /* 悬停这一小时浮出「折叠」（不带加号）。默认透明但仍可命中：命中区就是这一小时。
    按钮停在刻度列左侧，不伸到时间文字下面 —— 两行竖排的时间不会把虚线框「咬」掉一块。 */
-.availability-fold-add { position: absolute; left: .2rem; right: 2.6rem; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 0 .2rem; border: 1px dashed transparent; border-radius: .375rem; background: transparent; color: var(--accent-strong); font-size: .75rem; font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .08s ease, border-color .08s ease, background .08s ease; }
+/* 折叠按钮：固定 1.5rem 高、在整点那一格里居中；命中区用伪元素撑到 44px，
+   所以视觉变小了、按起来仍然容易（块只有一个字，不必占满一小时）。 */
+.availability-fold-add { position: absolute; left: .2rem; right: 2.6rem; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 0 .2rem; border: 1px dashed transparent; border-radius: .375rem; background: transparent; color: var(--accent-strong); font-size: min(.75rem, 14px); font-weight: 600; white-space: nowrap; opacity: 0; transition: opacity .08s ease, border-color .08s ease, background .08s ease; }
+.availability-fold-add::before { content: ""; position: absolute; inset: calc((1.5rem - 44px) / 2) 0; }
 .availability-fold-add:hover, .availability-fold-add:focus-visible { opacity: 1; border-color: var(--accent-strong); background: var(--accent-soft); box-shadow: var(--shadow-low); }
 
 /* 展开段的列：整列是一个可聚焦的 group，Enter 加 09:00–10:00。 */

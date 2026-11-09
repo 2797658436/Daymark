@@ -98,6 +98,14 @@ export interface AppSettings {
   defaultTimeSlots: DefaultTimeSlot[];
   /** 折叠段只影响「可用时间」编辑器怎么画，不参与排程：排程仍只读 `defaultTimeSlots`。 */
   foldedRanges: FoldedRange[];
+  /**
+   * 「可用时间」编辑器的时间轴缩放（50–100%）。
+   *
+   * 纯查看偏好，不参与排程也不进草稿：松手即写，下次打开沿用上次的比例。
+   * 存百分比而不是 rem —— 换算公式（`availabilityHourRemFor`）以后可以改，
+   * 已经存下来的值仍然能用。
+   */
+  availabilityZoom: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -131,6 +139,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reviewAnchorDate: null,
   defaultTimeSlots: [{ id: "evening", label: "晚间专注", start: "19:00", end: "22:00", weekdays: [0, 1, 2, 3, 4, 5, 6] }],
   foldedRanges: DEFAULT_FOLDED_RANGES.map((range) => ({ ...range })),
+  availabilityZoom: 70,
 };
 
 /**
@@ -252,6 +261,7 @@ function normalizeSettings(value: unknown): AppSettings {
     reviewAnchorDate: isLocalDate(candidate.reviewAnchorDate) ? candidate.reviewAnchorDate : null,
     defaultTimeSlots: normalizeTimeSlots(candidate.defaultTimeSlots),
     foldedRanges: normalizeFoldedRanges(candidate.foldedRanges),
+    availabilityZoom: normalizeAvailabilityZoom(candidate.availabilityZoom),
   };
 }
 
@@ -351,6 +361,18 @@ function isLocalDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number); const parsed = new Date(Date.UTC(year, month - 1, day));
   return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
+/**
+ * 可用时间编辑器的缩放规范化。
+ *
+ * 缺字段（老设置／旧备份）回退默认 70，越界或非数值同样回退 —— 与其它数值字段一致，
+ * 不做「静默夹到边界」（那会让 0 和 70 看起来一样）。
+ */
+function normalizeAvailabilityZoom(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 50 && value <= 100
+    ? Math.round(value)
+    : DEFAULT_SETTINGS.availabilityZoom;
 }
 
 function normalizeTimeSlots(value: unknown): DefaultTimeSlot[] {

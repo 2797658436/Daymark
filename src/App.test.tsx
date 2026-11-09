@@ -1943,6 +1943,27 @@ describe("phase 1 manual alpha", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
   });
 
+  it("remembers the timeline zoom across dialog reopens", async () => {
+    const user = userEvent.setup(); const backend = new MemorySettingsBackend();
+    render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);
+    await openAvailability(user);
+    const zoom = screen.getByRole("slider", { name: "时间轴缩放比例" });
+    // 默认 70%，滑到 90% 后松手才写库（commitOnRelease）。
+    expect(zoom).toHaveValue("70");
+    // commitOnRelease：拖动/键入只改本地 draft，提交发生在原生 change 或 blur。
+    // jsdom 里直接派发原生 change 时 React 还没重渲染、ref 读到的 draft 仍是 null，
+    // 所以这里走 blur —— 与用户「拖完点别处」同一条路径。
+    fireEvent.change(zoom, { target: { value: "90" } });
+    fireEvent.blur(zoom);
+    await waitFor(() => expect(backend.value).toMatchObject({ availabilityZoom: 90 }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /可用时间/ })).toBeNull());
+    // 重开：滑杆与轴高度都沿用上次的比例。
+    await openAvailability(user);
+    expect(screen.getByRole("slider", { name: "时间轴缩放比例" })).toHaveValue("90");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+  });
+
   it("hides the hover 添加 chip while a drag is in progress", async () => {
     const user = userEvent.setup(); const backend = new MemorySettingsBackend();
     render(<App settings={new SettingsRepository(backend)} native={createNativeApi()} />);

@@ -3825,7 +3825,6 @@ const AVAILABILITY_DAY_NAMES = ["日", "一", "二", "三", "四", "五", "六"]
 const AVAILABILITY_HOUR_REM_RANGE = [1.5, 5] as const;
 /** 缩放滑杆的百分比区间：50% 最紧凑、100% 最宽松；默认 70%（≈2.9rem/小时）。 */
 const AVAILABILITY_ZOOM_RANGE = [50, 100] as const;
-const AVAILABILITY_ZOOM_DEFAULT = 70;
 /** 一次「＋」与一次「折叠」加出来的长度，以及块的最短长度。 */
 const AVAILABILITY_ADD_MINUTES = 60;
 const AVAILABILITY_MIN_MINUTES = 15;
@@ -4221,7 +4220,8 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
               {clock(minute)}
             </span>)}
             {foldButtons.map((fold) => <button key={fold.at} type="button" className="availability-fold-add"
-              style={{ top: `calc(var(--ah) * ${(fold.at - seg.start) / 60})`, height: `calc(var(--ah) * ${(fold.end - fold.at) / 60})` }}
+              /* 按钮本身不占满一小时：固定 1.5rem 高、在整点区间里居中（命中区由伪元素撑到 44px）。 */
+              style={{ top: `calc(var(--ah) * ${(fold.at - seg.start) / 60} + (var(--ah) - 1.5rem) / 2)`, height: "1.5rem" }}
               aria-label={"在 " + clock(fold.at) + " 折叠 1 小时（" + clock(fold.at) + "–" + clock(fold.end) + "）"}
               title={clock(fold.at) + "–" + clock(fold.end) + " 折叠"}
               onClick={() => onFoldsChange(addFold(folds, clock(fold.at), clock(fold.end)))}>折叠</button>)}
@@ -4322,16 +4322,19 @@ function AvailabilityDesigner({ slots, folds, snapMinutes, zoomPercent, onSlotsC
  * `取消`／Esc 丢掉草稿。写入失败时保留草稿、弹窗不关、给可重试的错误 —— 不伪装成已保存。
  * 缩放滑杆是**本次查看**状态：只改每小时像素，不写设置、不改吸附、不改折叠带高度。
  */
-function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
+function AvailabilityDialog({ slots, folds, snapMinutes, zoomPercent, onZoomChange, onCancel, onCommit }: {
   slots: DefaultTimeSlot[];
   folds: FoldedRange[];
   snapMinutes: AppSettings["snapMinutes"];
+  /** 时间轴缩放（已持久化在 preferences.availabilityZoom）。 */
+  zoomPercent: number;
+  /** 松手即写回设置：缩放是查看偏好，不进草稿、不参与「放弃改动」判断。 */
+  onZoomChange: (next: number) => void;
   onCancel: () => void;
   onCommit: (next: { defaultTimeSlots: DefaultTimeSlot[]; foldedRanges: FoldedRange[] }) => Promise<void>;
 }) {
   const [draftSlots, setDraftSlots] = useState(slots);
   const [draftFolds, setDraftFolds] = useState(folds);
-  const [zoomPercent, setZoomPercent] = useState(AVAILABILITY_ZOOM_DEFAULT);
   const [history, setHistory] = useState<Array<{ slots: DefaultTimeSlot[]; folds: FoldedRange[] }>>([]);
   /**
    * 草稿是否已偏离打开时的值。
@@ -4356,6 +4359,12 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
   const [bulkDays, setBulkDays] = useState<number[]>([1, 2, 3, 4, 5]);
   /** 取消前确认：只有**真的有改动**时才拦一次，没动过就直接关。 */
   const [discardOpen, setDiscardOpen] = useState(false);
+  /**
+   * 确认形态由**来源**决定：
+   * - 点「取消」按钮 → 锚在按钮上的气泡（用户视线就在那里，气泡最短路径）
+   * - 点背景／Esc → 居中弹窗（没有可锚的东西，气泡会飘在角落，反而像弹错位置）
+   */
+  const [discardAnchor, setDiscardAnchor] = useState<HTMLElement | null>(null);
   const toolsRef = useRef<HTMLSpanElement | null>(null);
   const addToggleRef = useRef<HTMLButtonElement | null>(null);
   const clearToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -4436,14 +4445,21 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
    * 关窗前的唯一出口：有未保存改动就先问一句，没有就直接关。
    * 取消按钮、Esc、点背景、右上角关闭都走这里，避免出现「按钮会问、Esc 不问」这种不一致。
    */
-  const requestClose = () => {
+  const requestClose = (anchor: HTMLElement | null = null) => {
     if (busy) return;
-    if (dirty) { closeMenus(); setDiscardOpen(true); return; }
+    if (dirty) { closeMenus(); setDiscardAnchor(anchor); setDiscardOpen(true); return; }
     onCancel();
   };
 
+  /**
+   * Esc（由 ConfirmDialog 的关闭路径传来）没有具体按钮可锚：退到弹窗自身，
+   * 气泡就会落在弹窗右上角附近，而不是飘到视口角落。
+   */
+  // 背景／Esc：锚点为空 → 走居中弹窗那一支。
+  const requestCloseFromDialog = () => requestClose(null);
+
   return <ConfirmDialog id="availability-dialog" labelledBy="availability-title" busy={busy} className="availability-modal"
-    onClose={requestClose}>
+    onClose={requestCloseFromDialog}>
     <div className="availability-modal-head">
       <h2 id="availability-title">可用时间</h2>
       <span className="availability-tools" ref={toolsRef}>
@@ -4505,27 +4521,41 @@ function AvailabilityDialog({ slots, folds, snapMinutes, onCancel, onCommit }: {
       {/* 用 role="group" 而不是 <label>：`.modal label` 是 `display: grid`，会把图标／滑杆／读数
           竖排成三行（读数因此掉到框外第二行）。RangeBar 自己带可访问名，不需要外层 label。 */}
       <span className="availability-zoom" role="group" aria-label="时间轴缩放">
+        {/* commitOnRelease：缩放要写进设置，边拖边写会连发几十次 IO；松手提交一次即可。 */}
         <RangeBar label="时间轴缩放比例" compact min={AVAILABILITY_ZOOM_RANGE[0]} max={AVAILABILITY_ZOOM_RANGE[1]} step={5}
-          value={zoomPercent} onChange={setZoomPercent} formatValue={(value) => value + "%"} />
+          value={zoomPercent} onChange={onZoomChange} commitOnRelease formatValue={(value) => value + "%"} />
         <output className="availability-zoom-value">{zoomPercent}%</output>
       </span>
       <span className="availability-stat">本周 <b>{availabilityHours(total)}</b> · 平均 <b>{average}h/天</b></span>
       <span className="availability-status" aria-live="polite">{status}</span>
       <span className="availability-foot-gap" aria-hidden="true" />
       <Button variant="quiet" disabled={!history.length || busy} onClick={undo}>撤销上一步</Button>
-      <Button disabled={busy} onClick={requestClose}>取消</Button>
+      <Button disabled={busy} onClick={(event) => requestClose(event.currentTarget)}>取消</Button>
       <Button variant="primary" disabled={busy} onClick={() => void done()}>{busy ? "正在保存…" : "完成"}</Button>
     </div>
     {error && <p className="error-message" role="alert"><CircleAlert aria-hidden="true" />{error}
       <Button variant="secondary" disabled={busy} onClick={() => void done()}>重试保存</Button></p>}
-    {discardOpen && <div className="availability-confirm availability-discard" role="dialog" aria-modal="false" aria-labelledby="availability-discard-title">
-      <h3 id="availability-discard-title">放弃未保存的改动？</h3>
-      <p>这次改动还没写进设置。放弃后弹窗里的空闲段与折叠会回到打开时的样子，已保存的内容不受影响。</p>
-      <div className="availability-bulk-actions">
-        <Button variant="quiet" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
-        <Button variant="danger" onClick={onCancel}>放弃改动</Button>
-      </div>
-    </div>}
+    {discardOpen && (discardAnchor
+      ? <FloatingPanel kind="action" label="放弃未保存的改动？" titleId="availability-discard-title"
+          anchorElement={discardAnchor} closeOnOutsideClick className="availability-discard-panel"
+          onClose={() => setDiscardOpen(false)}>
+          <h2 id="availability-discard-title">放弃未保存的改动？</h2>
+          <p className="availability-discard-text">这次改动还没写进设置。放弃后空闲段与折叠会回到打开时的样子，已保存的内容不受影响。</p>
+          <div className="form-actions">
+            <Button variant="quiet" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
+            <Button variant="danger" onClick={onCancel}>放弃改动</Button>
+          </div>
+        </FloatingPanel>
+      : <ConfirmDialog id="availability-discard-dialog" labelledBy="availability-discard-title" busy={false} className="availability-discard-dialog"
+          onClose={() => setDiscardOpen(false)}>
+          <div className="modal-icon"><CircleAlert aria-hidden="true" /></div>
+          <h2 id="availability-discard-title">放弃未保存的改动？</h2>
+          <p className="availability-discard-text">这次改动还没写进设置。放弃后空闲段与折叠会回到打开时的样子，已保存的内容不受影响。</p>
+          <div className="form-actions">
+            <Button variant="quiet" onClick={() => setDiscardOpen(false)}>继续编辑</Button>
+            <Button variant="danger" onClick={onCancel}>放弃改动</Button>
+          </div>
+        </ConfirmDialog>)}
   </ConfirmDialog>;
 }
 
@@ -4606,6 +4636,8 @@ function SettingsPage({ preferences, onChange, onSaveAvailability, native }: { p
         slots={slots}
         folds={preferences.foldedRanges}
         snapMinutes={preferences.snapMinutes}
+        zoomPercent={preferences.availabilityZoom}
+        onZoomChange={(next) => onChange({ availabilityZoom: next })}
         onCancel={() => setAvailabilityOpen(false)}
         onCommit={async (next) => {
           // 两个字段一起提交：写失败时弹窗自己展示可重试的错误，草稿留在原地、弹窗不关。
